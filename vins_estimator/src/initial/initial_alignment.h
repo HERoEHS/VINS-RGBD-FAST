@@ -5,7 +5,7 @@
 #include <eigen3/Eigen/Dense>
 #include <iostream>
 #include <map>
-#include <ros/ros.h>
+#include "ros_compat.h"
 
 using namespace Eigen;
 using namespace std;

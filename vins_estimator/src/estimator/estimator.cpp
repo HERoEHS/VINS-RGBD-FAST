@@ -154,7 +154,7 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
 }
 
 void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
-                             const std_msgs::Header                &header)
+                             const std_msgs::msg::Header                &header)
 {
     ROS_DEBUG("new image coming ------------------------------------------");
     ROS_DEBUG("Adding feature points %lu", image.size());
@@ -169,11 +169,11 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
     ROS_DEBUG("%s", marginalization_flag ? "Non-keyframe" : "Keyframe");
     ROS_DEBUG("Solving %d", frame_count);
     ROS_DEBUG("number of feature: %d", f_manager.getFeatureCount());
-    Headers[frame_count] = header.stamp.toSec();
+    Headers[frame_count] = rclcpp::Time(header.stamp).seconds();
 
     if (USE_IMU)
     {
-        double curTime = header.stamp.toSec() + td;
+        double curTime = rclcpp::Time(header.stamp).seconds() + td;
 
         while (!IMUAvailable(curTime))
         {
@@ -200,9 +200,9 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
         prevTime = curTime;
     }
 
-    ImageFrame imageframe(image, header.stamp.toSec());
+    ImageFrame imageframe(image, rclcpp::Time(header.stamp).seconds());
     imageframe.pre_integration = tmp_pre_integration;
-    all_image_frame.insert(make_pair(header.stamp.toSec(), imageframe));
+    all_image_frame.insert(make_pair(rclcpp::Time(header.stamp).seconds(), imageframe));
     tmp_pre_integration = new IntegrationBase{acc_0, gyr_0, Bas[frame_count], Bgs[frame_count]};
 
     if (ESTIMATE_EXTRINSIC == 2)
@@ -233,10 +233,10 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
             if (frame_count == WINDOW_SIZE)
             {
                 bool result = false;
-                if (ESTIMATE_EXTRINSIC != 2 && (header.stamp.toSec() - initial_timestamp) > 0.1)
+                if (ESTIMATE_EXTRINSIC != 2 && (rclcpp::Time(header.stamp).seconds() - initial_timestamp) > 0.1)
                 {
                     result            = initialStructure();
-                    initial_timestamp = header.stamp.toSec();
+                    initial_timestamp = rclcpp::Time(header.stamp).seconds();
                 }
                 // if init sfm success
                 if (result)
@@ -1779,7 +1779,7 @@ void Estimator::updateLatestStates()
     {
         m_imu.lock();
         queue<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> tmp_imu_buf = imu_buf;
-        for (sensor_msgs::ImuConstPtr tmp_imu_msg; !tmp_imu_buf.empty(); tmp_imu_buf.pop())
+        for (; !tmp_imu_buf.empty(); tmp_imu_buf.pop())
             predict(tmp_imu_buf.front().first, imu_buf.front().second.first,
                     imu_buf.front().second.second);
         m_imu.unlock();

@@ -3,8 +3,8 @@
 #include <ceres/ceres.h>
 #include <cstdlib>
 #include <pthread.h>
-#include <ros/console.h>
-#include <ros/ros.h>
+#include "ros_compat.h"
+#include "ros_compat.h"
 #include <unordered_map>
 
 #include "../utility/parameters.h"

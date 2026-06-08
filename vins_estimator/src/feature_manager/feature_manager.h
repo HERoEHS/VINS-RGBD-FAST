@@ -12,10 +12,7 @@ using namespace std;
 
 using namespace Eigen;
 
-#include <ros/assert.h>
-#include <ros/console.h>
-
-#include <sensor_msgs/Image.h>
+#include <sensor_msgs/msg/image.hpp>
 
 #include "../utility/parameters.h"
 

@@ -1,4 +1,5 @@
 #include "feature_tracker.h"
+#include "../ros_compat.h"
 #include <cstddef>
 #include <future>
 #include <memory>

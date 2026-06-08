@@ -2,70 +2,71 @@
 #include <cv_bridge/cv_bridge.h>
 #include <map>
 #include <mutex>
-#include <opencv2/core/hal/interface.h>
 #include <opencv2/imgproc.hpp>
 #include <queue>
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
 #include <set>
 #include <string>
 #include <thread>
+#include <cassert>
 
 #include "estimator/estimator.h"
 #include "feature_tracker/feature_tracker.h"
-#include "ros/console_backend.h"
-#include "sensor_msgs/image_encodings.h"
+#include "sensor_msgs/image_encodings.hpp"
 #include "utility/parameters.h"
 #include "utility/tic_toc.h"
 #include "utility/visualization.h"
 
-#include <nodelet/nodelet.h>  // 基类Nodelet所在的头文件
-#include <pluginlib/class_list_macros.h>
+#include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/point_cloud.hpp>
+#include <std_msgs/msg/header.hpp>
+#include <geometry_msgs/msg/point32.hpp>
 
-namespace estimator_nodelet_ns
-{
-class EstimatorNodelet : public nodelet::Nodelet  //任何nodelet plugin都要继承Nodelet类。
+class EstimatorNode : public rclcpp::Node
 {
 public:
-    EstimatorNodelet() = default;
-
-private:
-    void onInit() override
+    EstimatorNode() : Node("vins_estimator")
     {
-        ros::NodeHandle &pn = getPrivateNodeHandle();
-        ros::NodeHandle &nh = getMTNodeHandle();
-
-        ros::console::set_logger_level(ROSCONSOLE_DEFAULT_NAME, ros::console::levels::Info);
-
-        readParameters(pn);
-
+        readParameters(this);
         estimator.setParameter();
-#ifdef EIGEN_DONT_PARALLELIZE
-        ROS_DEBUG("EIGEN_DONT_PARALLELIZE");
-#endif
-        ROS_WARN("waiting for image, semantic and imu...");
 
-        registerPub(nh);
+        RCLCPP_WARN(get_logger(), "waiting for image, semantic and imu...");
 
-        sub_image = nh.subscribe(IMAGE_TOPIC, 1000, &EstimatorNodelet::image_callback, this);
-        sub_depth = nh.subscribe(DEPTH_TOPIC, 1000, &EstimatorNodelet::depth_callback, this);
+        registerPub(this);
+
+        sub_image = create_subscription<sensor_msgs::msg::Image>(
+            IMAGE_TOPIC, 1000,
+            std::bind(&EstimatorNode::image_callback, this, std::placeholders::_1));
+        sub_depth = create_subscription<sensor_msgs::msg::Image>(
+            DEPTH_TOPIC, 1000,
+            std::bind(&EstimatorNode::depth_callback, this, std::placeholders::_1));
 
         if (USE_IMU)
-            sub_imu = nh.subscribe(IMU_TOPIC, 1000, &EstimatorNodelet::imu_callback, this,
-                                   ros::TransportHints().tcpNoDelay());
-        // topic from pose_graph, notify if there's relocalization
-        sub_relo_points = nh.subscribe("/pose_graph/match_points", 10,
-                                       &EstimatorNodelet::relocalization_callback, this);
+            sub_imu = create_subscription<sensor_msgs::msg::Imu>(
+                IMU_TOPIC, 1000,
+                std::bind(&EstimatorNode::imu_callback, this, std::placeholders::_1));
+
+        sub_relo_points = create_subscription<sensor_msgs::msg::PointCloud>(
+            "/pose_graph/match_points", 10,
+            std::bind(&EstimatorNode::relocalization_callback, this, std::placeholders::_1));
 
         dura = std::chrono::milliseconds(2);
 
-        trackThread   = std::thread(&EstimatorNodelet::process_tracker, this);
-        processThread = std::thread(&EstimatorNodelet::process, this);
+        trackThread   = std::thread(&EstimatorNode::process_tracker, this);
+        processThread = std::thread(&EstimatorNode::process, this);
     }
 
+    ~EstimatorNode()
+    {
+        if (trackThread.joinable())   trackThread.detach();
+        if (processThread.joinable()) processThread.detach();
+    }
+
+private:
     Estimator estimator;
 
-    // thread relevance
-    std::thread               trackThread, processThread;
+    std::thread trackThread, processThread;
     std::chrono::milliseconds dura;
     std::condition_variable   con_tracker;
     std::condition_variable   con_estimator;
@@ -74,20 +75,22 @@ private:
     std::mutex                m_buf;
     std::mutex                m_vis;
 
-    // ROS and data buf relevance
-    ros::Subscriber                   sub_imu, sub_relo_points, sub_image, sub_depth;
-    queue<sensor_msgs::ImageConstPtr> img_buf;
-    queue<sensor_msgs::ImageConstPtr> depth_buf;
-    queue<pair<pair<std_msgs::Header, sensor_msgs::ImageConstPtr>,
-               map<int, Eigen::Matrix<double, 7, 1>>>>
-                                           feature_buf;
-    queue<sensor_msgs::PointCloudConstPtr> relo_buf;
-    queue<pair<std_msgs::Header, cv::Mat>> vis_img_buf;
+    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr           sub_imu;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud>::SharedPtr     sub_relo_points;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr          sub_image;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr          sub_depth;
+
+    queue<sensor_msgs::msg::Image::ConstSharedPtr> img_buf;
+    queue<sensor_msgs::msg::Image::ConstSharedPtr> depth_buf;
+    queue<std::pair<std::pair<std_msgs::msg::Header, sensor_msgs::msg::Image::ConstSharedPtr>,
+                    std::map<int, Eigen::Matrix<double, 7, 1>>>>
+        feature_buf;
+    queue<sensor_msgs::msg::PointCloud::ConstSharedPtr> relo_buf;
+    queue<std::pair<std_msgs::msg::Header, cv::Mat>> vis_img_buf;
 
     bool init_feature = false;
     bool init_pub     = false;
 
-    // frequency control relevance
     bool   first_image_flag = true;
     double first_image_time = 0;
     double last_image_time  = 0;
@@ -96,33 +99,26 @@ private:
 
     double last_imu_t = 0;
 
-    void imu_callback(const sensor_msgs::ImuConstPtr &imu_msg)
+    void imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr &imu_msg)
     {
-        /**
-         * @brief nullptr may cause crash
-         * typename boost::detail::sp_member_access<T>::type = const
-         * sensor_msgs::Imu_<std::allocator<void> >*]: Assertion `px != 0' failed.
-         * https://github.com/mavlink/mavros/issues/432
-         * https://github.com/mavlink/mavros/pull/434
-         */
-        if (imu_msg)
+        if (!imu_msg) return;
+        double t = rclcpp::Time(imu_msg->header.stamp).seconds();
+        if (t <= last_imu_t)
         {
-            if (imu_msg->header.stamp.toSec() <= last_imu_t)
-            {
-                ROS_WARN("imu message in disorder! %f", imu_msg->header.stamp.toSec());
-                return;
-            }
-
-            last_imu_t = imu_msg->header.stamp.toSec();
-            Vector3d acc(imu_msg->linear_acceleration.x, imu_msg->linear_acceleration.y,
-                         imu_msg->linear_acceleration.z);
-            Vector3d gyr(imu_msg->angular_velocity.x, imu_msg->angular_velocity.y,
-                         imu_msg->angular_velocity.z);
-            estimator.inputIMU(last_imu_t, acc, gyr);
+            RCLCPP_WARN(get_logger(), "imu message in disorder! %f", t);
+            return;
         }
+        last_imu_t = t;
+        Eigen::Vector3d acc(imu_msg->linear_acceleration.x,
+                            imu_msg->linear_acceleration.y,
+                            imu_msg->linear_acceleration.z);
+        Eigen::Vector3d gyr(imu_msg->angular_velocity.x,
+                            imu_msg->angular_velocity.y,
+                            imu_msg->angular_velocity.z);
+        estimator.inputIMU(last_imu_t, acc, gyr);
     }
 
-    void image_callback(const sensor_msgs::ImageConstPtr &color_msg)
+    void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr &color_msg)
     {
         m_buf.lock();
         img_buf.emplace(color_msg);
@@ -130,7 +126,7 @@ private:
         con_tracker.notify_one();
     }
 
-    void depth_callback(const sensor_msgs::ImageConstPtr &depth_msg)
+    void depth_callback(const sensor_msgs::msg::Image::ConstSharedPtr &depth_msg)
     {
         m_buf.lock();
         depth_buf.emplace(depth_msg);
@@ -138,30 +134,29 @@ private:
         con_tracker.notify_one();
     }
 
-    void relocalization_callback(const sensor_msgs::PointCloudConstPtr &points_msg)
+    void relocalization_callback(const sensor_msgs::msg::PointCloud::ConstSharedPtr &points_msg)
     {
         m_buf.lock();
         relo_buf.push(points_msg);
         m_buf.unlock();
     }
 
-    void visualizeFeatureFilter(const map<int, Eigen::Matrix<double, 7, 1>> &features,
-                                double                                       feature_time)
+    void visualizeFeatureFilter(const std::map<int, Eigen::Matrix<double, 7, 1>> &features,
+                                double feature_time)
     {
         cv::Mat vis_img;
         m_vis.lock();
         while (!vis_img_buf.empty())
         {
-            if (vis_img_buf.front().first.stamp.toSec() == feature_time)
+            double buf_stamp = rclcpp::Time(vis_img_buf.front().first.stamp).seconds();
+            if (buf_stamp == feature_time)
             {
                 vis_img = vis_img_buf.front().second;
                 vis_img_buf.pop();
                 break;
             }
-            else if (vis_img_buf.front().first.stamp.toSec() < feature_time)
-            {
+            else if (buf_stamp < feature_time)
                 vis_img_buf.pop();
-            }
             else
             {
                 m_vis.unlock();
@@ -170,64 +165,47 @@ private:
         }
         m_vis.unlock();
 
-        // Show image with tracked points in rviz (by topic pub_match)
         for (auto &feature : features)
-        {
             cv::circle(vis_img, cv::Point(feature.second[3], feature.second[4]), 5,
                        cv::Scalar(0, 255, 255), 2);
-        }
         pubTrackImg(vis_img);
-
-        // cv::imshow("grids_detector_img",
-        //            estimator.featureTracker.grids_detector_img);
-        // cv::moveWindow("grids_detector_img", 0, 0);
-        // cv::waitKey(1);
-
-        // cv::imshow("feature_img", vis_img);
-        // cv::moveWindow("feature_img", 0, 0);
-        // cv::waitKey(1);
     }
 
-    // thread: feature tracker
     [[noreturn]] void process_tracker()
     {
         while (1)
         {
             {
-                sensor_msgs::ImageConstPtr color_msg = nullptr;
-                sensor_msgs::ImageConstPtr depth_msg = nullptr;
+                sensor_msgs::msg::Image::ConstSharedPtr color_msg = nullptr;
+                sensor_msgs::msg::Image::ConstSharedPtr depth_msg = nullptr;
 
                 std::unique_lock<std::mutex> locker(m_buf);
                 while (img_buf.empty() || depth_buf.empty())
-                {
                     con_tracker.wait(locker);
-                }
 
-                double time_color = img_buf.front()->header.stamp.toSec();
-                double time_depth = depth_buf.front()->header.stamp.toSec();
+                double time_color = rclcpp::Time(img_buf.front()->header.stamp).seconds();
+                double time_depth = rclcpp::Time(depth_buf.front()->header.stamp).seconds();
 
                 if (time_color < time_depth - 0.003)
                 {
                     img_buf.pop();
-                    ROS_DEBUG("throw color\n");
+                    RCLCPP_DEBUG(get_logger(), "throw color");
                 }
                 else if (time_color > time_depth + 0.003)
                 {
                     depth_buf.pop();
-                    ROS_DEBUG("throw depth\n");
+                    RCLCPP_DEBUG(get_logger(), "throw depth");
                 }
                 else
                 {
-                    color_msg = img_buf.front();
-                    img_buf.pop();
-                    depth_msg = depth_buf.front();
-                    depth_buf.pop();
+                    color_msg = img_buf.front(); img_buf.pop();
+                    depth_msg = depth_buf.front(); depth_buf.pop();
                 }
                 locker.unlock();
 
                 if (color_msg == nullptr || depth_msg == nullptr)
                 {
-                    ROS_DEBUG("time_color = %f, time_depth = %f\n", time_color, time_depth);
+                    RCLCPP_DEBUG(get_logger(), "time_color = %f, time_depth = %f", time_color, time_depth);
                     continue;
                 }
 
@@ -239,42 +217,36 @@ private:
                     continue;
                 }
 
-                // detect unstable camera stream
                 if (time_color - last_image_time > 1.0 || time_color < last_image_time)
                 {
-                    ROS_WARN("image discontinue! reset the feature tracker!");
+                    RCLCPP_WARN(get_logger(), "image discontinue! reset the feature tracker!");
                     first_image_flag = true;
                     last_image_time  = 0;
                     pub_count        = 1;
 
-                    ROS_WARN("restart the estimator!");
+                    RCLCPP_WARN(get_logger(), "restart the estimator!");
                     m_feature.lock();
-                    while (!feature_buf.empty())
-                        feature_buf.pop();
+                    while (!feature_buf.empty()) feature_buf.pop();
                     m_feature.unlock();
                     m_backend.lock();
                     estimator.clearState();
                     estimator.setParameter();
                     m_backend.unlock();
                     last_imu_t = 0;
-
                     continue;
                 }
 
-                // frequency control
                 if (round(1.0 * input_count / (time_color - first_image_time)) > FRONTEND_FREQ)
                 {
-                    ROS_DEBUG("Skip this frame.%f",
-                              1.0 * input_count / (time_color - first_image_time));
+                    RCLCPP_DEBUG(get_logger(), "Skip this frame.%f",
+                                 1.0 * input_count / (time_color - first_image_time));
                     continue;
                 }
                 ++input_count;
 
-                // frequency control
                 if (round(1.0 * pub_count / (time_color - first_image_time)) <= FREQ)
                 {
                     PUB_THIS_FRAME = true;
-                    // reset the frequency control
                     if (abs(1.0 * pub_count / (time_color - first_image_time) - FREQ) < 0.01 * FREQ)
                     {
                         first_image_time = time_color;
@@ -286,14 +258,10 @@ private:
                     PUB_THIS_FRAME = false;
 
                 TicToc t_r;
-                // encodings in ros:
-                // http://docs.ros.org/diamondback/api/sensor_msgs/html/image__encodings_8cpp_source.html
-                // color has encoding RGB8
                 cv_bridge::CvImageConstPtr ptr;
-                if (color_msg->encoding == "8UC1")  // shan:why 8UC1 need this operation? Find
-                    // answer:https://github.com/ros-perception/vision_opencv/issues/175
+                if (color_msg->encoding == "8UC1")
                 {
-                    sensor_msgs::Image img;
+                    sensor_msgs::msg::Image img;
                     img.header       = color_msg->header;
                     img.height       = color_msg->height;
                     img.width        = color_msg->width;
@@ -308,7 +276,7 @@ private:
 
                 if (USE_IMU)
                 {
-                    Matrix3d &&relative_R =
+                    Eigen::Matrix3d &&relative_R =
                         estimator.predictMotion(last_image_time, time_color + estimator.td);
                     estimator.featureTracker.readImage(ptr->image, time_color, relative_R);
                 }
@@ -316,38 +284,33 @@ private:
                     estimator.featureTracker.readImage(ptr->image, time_color);
 
                 last_image_time = time_color;
-                // always 0
 
-                // update all id in ids[]
-                // If has ids[i] == -1 (newly added pts by cv::goodFeaturesToTrack),
-                // substitute by gloabl id counter (n_id)
                 for (unsigned int i = 0;; i++)
                 {
                     bool completed = false;
                     completed |= estimator.featureTracker.updateID(i);
-                    if (!completed)
-                        break;
+                    if (!completed) break;
                 }
+
                 if (PUB_THIS_FRAME)
                 {
                     pub_count++;
 
-                    std_msgs::Header                      feature_header = color_msg->header;
-                    map<int, Eigen::Matrix<double, 7, 1>> image;
+                    std_msgs::msg::Header feature_header = color_msg->header;
+                    std::map<int, Eigen::Matrix<double, 7, 1>> image;
                     auto &un_pts       = estimator.featureTracker.cur_un_pts;
                     auto &cur_pts      = estimator.featureTracker.cur_pts;
                     auto &ids          = estimator.featureTracker.ids;
                     auto &pts_velocity = estimator.featureTracker.pts_velocity;
+
                     for (unsigned int j = 0; j < ids.size(); j++)
                     {
                         if (estimator.featureTracker.track_cnt[j] > 1)
                         {
-                            int                    p_id = ids[j];
-                            geometry_msgs::Point32 p;
-                            double                 x = un_pts[j].x;
-                            double                 y = un_pts[j].y;
-                            double                 z = 1;
-
+                            int    p_id       = ids[j];
+                            double x          = un_pts[j].x;
+                            double y          = un_pts[j].y;
+                            double z          = 1;
                             int    v          = p_id * NUM_OF_CAM + 0.5;
                             int    feature_id = v / NUM_OF_CAM;
                             double p_u        = cur_pts[j].x;
@@ -355,7 +318,7 @@ private:
                             double velocity_x = pts_velocity[j].x;
                             double velocity_y = pts_velocity[j].y;
 
-                            ROS_ASSERT(z == 1);
+                            assert(z == 1);
                             Eigen::Matrix<double, 7, 1> xyz_uv_velocity;
                             xyz_uv_velocity << x, y, z, p_u, p_v, velocity_x, velocity_y;
                             image[feature_id] = xyz_uv_velocity;
@@ -370,8 +333,6 @@ private:
                     {
                         if (!init_feature)
                         {
-                            // skip the first detected feature, which doesn't contain optical
-                            // flow speed
                             init_feature = true;
                             continue;
                         }
@@ -379,7 +340,7 @@ private:
                         {
                             m_feature.lock();
                             feature_buf.push(
-                                make_pair(make_pair(feature_header, depth_msg), std::move(image)));
+                                std::make_pair(std::make_pair(feature_header, depth_msg), std::move(image)));
                             m_feature.unlock();
                             con_estimator.notify_one();
                         }
@@ -392,14 +353,13 @@ private:
                         }
                     }
 
-                    // Show image with tracked points in rviz (by topic pub_match)
                     if (SHOW_TRACK)
                     {
                         cv::Mat show_img = ptr->image;
                         ptr = cv_bridge::cvtColor(ptr, sensor_msgs::image_encodings::BGR8);
                         cv::Mat stereo_img = ptr->image;
                         cv::Mat tmp_img    = stereo_img.rowRange(0, ROW);
-                        cv::cvtColor(show_img, tmp_img, CV_GRAY2RGB);
+                        cv::cvtColor(show_img, tmp_img, cv::COLOR_GRAY2RGB);
 
                         for (unsigned int j = 0; j < estimator.featureTracker.cur_pts.size(); j++)
                         {
@@ -409,76 +369,45 @@ private:
                                     1.0, 1.0 * estimator.featureTracker.track_cnt[j] / WINDOW_SIZE);
                                 cv::circle(tmp_img, estimator.featureTracker.cur_pts[j], 5,
                                            cv::Scalar(255 * (1 - len), 0, 255 * len), -1);
-                                // draw speed line
-                                //                     Vector2d tmp_cur_un_pts
-                                //                     (trackerData[i].cur_un_pts[j].x,
-                                //                     trackerData[i].cur_un_pts[j].y); Vector2d
-                                //                     tmp_pts_velocity
-                                //                     (trackerData[i].pts_velocity[j].x,
-                                //                     trackerData[i].pts_velocity[j].y); Vector3d
-                                //                     tmp_prev_un_pts; tmp_prev_un_pts.head(2) =
-                                //                     tmp_cur_un_pts - 0.10 * tmp_pts_velocity;
-                                //                     tmp_prev_un_pts.z() = 1;
-                                //                     Vector2d tmp_prev_uv;
-                                //                     trackerData[i].m_camera->spaceToPlane(tmp_prev_un_pts,
-                                //                     tmp_prev_uv); cv::line(tmp_img,
-                                //                     trackerData[i].cur_pts[j],
-                                //                     cv::Point2f(tmp_prev_uv.x(),
-                                //                     tmp_prev_uv.y()), cv::Scalar(255 , 0, 0), 1
-                                //                     , 8, 0);
-
-                                // char name[10];
-                                // sprintf(name, "%d", trackerData[i].ids[j]);
-                                // cv::putText(tmp_img, name, trackerData[i].cur_pts[j],
-                                // cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
                             }
                         }
                         if (USE_IMU)
                         {
                             for (auto &predict_pt : estimator.featureTracker.predict_pts)
-                            {
                                 cv::circle(tmp_img, predict_pt, 2, cv::Scalar(0, 255, 0), -1);
-                            }
                         }
 
                         m_vis.lock();
-                        vis_img_buf.push(make_pair(feature_header, tmp_img));
+                        vis_img_buf.push(std::make_pair(feature_header, tmp_img));
                         m_vis.unlock();
                     }
                 }
                 static double whole_process_time = 0;
                 static size_t cnt_frame          = 0;
                 ++cnt_frame;
-                double per_process_time = t_r.toc();
-                whole_process_time += per_process_time;
-                ROS_DEBUG("average feature tracking costs: %f", whole_process_time / cnt_frame);
-                // ROS_DEBUG("feature tracking costs: %f", per_process_time);
+                whole_process_time += t_r.toc();
+                RCLCPP_DEBUG(get_logger(), "average feature tracking costs: %f", whole_process_time / cnt_frame);
             }
             std::this_thread::sleep_for(dura);
         }
     }
 
-    // thread: visual-inertial odometry
     [[noreturn]] void process()
     {
         while (true)
         {
             std::unique_lock<std::mutex> locker(m_feature);
             while (feature_buf.empty())
-            {
                 con_estimator.wait(locker);
-            }
 
-            pair<pair<std_msgs::Header, sensor_msgs::ImageConstPtr>,
-                 map<int, Eigen::Matrix<double, 7, 1>>>
-                feature_msg(std::move(feature_buf.front()));
+            auto feature_msg = std::move(feature_buf.front());
             feature_buf.pop();
             locker.unlock();
 
             TicToc t_backend;
             m_backend.lock();
-            // set relocalization frame
-            sensor_msgs::PointCloudConstPtr relo_msg = nullptr;
+
+            sensor_msgs::msg::PointCloud::ConstSharedPtr relo_msg = nullptr;
             while (!relo_buf.empty())
             {
                 relo_msg = relo_buf.front();
@@ -487,28 +416,28 @@ private:
 
             if (relo_msg != nullptr)
             {
-                vector<Vector3d> match_points;
-                double           frame_stamp = relo_msg->header.stamp.toSec();
+                std::vector<Eigen::Vector3d> match_points;
+                double frame_stamp = rclcpp::Time(relo_msg->header.stamp).seconds();
                 for (auto point : relo_msg->points)
                 {
-                    Vector3d u_v_id;
+                    Eigen::Vector3d u_v_id;
                     u_v_id.x() = point.x;
                     u_v_id.y() = point.y;
                     u_v_id.z() = point.z;
                     match_points.push_back(u_v_id);
                 }
-                Vector3d    relo_t(relo_msg->channels[0].values[0], relo_msg->channels[0].values[1],
-                                   relo_msg->channels[0].values[2]);
-                Quaterniond relo_q(relo_msg->channels[0].values[3], relo_msg->channels[0].values[4],
-                                   relo_msg->channels[0].values[5],
-                                   relo_msg->channels[0].values[6]);
-                Matrix3d    relo_r = relo_q.toRotationMatrix();
-                int         frame_index;
-                frame_index = relo_msg->channels[0].values[7];
+                Eigen::Vector3d    relo_t(relo_msg->channels[0].values[0],
+                                          relo_msg->channels[0].values[1],
+                                          relo_msg->channels[0].values[2]);
+                Eigen::Quaterniond relo_q(relo_msg->channels[0].values[3],
+                                          relo_msg->channels[0].values[4],
+                                          relo_msg->channels[0].values[5],
+                                          relo_msg->channels[0].values[6]);
+                Eigen::Matrix3d    relo_r = relo_q.toRotationMatrix();
+                int frame_index           = relo_msg->channels[0].values[7];
                 estimator.setReloFrame(frame_stamp, frame_index, match_points, relo_t, relo_r);
             }
 
-            // depth has encoding TYPE_16UC1
             cv::Mat depth_img;
             if (feature_msg.first.second == nullptr)
             {
@@ -516,30 +445,29 @@ private:
             }
             else
             {
-                if (feature_msg.first.second->encoding == "mono16" ||
-                    feature_msg.first.second->encoding == "16UC1")
-                {
+                const auto &enc = feature_msg.first.second->encoding;
+                if (enc == "mono16" || enc == "16UC1")
                     depth_img = cv_bridge::toCvShare(feature_msg.first.second)->image;
-                }
-                else if (feature_msg.first.second->encoding == "32FC1")
+                else if (enc == "32FC1")
                 {
                     cv::Mat depth_32fc1 = cv_bridge::toCvShare(feature_msg.first.second)->image;
                     depth_32fc1.convertTo(depth_img, CV_16UC1, 1000);
                 }
                 else
                 {
-                    ROS_ASSERT_MSG(1, "Unknown depth encoding!");
+                    RCLCPP_ERROR(get_logger(), "Unknown depth encoding: %s", enc.c_str());
+                    depth_img = cv::Mat(ROW, COL, CV_16UC1, cv::Scalar(0));
                 }
             }
             estimator.f_manager.inputDepth(depth_img);
 
-            double feature_time = feature_msg.first.first.stamp.toSec();
+            double feature_time = rclcpp::Time(feature_msg.first.first.stamp).seconds();
 
             TicToc t_processImage;
             estimator.processImage(feature_msg.second, feature_msg.first.first);
 
-            std_msgs::Header header = feature_msg.first.first;
-            header.frame_id         = "map";
+            std_msgs::msg::Header header = feature_msg.first.first;
+            header.frame_id              = "map";
             pubOdometry(estimator, header);
             pubTF(estimator, header);
             pubKeyframe(estimator);
@@ -547,6 +475,7 @@ private:
                 pubRelocalization(estimator);
 
             m_backend.unlock();
+
             if (SHOW_TRACK)
             {
                 pubKeyPoses(estimator, header);
@@ -561,12 +490,17 @@ private:
             cnt_frame++;
             whole_process_time += per_process_time;
             printStatistics(estimator, per_process_time);
-            ROS_DEBUG("average backend costs: %f", whole_process_time / cnt_frame);
-            // ROS_DEBUG("backend costs: %f", per_process_time);
+            RCLCPP_DEBUG(get_logger(), "average backend costs: %f", whole_process_time / cnt_frame);
             std::this_thread::sleep_for(dura);
         }
     }
 };
 
-PLUGINLIB_EXPORT_CLASS(estimator_nodelet_ns::EstimatorNodelet, nodelet::Nodelet)
-}  // namespace estimator_nodelet_ns
+int main(int argc, char **argv)
+{
+    rclcpp::init(argc, argv);
+    auto node = std::make_shared<EstimatorNode>();
+    rclcpp::spin(node);
+    rclcpp::shutdown();
+    return 0;
+}

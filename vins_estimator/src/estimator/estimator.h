@@ -14,9 +14,9 @@
 
 #include "../feature_tracker/feature_tracker.h"
 
-#include <sensor_msgs/Imu.h>
-#include <std_msgs/Float32.h>
-#include <std_msgs/Header.h>
+#include <sensor_msgs/msg/imu.hpp>
+#include <std_msgs/msg/float32.hpp>
+#include <std_msgs/msg/header.hpp>
 
 #include "../factor/imu_factor.h"
 #include "../factor/marginalization_factor.h"
@@ -43,7 +43,7 @@ public:
     void processIMU(double t, const Vector3d &linear_acceleration,
                     const Vector3d &angular_velocity);
 
-    void processImage(map<int, Eigen::Matrix<double, 7, 1>> &image, const std_msgs::Header &header);
+    void processImage(map<int, Eigen::Matrix<double, 7, 1>> &image, const std_msgs::msg::Header &header);
 
     void setReloFrame(double _frame_stamp, int _frame_index, vector<Vector3d> &_match_points,
                       Vector3d _relo_t, Matrix3d _relo_r);

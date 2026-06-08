@@ -1,4 +1,5 @@
 #include "feature_manager.h"
+#include "../ros_compat.h"
 #include <complex>
 #include <opencv2/core/hal/interface.h>
 #include <opencv2/highgui.hpp>

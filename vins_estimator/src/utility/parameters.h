@@ -5,14 +5,13 @@
 #include <fstream>
 #include <opencv2/core/eigen.hpp>
 #include <opencv2/opencv.hpp>
-#include <ros/ros.h>
+#include <rclcpp/rclcpp.hpp>
 #include <vector>
 
 const double FOCAL_LENGTH = 460.0;
 const int    WINDOW_SIZE  = 10;
 const int    NUM_OF_CAM   = 1;
 const int    NUM_OF_F     = 1000;
-//#define UNIT_SPHERE_ERROR
 
 extern double INIT_DEPTH;
 extern double MIN_PARALLAX;
@@ -76,14 +75,12 @@ extern int STATIC_INIT;
 
 extern int FIX_DEPTH;
 
-void readParameters(ros::NodeHandle &n);
+void readParameters(rclcpp::Node* node);
 
 enum SIZE_PARAMETERIZATION
 {
     SIZE_POSE      = 7,
     SIZE_SPEEDBIAS = 9,
-    //    SIZE_SPEED = 3,
-    //    SIZE_BIAS = 6,
     SIZE_FEATURE = 1
 };
 

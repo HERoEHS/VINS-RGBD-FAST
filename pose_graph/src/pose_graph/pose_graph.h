@@ -12,15 +12,14 @@
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
 #include <eigen3/Eigen/Dense>
-#include <geometry_msgs/PointStamped.h>
+#include <geometry_msgs/msg/point_stamped.hpp>
 #include <mutex>
-#include <nav_msgs/Odometry.h>
-#include <nav_msgs/Path.h>
+#include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <opencv2/opencv.hpp>
 #include <queue>
-#include <ros/ros.h>
-#include <sensor_msgs/PointCloud2.h>
-#include <sensor_msgs/point_cloud_conversion.h>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <stdio.h>
 #include <string>
 #include <thread>
@@ -36,15 +35,15 @@ class PoseGraph {
 public:
   PoseGraph();
   ~PoseGraph();
-  void registerPub(ros::NodeHandle &n);
+  void registerPub(rclcpp::Node* node);
   void addKeyFrame(KeyFrame *cur_kf, bool flag_detect_loop);
   void loadKeyFrame(KeyFrame *cur_kf, bool flag_detect_loop);
   void loadVocabulary(const std::string& voc_path);
   void setIMUFlag(bool _use_imu);
   void updateKeyFrameLoop(int index, Eigen::Matrix<double, 8, 1> &_loop_info);
   KeyFrame *getKeyFrame(int index);
-  nav_msgs::Path path[10];
-  nav_msgs::Path base_path;
+  nav_msgs::msg::Path path[10];
+  nav_msgs::msg::Path base_path;
 
   CameraPoseVisualization *posegraph_visualization;
   void savePoseGraph();
@@ -84,10 +83,10 @@ private:
   BriefDatabase db;
   BriefVocabulary *voc{};
 
-  ros::Publisher pub_pg_path;
-  ros::Publisher pub_base_path;
-  ros::Publisher pub_pose_graph;
-  ros::Publisher pub_path[10];
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr              pub_pg_path;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr              pub_base_path;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_pose_graph;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr              pub_path[10];
 };
 
 template <typename T> inline

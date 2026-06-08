@@ -1,6 +1,6 @@
 #pragma once
 
-#include <ros/assert.h>
+#include "ros_compat.h"
 #include <iostream>
 #include <eigen3/Eigen/Dense>
 
