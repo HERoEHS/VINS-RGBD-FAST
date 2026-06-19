@@ -76,6 +76,17 @@ extern int STATIC_INIT;
 
 extern int FIX_DEPTH;
 
+// ===== Wheel odometry tight-coupling (VIW-Fusion 휠 factor 이식, SW1-1829) =====
+extern int             USE_WHEEL;                 // 휠 factor 사용 여부 (0=미사용 → 기존 VINS 동작 유지)
+extern std::string     WHEEL_TOPIC;               // 휠 오도메트리 토픽 (nav_msgs/Odometry)
+extern Eigen::Matrix3d RIO;                        // 휠(odom) → body extrinsic 회전 (T_io)
+extern Eigen::Vector3d TIO;                        // 휠(odom) → body extrinsic 병진
+extern double          SX, SY, SW;                 // 휠 intrinsic 스케일 (vel x/y, yaw)
+extern double          TD_WHEEL;                   // 휠 시간오프셋 초기값
+extern int             ESTIMATE_EXTRINSIC_WHEEL;   // Step2: 휠 extrinsic 온라인 추정 (0=고정)
+extern int             ESTIMATE_INTRINSIC_WHEEL;   // Step2: 휠 intrinsic 온라인 추정 (0=고정)
+extern int             ESTIMATE_TD_WHEEL;          // Step2: 휠 td 온라인 추정 (0=고정)
+
 void readParameters(rclcpp::Node* node);
 
 enum SIZE_PARAMETERIZATION

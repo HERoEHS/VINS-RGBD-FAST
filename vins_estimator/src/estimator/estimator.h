@@ -19,6 +19,7 @@
 #include <std_msgs/msg/header.hpp>
 
 #include "../factor/imu_factor.h"
+#include "../factor/wheel_factor.h"
 #include "../factor/marginalization_factor.h"
 #include "../factor/pose_local_parameterization.h"
 #include "../factor/projection_factor.h"
@@ -102,6 +103,15 @@ public:
                    std::vector<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> &imu_vector);
     void
     initFirstIMUPose(std::vector<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> &imu_vector);
+
+    // ===== Wheel (VIW-Fusion 휠 factor 이식, SW1-1829) =====
+    void inputWheel(double t, const Vector3d &linearVelocity, const Vector3d &angularVelocity);
+    void processWheel(double t, double dt, const Vector3d &linear_velocity,
+                      const Vector3d &angular_velocity);
+    bool WheelAvailable(double t);
+    bool getWheelInterval(double t0, double t1,
+                          std::vector<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> &wheel_vector);
+
     enum SolverFlag
     {
         INITIAL,
@@ -142,6 +152,21 @@ public:
     vector<Vector3d> linear_acceleration_buf[(WINDOW_SIZE + 1)];
     vector<Vector3d> angular_velocity_buf[(WINDOW_SIZE + 1)];
 
+    // ===== Wheel preintegration 상태/버퍼 (IMU 미러) =====
+    Matrix3d              rio;                       // 휠-body extrinsic 회전 (T_io)
+    Vector3d              tio;                        // 휠-body extrinsic 병진
+    double                sx = 1, sy = 1, sw = 1;     // 휠 intrinsic (vel x/y, yaw 스케일)
+    double                td_wheel{};                 // 휠 시간오프셋
+    bool                  openExWheelEstimation{};    // Step2: 온라인 휠 extrinsic 추정
+    bool                  openIxEstimation{};         // Step2: 온라인 휠 intrinsic 추정
+    bool                  first_wheel{};
+    WheelIntegrationBase *pre_integrations_wheel[(WINDOW_SIZE + 1)]{};
+    Vector3d              vel_0_wheel, gyr_0_wheel;
+    vector<double>        dt_buf_wheel[(WINDOW_SIZE + 1)];
+    vector<Vector3d>      linear_velocity_buf_wheel[(WINDOW_SIZE + 1)];
+    vector<Vector3d>      angular_velocity_buf_wheel[(WINDOW_SIZE + 1)];
+    WheelIntegrationBase *tmp_wheel_pre_integration{};
+
     int frame_count{};  // cl:滑动窗口中帧的数目,最大为滑窗大小
     int sum_of_back{}, sum_of_front{}, sum_of_invalid{};
 
@@ -162,6 +187,12 @@ public:
     double para_Feature[NUM_OF_F][SIZE_FEATURE]{};
     double para_Ex_Pose[NUM_OF_CAM][SIZE_POSE]{};
     double para_Td[1][1]{};
+    // ===== Wheel 최적화 파라미터 블록 (Step1 고정 / Step2 free) =====
+    double para_Ex_Pose_wheel[1][SIZE_POSE]{};   // T_io (휠 extrinsic)
+    double para_Ix_sx_wheel[1][1]{};
+    double para_Ix_sy_wheel[1][1]{};
+    double para_Ix_sw_wheel[1][1]{};
+    double para_Td_wheel[1][1]{};
     int    find_solved[WINDOW_SIZE + 1]{};
 
     MarginalizationInfo *last_marginalization_info{};
@@ -191,6 +222,12 @@ public:
     double prevTime = -1;
 
     queue<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> imu_buf;
+
+    // ===== Wheel 비동기 입력 버퍼 (inputWheel → getWheelInterval) =====
+    std::mutex                            m_wheel;
+    queue<pair<double, Eigen::Vector3d>>  wheelVelBuf;
+    queue<pair<double, Eigen::Vector3d>>  wheelGyrBuf;
+    double                                prevTime_wheel = -1, curTime_wheel{};
 
     double             latest_time{};
     Eigen::Vector3d    latest_P;
