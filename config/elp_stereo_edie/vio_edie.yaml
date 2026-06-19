@@ -48,7 +48,7 @@ projection_parameters:
 # Extrinsic: IMU(body) ← camera
 # R_imu_cam = R_cam_imu^T  (Kalibr T_cam_imu 상단 3x3 전치)
 # t_imu_cam = -R_imu_cam * t_cam_imu
-estimate_extrinsic: 0   # 0 = 초기값 고정. 온라인 보정 런어웨이(발산) 가설 테스트용. 초기 extrinsic 신뢰.
+estimate_extrinsic: 1   # 1 = 초기값 후 온라인 미세조정(설계 의도). 0 고정 실험은 발산에 무효 → 1 원복.
 extrinsicRotation: !!opencv-matrix
    rows: 3
    cols: 3
@@ -84,7 +84,7 @@ gyr_w: 0.000020782226   # gyroscope random walk      [rad/s^2/sqrt(Hz)]
 g_norm: 9.81
 
 # Time offset: t_imu = t_cam + td  (cam0 Kalibr result: 12.656ms)
-estimate_td: 0          # 0 = 초기값 고정(12.66ms). 온라인 보정 변수 제거(런어웨이 테스트).
+estimate_td: 1          # 1 = 온라인 추정(설계 의도, 초기값 12.66ms). 0 고정 실험은 발산에 무효 → 1 원복.
 td: 0.012655922077
 
 #rolling shutter (ELP stereo: global shutter)
