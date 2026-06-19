@@ -61,12 +61,12 @@ extrinsicTranslation: !!opencv-matrix
    data: [0.1866642923, 0.0206996488, -0.0955281329]
 
 #feature tracker parameters
-max_cnt: 150
+max_cnt: 150     # 게이트② 관점에선 max_cnt↑ = CPU↑ → 오히려 불리
 min_dist: 25
 freq: 10
 F_threshold: 1.0
 show_track: 1
-equalize: 0
+equalize: 1 #0
 fisheye: 0
 
 #optimization parameters
