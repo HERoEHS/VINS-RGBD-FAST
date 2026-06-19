@@ -35,16 +35,21 @@ public:
 
         registerPub(this);
 
+        // 카메라/IMU 센서는 BEST_EFFORT 로 발행된다(edie_vision, ros2 bag 동일).
+        // 기본 QoS(RELIABLE) 로 구독하면 호환 불가로 메시지를 한 건도 못 받으므로
+        // BEST_EFFORT + 깊은 큐(KeepLast 1000) 로 맞춘다.
+        const auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(1000)).best_effort();
+
         sub_image = create_subscription<sensor_msgs::msg::Image>(
-            IMAGE_TOPIC, 1000,
+            IMAGE_TOPIC, sensor_qos,
             std::bind(&EstimatorNode::image_callback, this, std::placeholders::_1));
         sub_depth = create_subscription<sensor_msgs::msg::Image>(
-            DEPTH_TOPIC, 1000,
+            DEPTH_TOPIC, sensor_qos,
             std::bind(&EstimatorNode::depth_callback, this, std::placeholders::_1));
 
         if (USE_IMU)
             sub_imu = create_subscription<sensor_msgs::msg::Imu>(
-                IMU_TOPIC, 1000,
+                IMU_TOPIC, sensor_qos,
                 std::bind(&EstimatorNode::imu_callback, this, std::placeholders::_1));
 
         sub_relo_points = create_subscription<sensor_msgs::msg::PointCloud>(
