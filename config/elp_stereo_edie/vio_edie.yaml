@@ -19,6 +19,10 @@ output_path: "/tmp/vins_edie_output"
 #RGBD camera valid depth range
 depth_min_dist: 0.3
 depth_max_dist: 3.5
+# 0 = RGBD depth를 초기값으로만 쓰고 BA가 재최적화(하드 고정 안 함).
+# 58mm baseline·운영거리 ~2m라 depth가 노이즈(±16~35cm) → fix_depth:1(기본)로
+# 하드 고정하면 스케일에 노이즈가 박혀 발산. 노이즈 depth엔 0이 적합(campus 설정 선례).
+fix_depth: 0
 
 frontend_freq: 15
 keyframe_parallax: 10.0
