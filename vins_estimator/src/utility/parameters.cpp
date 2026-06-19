@@ -6,6 +6,7 @@ double INIT_DEPTH;
 double MIN_PARALLAX;
 double ACC_N, ACC_W;
 double GYR_N, GYR_W;
+double VEL_N_wheel, GYR_N_wheel;
 
 std::vector<Eigen::Matrix3d> RIC;
 std::vector<Eigen::Vector3d> TIC;
@@ -153,6 +154,9 @@ void readParameters(rclcpp::Node* node)
         ACC_W = fsSettings["acc_w"];
         GYR_N = fsSettings["gyr_n"];
         GYR_W = fsSettings["gyr_w"];
+        // 휠 preintegration 노이즈 (없으면 기본값) — Step1 휠 factor 이식용
+        VEL_N_wheel = fsSettings["vel_n_wheel"].empty() ? 0.05 : (double)fsSettings["vel_n_wheel"];
+        GYR_N_wheel = fsSettings["gyr_n_wheel"].empty() ? 0.05 : (double)fsSettings["gyr_n_wheel"];
         G.z() = fsSettings["g_norm"];
     }
 
