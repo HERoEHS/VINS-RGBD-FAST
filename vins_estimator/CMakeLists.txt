@@ -77,4 +77,10 @@ install(DIRECTORY config/
   OPTIONAL
 )
 
+# launch 파일을 share 에 설치해야 `ros2 launch vins_estimator <file>` 로 실행 가능
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
+  OPTIONAL
+)
+
 ament_package()
