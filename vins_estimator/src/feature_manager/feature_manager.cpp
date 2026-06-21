@@ -462,7 +462,7 @@ void FeatureManager::triangulateWithDepth(Vector3d _Ps[], Vector3d _tic[], Matri
         {
             if (rough_depths.empty())
             {
-                if (no_depth_num == it_per_id.feature_per_frame.size())
+                if (static_cast<size_t>(no_depth_num) == it_per_id.feature_per_frame.size())  // int↔size_type 부호 비교 경고 차단
                 {
                     int imu_j = imu_i - 1;
 

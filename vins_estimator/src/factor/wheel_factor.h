@@ -109,7 +109,9 @@ class WheelFactor : public ceres::SizedCostFunction<6, 7, 7, 7, 1, 1, 1, 1>
             Sophus::rightJacobianInvSO3(raw_residual_r, Jr_delta_q_inv);
 
             Eigen::Vector3d drdsw = dq_dsw * (sw - pre_integration->linearized_sw);
-            Eigen::Matrix3d Jr_drdsw;
+            // rightJacobianSO3가 내부에서 항상 채우지만, 컴파일러가 const-ref 우회 대입을
+            // 추적하지 못해 -Wmaybe-uninitialized 오탐이 발생한다. Identity로 명시 초기화해 무해하게 차단.
+            Eigen::Matrix3d Jr_drdsw = Eigen::Matrix3d::Identity();
             Sophus::rightJacobianSO3(drdsw,Jr_drdsw);
 
             Eigen::Matrix3d ri = Qi.toRotationMatrix();
