@@ -6,5 +6,7 @@
 **/.cache
 
 .omc/
+.bkit/
+.claude/
 
 !.gitignore
