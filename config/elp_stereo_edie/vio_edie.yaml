@@ -115,15 +115,17 @@ visualize_camera_size: 0.4
 
 # ================================================================
 # Wheel odometry tight-coupling (VIW-Fusion 휠 factor 이식, SW1-1829)
-# ⚠️ use_wheel: 0 = 비활성(기존 vision+IMU 동작 유지).
-#    odom 포함 EDIE bag(기본 자세 주행) 준비되면 use_wheel: 1 로 전환.
+# use_wheel: 1 = 연속 휠 제약 활성 (SW1-1837 ③ 1단계).
+#   depth-init + acc_n↑ 토대 위에서 휠을 켜니 scale 발산 |pos| 487m→178m(−63%),
+#   리부트 6→3로 개선(끝점 방 규모 복귀). 단 남은 리부트(big translation/z) 3회는
+#   미해결 → reboot-resistance 후속 작업(SW1-1837 ③ 2단계).
 #
 # ※ 적용 범위(SW1-1829): EDIE "기본(공칭) 자세" 단일 주행만 대상.
 #    EDIE는 다리(leg) 인출입으로 여러 자세에서 주행 → 자세별 extrinsic/intrinsic이
-#    다르므로 자세 적응형(pose-adaptive) 융합은 별도 이슈(Step3)로 분리. 본 config는
+#    다르므로 자세 적응형(pose-adaptive) 융합은 별도 이슈(SW1-1836)로 분리. 본 config는
 #    다리가 공칭 자세로 고정된 상태 1개만 가정한다.
 # ================================================================
-use_wheel: 0
+use_wheel: 1
 wheel_topic: "/edie/diff_drive_controller/odom"   # nav_msgs/Odometry (twist 사용)
 
 # 휠 preintegration 노이즈 (속도/각속도) — 캘리브 후 조정
