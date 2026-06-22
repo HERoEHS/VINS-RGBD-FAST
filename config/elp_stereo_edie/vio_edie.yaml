@@ -75,9 +75,14 @@ fisheye: 0
 max_solver_time: 0.04
 max_num_iterations: 8
 
-# IMU noise parameters (Allan variance, ICM-42688-P @382Hz)
-acc_n: 0.004424663056   # accelerometer noise density [m/s^2/sqrt(Hz)]
-gyr_n: 0.000178894435   # gyroscope noise density    [rad/s/sqrt(Hz)]
+# IMU noise parameters
+# ⚠️ acc_n/gyr_n은 Allan-variance 데이터시트값이 아니라 "실측 진동 반영값"으로 상향(SW1-1837).
+#    측정: raw |acc| std 1.69 m/s²(수직축 std 1.71 최대=기계 진동), 데이터시트값(0.0044)은
+#    실측을 ~20배 과소평가 → VINS가 진동투성이 가속도계를 과신해 cam-IMU extrinsic 폭주(3.3m).
+#    상향 후 extrinsic 이동 3354mm→43.6mm(77배 안정화), |pos| 625→487m 개선.
+#    원래 Allan-variance(ICM-42688-P @382Hz): acc_n 0.004424663056, gyr_n 0.000178894435.
+acc_n: 0.08             # accelerometer noise density [m/s^2/sqrt(Hz)] — 진동 반영 상향
+gyr_n: 0.002            # gyroscope noise density    [rad/s/sqrt(Hz)] — 진동 반영 상향(보수적)
 acc_w: 0.000381885117   # accelerometer random walk  [m/s^3/sqrt(Hz)]
 gyr_w: 0.000020782226   # gyroscope random walk      [rad/s^2/sqrt(Hz)]
 
