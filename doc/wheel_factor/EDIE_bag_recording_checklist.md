@@ -19,6 +19,22 @@
 - [ ] diff_drive_controller가 odom을 실제로 publish 하는지: `ros2 topic hz /edie/diff_drive_controller/odom`
 - [ ] IMU 실제 토픽명 확인 후 vio_edie.yaml `imu_topic`과 일치
 
+## 캘리브 사전조건 — april_grid(시각 타깃) 불필요
+이 녹화·검증에 쓰는 캘리브 값은 모두 이미 확보돼 있어 **AprilGrid 등 시각 타깃이 필요 없다.**
+일반 주행 bag만 있으면 된다.
+
+| 캘리브 | 출처 | 타깃 필요 |
+|--------|------|:---:|
+| 카메라 intrinsic/distortion | vio_edie.yaml 기입값 (기캘리브) | ❌ |
+| 카메라↔IMU extrinsic | `estimate_extrinsic:1` 온라인 추정(초기값만) | ❌ |
+| 카메라↔IMU td | `estimate_td:1` 온라인 추정 | ❌ |
+| 휠↔IMU extrinsic `body_T_wheel` | URDF FK (R=I, t=(0.1056,0,-0.0941)) | ❌ |
+| 휠 intrinsic sx/sy/sw | 기본자세 공칭 1.0 (Step1 고정) | ❌ |
+
+> 참고: **휠↔IMU 캘리브는 본래 시각 타깃을 쓰지 않는다** — 주행 궤적/odom과 IMU 적분의
+> 정합으로 캘리브한다. AprilGrid가 필요한 경우는 (a) 카메라 intrinsic 재캘리브,
+> (b) 카메라-IMU Kalibr 오프라인 캘리브뿐이며, 둘 다 본 작업(SW1-1829) 범위 밖이다.
+
 ## 주행 시나리오 (권장)
 - [ ] 충분한 병진+회전 (휠/VIO 모두 여기). 정지 구간 일부 포함(static_init 확인)
 - [ ] **루프 클로저**(출발점 복귀)로 시작-끝 갭 측정 가능하게
@@ -30,7 +46,8 @@ ros2 bag record -o ~/ros2_ws/bag/edie_wheel_base \
   /edie/diff_drive_controller/odom \
   /edie/sensors/camera/left/image_gray \
   /edie/sensors/camera/left/depth \
-  <실제_IMU_토픽> /joint_states /tf /tf_static
+  <실제_IMU_토픽> /joint_states /tf /tf_static \
+  --qos-profile-overrides-path ~/ros2_ws/bag/qos_overrides.yaml
 ```
 
 ## 녹화 후 검증 (A/B)
