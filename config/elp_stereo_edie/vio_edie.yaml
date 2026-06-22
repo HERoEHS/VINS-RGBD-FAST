@@ -76,15 +76,21 @@ max_solver_time: 0.04
 max_num_iterations: 8
 
 # IMU noise parameters
-# ⚠️ acc_n/gyr_n은 Allan-variance 데이터시트값이 아니라 "실측 진동 반영값"으로 상향(SW1-1837).
-#    측정: raw |acc| std 1.69 m/s²(수직축 std 1.71 최대=기계 진동), 데이터시트값(0.0044)은
-#    실측을 ~20배 과소평가 → VINS가 진동투성이 가속도계를 과신해 cam-IMU extrinsic 폭주(3.3m).
-#    상향 후 extrinsic 이동 3354mm→43.6mm(77배 안정화), |pos| 625→487m 개선.
-#    원래 Allan-variance(ICM-42688-P @382Hz): acc_n 0.004424663056, gyr_n 0.000178894435.
-acc_n: 0.08             # accelerometer noise density [m/s^2/sqrt(Hz)] — 진동 반영 상향
-gyr_n: 0.002            # gyroscope noise density    [rad/s/sqrt(Hz)] — 진동 반영 상향(보수적)
-acc_w: 0.000381885117   # accelerometer random walk  [m/s^3/sqrt(Hz)]
-gyr_w: 0.000020782226   # gyroscope random walk      [rad/s^2/sqrt(Hz)]
+# acc_n/gyr_n: 원값은 정지 4h Allan-variance 실측(ICM-42688-P @382Hz)으로 "센서 고유 노이즈"를
+#   정확히 특성화한 값이다(방법 올바름). 다만 Allan 값은 "정지 시 센서 노이즈"이고, 주행 중에는
+#   모터·바퀴·섀시 진동이 더해진다. 실측: 주행 중 raw |acc| std 1.69 m/s²(수직축 std 1.71 최대
+#   = 기계 진동), Allan 원값(0.0044) 대비 ~20배. VINS preintegration은 "오차=특성화 노이즈뿐"으로
+#   가정하므로 Allan 원값을 그대로 쓰면 진동투성이 가속도계를 과신 → cam-IMU extrinsic 폭주(3.3m).
+#   → VIO 실무 관행대로 운영 진동분을 더해 acc_n/gyr_n 상향(SW1-1837). 상향 후 extrinsic 이동
+#   3354mm→43.6mm(77배 안정화), |pos| 625→487m 개선.
+#   ※ 정도(正道)는 IMU 댐핑 마운트로 진동을 줄여 Allan 원값을 복원하는 것(SW1-1837 후속 B-1).
+#   원래 Allan-variance 실측값: acc_n 0.004424663056, gyr_n 0.000178894435.
+#   acc_w/gyr_w는 bias random walk(저주파)라 진동 영향 작고, 발산 트리거도 bias 아님(big translation)
+#   → Allan 실측값 그대로 유지.
+acc_n: 0.08             # accelerometer noise density [m/s^2/sqrt(Hz)] — Allan값 + 운영 진동분 상향
+gyr_n: 0.002            # gyroscope noise density    [rad/s/sqrt(Hz)] — Allan값 + 운영 진동분 상향(보수적)
+acc_w: 0.000381885117   # accelerometer random walk  [m/s^3/sqrt(Hz)] — Allan 실측값 유지
+gyr_w: 0.000020782226   # gyroscope random walk      [rad/s^2/sqrt(Hz)] — Allan 실측값 유지
 
 g_norm: 9.81
 
