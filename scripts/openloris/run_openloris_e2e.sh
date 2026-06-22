@@ -37,27 +37,40 @@ echo "[E2E] vins_root= $VINS_ROOT"
 [ -d "$BAG" ]    || { echo "✗ bag 디렉토리 없음"; exit 1; }
 rm -rf "$OUT"
 
-PIDS=()
+# 각 자식을 setsid로 새 프로세스 그룹(PGID=PID) 리더로 띄운다.
+# → cleanup에서 `kill -- -PGID`로 ros2 run 래퍼 + orphan C++ 노드까지 한 번에 종료.
+#   (이전 버그: kill $!는 래퍼만 죽이고 estimator 노드가 orphan으로 살아남아 토픽 오염)
+MERGE_PID=""; EST_PID=""; REC_PID=""
 cleanup() {
   echo "[E2E] 정리 중..."
-  for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null; done
+  # record는 db3 정상 flush 위해 먼저 SIGINT
+  [ -n "$REC_PID" ] && kill -INT -- "-$REC_PID" 2>/dev/null
+  sleep 2
+  for p in "$REC_PID" "$EST_PID" "$MERGE_PID"; do
+    [ -n "$p" ] && kill -TERM -- "-$p" 2>/dev/null
+  done
   sleep 1
-  for p in "${PIDS[@]}"; do kill -9 "$p" 2>/dev/null; done
+  for p in "$REC_PID" "$EST_PID" "$MERGE_PID"; do
+    [ -n "$p" ] && kill -9 -- "-$p" 2>/dev/null
+  done
+  # 안전망: 혹시 남은 동일 실행파일 orphan 제거
+  pkill -9 -f 'vins_estimator_node' 2>/dev/null
+  pkill -9 -f "$MERGE_PY" 2>/dev/null
 }
 trap cleanup EXIT INT TERM
 
 # 1) IMU 병합 (accel+gyro → /d400/imu0)
-python3 "$MERGE_PY" &  PIDS+=($!)
+setsid python3 "$MERGE_PY" &  MERGE_PID=$!
 sleep 1
 
 # 2) estimator (KLT 내장). config_file/vins_folder는 ros 파라미터로 주입.
-ros2 run vins_estimator vins_estimator_node --ros-args \
-  -p config_file:="$CONFIG" -p vins_folder:="$VINS_ROOT" &  PIDS+=($!)
+setsid ros2 run vins_estimator vins_estimator_node --ros-args \
+  -p config_file:="$CONFIG" -p vins_folder:="$VINS_ROOT" &  EST_PID=$!
 sleep 3
 
 # 3) 출력 record: VIO 추정 + extrinsic + 정답(/gt) + 휠(/odom)
-ros2 bag record -o "$OUT" \
-  /vins_estimator/odometry /vins_estimator/extrinsic /gt /odom &  PIDS+=($!)
+setsid ros2 bag record -o "$OUT" \
+  /vins_estimator/odometry /vins_estimator/extrinsic /gt /odom &  REC_PID=$!
 sleep 2
 
 # 4) bag 재생 (blocking) — 끝나면 다음 줄로
