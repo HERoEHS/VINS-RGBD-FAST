@@ -25,6 +25,14 @@ void Estimator::setParameter()
     td                            = TD;
     g                             = G;
 
+    // ===== Wheel extrinsic/intrinsic 초기값 (Step1: 고정 calib) =====
+    rio      = RIO;
+    tio      = TIO;
+    sx       = SX;
+    sy       = SY;
+    sw       = SW;
+    td_wheel = TD_WHEEL;
+
     featureTracker.readIntrinsicParameter(CAM_NAMES);
     if (FISHEYE)
     {
@@ -47,6 +55,14 @@ void Estimator::clearState()
         imu_buf.pop();
     m_imu.unlock();
 
+    // 휠 비동기 버퍼 초기화
+    m_wheel.lock();
+    while (!wheelVelBuf.empty())
+        wheelVelBuf.pop();
+    while (!wheelGyrBuf.empty())
+        wheelGyrBuf.pop();
+    m_wheel.unlock();
+
     for (int i = 0; i < WINDOW_SIZE + 1; i++)
     {
         Rs[i].setIdentity();
@@ -61,6 +77,14 @@ void Estimator::clearState()
         if (pre_integrations[i] != nullptr)
             delete pre_integrations[i];
         pre_integrations[i] = nullptr;
+
+        // 휠 preintegration/버퍼 초기화 (IMU 미러)
+        dt_buf_wheel[i].clear();
+        linear_velocity_buf_wheel[i].clear();
+        angular_velocity_buf_wheel[i].clear();
+        if (pre_integrations_wheel[i] != nullptr)
+            delete pre_integrations_wheel[i];
+        pre_integrations_wheel[i] = nullptr;
 
         // cl
         find_solved[i] = 0;
@@ -90,11 +114,19 @@ void Estimator::clearState()
 
     openExEstimation = false;
 
+    // 휠 상태 초기화
+    first_wheel           = false;
+    openExWheelEstimation = false;
+    openIxEstimation      = false;
+    prevTime_wheel        = -1;
+
     delete tmp_pre_integration;
+    delete tmp_wheel_pre_integration;
 
     delete last_marginalization_info;
 
     tmp_pre_integration       = nullptr;
+    tmp_wheel_pre_integration = nullptr;
     last_marginalization_info = nullptr;
     last_marginalization_parameter_blocks.clear();
 
@@ -153,6 +185,37 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
     gyr_0 = angular_velocity;
 }
 
+// 휠 오도메트리 preintegration (processIMU 미러, SW1-1829)
+// linear_velocity = odom twist.linear, angular_velocity = odom twist.angular
+void Estimator::processWheel(double t, double dt, const Vector3d &linear_velocity,
+                            const Vector3d &angular_velocity)
+{
+    (void)t;  // 시간은 호출부에서 dt로 환산 — VIW 시그니처 유지를 위해 인자만 보존
+    if (!first_wheel)
+    {
+        first_wheel = true;
+        vel_0_wheel = linear_velocity;
+        gyr_0_wheel = angular_velocity;
+    }
+
+    if (!pre_integrations_wheel[frame_count])
+    {
+        pre_integrations_wheel[frame_count] =
+            new WheelIntegrationBase{vel_0_wheel, gyr_0_wheel, sx, sy, sw, td_wheel};
+    }
+    if (frame_count != 0)
+    {
+        pre_integrations_wheel[frame_count]->push_back(dt, linear_velocity, angular_velocity);
+        tmp_wheel_pre_integration->push_back(dt, linear_velocity, angular_velocity);
+
+        dt_buf_wheel[frame_count].push_back(dt);
+        linear_velocity_buf_wheel[frame_count].push_back(linear_velocity);
+        angular_velocity_buf_wheel[frame_count].push_back(angular_velocity);
+    }
+    vel_0_wheel = linear_velocity;
+    gyr_0_wheel = angular_velocity;
+}
+
 void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
                              const std_msgs::msg::Header                &header)
 {
@@ -200,10 +263,47 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
         prevTime = curTime;
     }
 
+    // ===== 휠 오도메트리 적분 (IMU 루프 미러, SW1-1829) =====
+    if (USE_WHEEL)
+    {
+        // 휠 타임스탬프 정합: 이미지 시각 + td(카메라-IMU) − td_wheel(휠 오프셋)
+        double curTime_w = rclcpp::Time(header.stamp).seconds() + td - td_wheel;
+
+        while (!WheelAvailable(curTime_w))
+        {
+            printf("waiting for wheel ... \r");
+            std::chrono::milliseconds dura(2);
+            std::this_thread::sleep_for(dura);
+        }
+
+        std::vector<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> wheel_vector;
+        getWheelInterval(prevTime_wheel, curTime_w, wheel_vector);
+        for (size_t i = 0; i < wheel_vector.size(); i++)
+        {
+            double dt;
+            if (i == 0)
+                dt = wheel_vector[i].first - prevTime_wheel;
+            else if (i == wheel_vector.size() - 1)
+                dt = curTime_w - wheel_vector[i - 1].first;
+            else
+                dt = wheel_vector[i].first - wheel_vector[i - 1].first;
+            processWheel(wheel_vector[i].first, dt, wheel_vector[i].second.first,
+                         wheel_vector[i].second.second);
+        }
+        prevTime_wheel = curTime_w;
+    }
+
     ImageFrame imageframe(image, rclcpp::Time(header.stamp).seconds());
     imageframe.pre_integration = tmp_pre_integration;
     all_image_frame.insert(make_pair(rclcpp::Time(header.stamp).seconds(), imageframe));
     tmp_pre_integration = new IntegrationBase{acc_0, gyr_0, Bas[frame_count], Bgs[frame_count]};
+    // 휠 임시 preintegration도 다음 프레임 대비 재생성 (누수 방지 위해 기존 것 삭제)
+    if (USE_WHEEL)
+    {
+        delete tmp_wheel_pre_integration;
+        tmp_wheel_pre_integration =
+            new WheelIntegrationBase{vel_0_wheel, gyr_0_wheel, sx, sy, sw, td_wheel};
+    }
 
     if (ESTIMATE_EXTRINSIC == 2)
     {
@@ -973,6 +1073,25 @@ void Estimator::vector2double()
         para_Ex_Pose[i][6] = q.w();
     }
 
+    // 휠 extrinsic(T_io)/intrinsic/td → ceres double 배열
+    if (USE_WHEEL)
+    {
+        para_Ex_Pose_wheel[0][0] = tio.x();
+        para_Ex_Pose_wheel[0][1] = tio.y();
+        para_Ex_Pose_wheel[0][2] = tio.z();
+        Quaterniond qio{rio};
+        para_Ex_Pose_wheel[0][3] = qio.x();
+        para_Ex_Pose_wheel[0][4] = qio.y();
+        para_Ex_Pose_wheel[0][5] = qio.z();
+        para_Ex_Pose_wheel[0][6] = qio.w();
+
+        para_Ix_sx_wheel[0][0] = sx;
+        para_Ix_sy_wheel[0][0] = sy;
+        para_Ix_sw_wheel[0][0] = sw;
+
+        para_Td_wheel[0][0] = td_wheel;
+    }
+
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < f_manager.getFeatureCount(); i++)
         para_Feature[i][0] = dep(i);
@@ -1102,6 +1221,21 @@ void Estimator::double2vector()
         }
     }
 
+    // 휠 extrinsic/intrinsic/td 읽기 (Step1 고정이면 값 불변 → no-op, Step2 추정 시 갱신)
+    if (USE_WHEEL)
+    {
+        tio = Vector3d(para_Ex_Pose_wheel[0][0], para_Ex_Pose_wheel[0][1],
+                       para_Ex_Pose_wheel[0][2]);
+        rio = Quaterniond(para_Ex_Pose_wheel[0][6], para_Ex_Pose_wheel[0][3],
+                          para_Ex_Pose_wheel[0][4], para_Ex_Pose_wheel[0][5])
+                  .normalized()
+                  .toRotationMatrix();
+        sx       = para_Ix_sx_wheel[0][0];
+        sy       = para_Ix_sy_wheel[0][0];
+        sw       = para_Ix_sw_wheel[0][0];
+        td_wheel = para_Td_wheel[0][0];
+    }
+
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < f_manager.getFeatureCount(); i++)
         dep(i) = para_Feature[i][0];
@@ -1211,6 +1345,38 @@ void Estimator::optimization()
         }
     }
 
+    // ===== 휠 extrinsic/intrinsic/td 파라미터 블록 (Step1: 전부 고정) =====
+    if (USE_WHEEL)
+    {
+        // 휠-body extrinsic (T_io)
+        ceres::LocalParameterization *wheel_ex_param = new PoseLocalParameterization();
+        problem.AddParameterBlock(para_Ex_Pose_wheel[0], SIZE_POSE, wheel_ex_param);
+        if ((ESTIMATE_EXTRINSIC_WHEEL && frame_count == WINDOW_SIZE && Vs[0].norm() > 0.2) ||
+            openExWheelEstimation)
+            openExWheelEstimation = true;
+        else
+            problem.SetParameterBlockConstant(para_Ex_Pose_wheel[0]);
+
+        // 휠 intrinsic 스케일 sx/sy/sw
+        problem.AddParameterBlock(para_Ix_sx_wheel[0], 1);
+        problem.AddParameterBlock(para_Ix_sy_wheel[0], 1);
+        problem.AddParameterBlock(para_Ix_sw_wheel[0], 1);
+        if ((ESTIMATE_INTRINSIC_WHEEL && frame_count == WINDOW_SIZE && Vs[0].norm() > 0.2) ||
+            openIxEstimation)
+            openIxEstimation = true;
+        else
+        {
+            problem.SetParameterBlockConstant(para_Ix_sx_wheel[0]);
+            problem.SetParameterBlockConstant(para_Ix_sy_wheel[0]);
+            problem.SetParameterBlockConstant(para_Ix_sw_wheel[0]);
+        }
+
+        // 휠 td
+        problem.AddParameterBlock(para_Td_wheel[0], 1);
+        if (!ESTIMATE_TD_WHEEL || Vs[0].norm() < 0.2)
+            problem.SetParameterBlockConstant(para_Td_wheel[0]);
+    }
+
     //构建残差
     /*******先验残差*******/
     if (last_marginalization_info)
@@ -1235,6 +1401,22 @@ void Estimator::optimization()
             //添加残差格式：残差因子，鲁棒核函数，优化变量（i时刻位姿，i时刻速度与偏置，i+1时刻位姿，i+1时刻速度与偏置）
             problem.AddResidualBlock(imu_factor, NULL, para_Pose[i], para_SpeedBias[i],
                                      para_Pose[j], para_SpeedBias[j]);
+        }
+    }
+
+    /*******휠 preintegration 잔차 (WheelFactor<6,7,7,7,1,1,1,1>)*******/
+    if (USE_WHEEL)
+    {
+        for (int i = 0; i < frame_count; i++)
+        {
+            int j = i + 1;
+            if (pre_integrations_wheel[j]->sum_dt > 10.0)  // 간격 과대 시 미사용
+                continue;
+            WheelFactor *wheel_factor = new WheelFactor(pre_integrations_wheel[j]);
+            // 블록: pose_i, pose_j, T_io(extrinsic), sx, sy, sw, td_wheel
+            problem.AddResidualBlock(wheel_factor, NULL, para_Pose[i], para_Pose[j],
+                                     para_Ex_Pose_wheel[0], para_Ix_sx_wheel[0],
+                                     para_Ix_sy_wheel[0], para_Ix_sw_wheel[0], para_Td_wheel[0]);
         }
     }
 
@@ -1413,6 +1595,22 @@ void Estimator::optimization()
             }
         }
 
+        // 휠 preintegration 잔차를 marg에 추가 → para_Pose[0]만 drop (extrinsic/intrinsic/td는 보존)
+        if (USE_WHEEL)
+        {
+            if (pre_integrations_wheel[1]->sum_dt < 10.0)
+            {
+                WheelFactor       *wheel_factor        = new WheelFactor(pre_integrations_wheel[1]);
+                ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(
+                    wheel_factor, NULL,
+                    vector<double *>{para_Pose[0], para_Pose[1], para_Ex_Pose_wheel[0],
+                                     para_Ix_sx_wheel[0], para_Ix_sy_wheel[0], para_Ix_sw_wheel[0],
+                                     para_Td_wheel[0]},
+                    vector<int>{0});  // para_Pose[0] 만 边缘化
+                marginalization_info->addResidualBlockInfo(residual_block_info);
+            }
+        }
+
         //图像部分，基于与第0帧相关的图像残差，边缘化第一次观测的图像帧为第0帧的路标点和第0帧
         {
             int feature_index = -1;
@@ -1494,6 +1692,15 @@ void Estimator::optimization()
         {
             addr_shift[reinterpret_cast<long>(para_Td[0])] = para_Td[0];
         }
+        // 휠 extrinsic/intrinsic/td는 슬라이딩과 무관하게 자기 자신으로 유지
+        if (USE_WHEEL)
+        {
+            addr_shift[reinterpret_cast<long>(para_Ex_Pose_wheel[0])] = para_Ex_Pose_wheel[0];
+            addr_shift[reinterpret_cast<long>(para_Ix_sx_wheel[0])]   = para_Ix_sx_wheel[0];
+            addr_shift[reinterpret_cast<long>(para_Ix_sy_wheel[0])]   = para_Ix_sy_wheel[0];
+            addr_shift[reinterpret_cast<long>(para_Ix_sw_wheel[0])]   = para_Ix_sw_wheel[0];
+            addr_shift[reinterpret_cast<long>(para_Td_wheel[0])]      = para_Td_wheel[0];
+        }
         vector<double *> parameter_blocks = marginalization_info->getParameterBlocks(addr_shift);
 
         delete last_marginalization_info;
@@ -1563,6 +1770,15 @@ void Estimator::optimization()
             {
                 addr_shift[reinterpret_cast<long>(para_Td[0])] = para_Td[0];
             }
+            // 휠 extrinsic/intrinsic/td 유지
+            if (USE_WHEEL)
+            {
+                addr_shift[reinterpret_cast<long>(para_Ex_Pose_wheel[0])] = para_Ex_Pose_wheel[0];
+                addr_shift[reinterpret_cast<long>(para_Ix_sx_wheel[0])]   = para_Ix_sx_wheel[0];
+                addr_shift[reinterpret_cast<long>(para_Ix_sy_wheel[0])]   = para_Ix_sy_wheel[0];
+                addr_shift[reinterpret_cast<long>(para_Ix_sw_wheel[0])]   = para_Ix_sw_wheel[0];
+                addr_shift[reinterpret_cast<long>(para_Td_wheel[0])]      = para_Td_wheel[0];
+            }
 
             vector<double *> parameter_blocks =
                 marginalization_info->getParameterBlocks(addr_shift);
@@ -1606,6 +1822,14 @@ void Estimator::slideWindow()
                     Bas[i].swap(Bas[i + 1]);
                     Bgs[i].swap(Bgs[i + 1]);
                 }
+                if (USE_WHEEL)
+                {
+                    std::swap(pre_integrations_wheel[i], pre_integrations_wheel[i + 1]);
+
+                    dt_buf_wheel[i].swap(dt_buf_wheel[i + 1]);
+                    linear_velocity_buf_wheel[i].swap(linear_velocity_buf_wheel[i + 1]);
+                    angular_velocity_buf_wheel[i].swap(angular_velocity_buf_wheel[i + 1]);
+                }
                 ++find_solved[i + 1];
                 find_solved[i] = find_solved[i + 1];
             }
@@ -1627,6 +1851,16 @@ void Estimator::slideWindow()
                 dt_buf[WINDOW_SIZE].clear();
                 linear_acceleration_buf[WINDOW_SIZE].clear();
                 angular_velocity_buf[WINDOW_SIZE].clear();
+            }
+            if (USE_WHEEL)
+            {
+                delete pre_integrations_wheel[WINDOW_SIZE];
+                pre_integrations_wheel[WINDOW_SIZE] =
+                    new WheelIntegrationBase{vel_0_wheel, gyr_0_wheel, sx, sy, sw, td_wheel};
+
+                dt_buf_wheel[WINDOW_SIZE].clear();
+                linear_velocity_buf_wheel[WINDOW_SIZE].clear();
+                angular_velocity_buf_wheel[WINDOW_SIZE].clear();
             }
             find_solved[WINDOW_SIZE] = 0;
 
@@ -1682,6 +1916,30 @@ void Estimator::slideWindow()
                 dt_buf[WINDOW_SIZE].clear();
                 linear_acceleration_buf[WINDOW_SIZE].clear();
                 angular_velocity_buf[WINDOW_SIZE].clear();
+            }
+            if (USE_WHEEL)  // 휠 데이터 연결 (제거되는 차차신 프레임의 적분을 이전 프레임에 흡수)
+            {
+                for (unsigned int i = 0; i < dt_buf_wheel[frame_count].size(); i++)
+                {
+                    double   tmp_dt               = dt_buf_wheel[frame_count][i];
+                    Vector3d tmp_linear_velocity  = linear_velocity_buf_wheel[frame_count][i];
+                    Vector3d tmp_angular_velocity = angular_velocity_buf_wheel[frame_count][i];
+
+                    pre_integrations_wheel[frame_count - 1]->push_back(
+                        tmp_dt, tmp_linear_velocity, tmp_angular_velocity);
+
+                    dt_buf_wheel[frame_count - 1].push_back(tmp_dt);
+                    linear_velocity_buf_wheel[frame_count - 1].push_back(tmp_linear_velocity);
+                    angular_velocity_buf_wheel[frame_count - 1].push_back(tmp_angular_velocity);
+                }
+
+                delete pre_integrations_wheel[WINDOW_SIZE];
+                pre_integrations_wheel[WINDOW_SIZE] =
+                    new WheelIntegrationBase{vel_0_wheel, gyr_0_wheel, sx, sy, sw, td_wheel};
+
+                dt_buf_wheel[WINDOW_SIZE].clear();
+                linear_velocity_buf_wheel[WINDOW_SIZE].clear();
+                angular_velocity_buf_wheel[WINDOW_SIZE].clear();
             }
             slideWindowNew();
         }
@@ -1763,6 +2021,18 @@ void Estimator::inputIMU(double t, const Vector3d &linearAcceleration,
         m_propagate.unlock();
         pubLatestOdometry(latest_P, latest_Q, latest_V, t);
     }
+}
+
+// 휠 오도메트리 입력 — 비동기 버퍼에 적재 (inputIMU 미러, SW1-1829)
+// linearVelocity = odom twist.linear, angularVelocity = odom twist.angular
+void Estimator::inputWheel(double t, const Vector3d &linearVelocity,
+                           const Vector3d &angularVelocity)
+{
+    m_wheel.lock();
+    wheelVelBuf.push(make_pair(t, linearVelocity));
+    wheelGyrBuf.push(make_pair(t, angularVelocity));
+    m_wheel.unlock();
+    // Step1: fast-predict/퍼블리시 생략 (VINS 출력은 vision+IMU 기반 그대로 유지)
 }
 
 void Estimator::updateLatestStates()
@@ -1885,6 +2155,55 @@ bool Estimator::IMUAvailable(double t)
         return true;
     else
         return false;
+}
+
+bool Estimator::WheelAvailable(double t)
+{
+    if (!wheelVelBuf.empty() && t <= wheelVelBuf.back().first)
+        return true;
+    else
+        return false;
+}
+
+// [t0, t1] 구간 휠 샘플을 (t, (vel, gyr)) 형태로 추출 (getIMUInterval 미러)
+bool Estimator::getWheelInterval(
+    double t0, double t1,
+    std::vector<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> &wheel_vector)
+{
+    m_wheel.lock();
+    if (wheelVelBuf.empty())
+    {
+        printf("not receive wheel\n");
+        m_wheel.unlock();
+        return false;
+    }
+    if (t1 <= wheelVelBuf.back().first)
+    {
+        while (wheelVelBuf.front().first <= t0)
+        {
+            wheelVelBuf.pop();
+            wheelGyrBuf.pop();
+        }
+        while (wheelVelBuf.front().first < t1)
+        {
+            wheel_vector.emplace_back(
+                wheelVelBuf.front().first,
+                make_pair(wheelVelBuf.front().second, wheelGyrBuf.front().second));
+            wheelVelBuf.pop();
+            wheelGyrBuf.pop();
+        }
+        wheel_vector.emplace_back(
+            wheelVelBuf.front().first,
+            make_pair(wheelVelBuf.front().second, wheelGyrBuf.front().second));
+        m_wheel.unlock();
+        return true;
+    }
+    else
+    {
+        printf("wait for wheel\n");
+        m_wheel.unlock();
+        return false;
+    }
 }
 
 void Estimator::initFirstIMUPose(

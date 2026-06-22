@@ -6,6 +6,18 @@ double INIT_DEPTH;
 double MIN_PARALLAX;
 double ACC_N, ACC_W;
 double GYR_N, GYR_W;
+double VEL_N_wheel, GYR_N_wheel;
+
+// ===== Wheel odometry tight-coupling (SW1-1829) =====
+int             USE_WHEEL;
+std::string     WHEEL_TOPIC;
+Eigen::Matrix3d RIO = Eigen::Matrix3d::Identity();
+Eigen::Vector3d TIO = Eigen::Vector3d::Zero();
+double          SX = 1.0, SY = 1.0, SW = 1.0;
+double          TD_WHEEL = 0.0;
+int             ESTIMATE_EXTRINSIC_WHEEL;
+int             ESTIMATE_INTRINSIC_WHEEL;
+int             ESTIMATE_TD_WHEEL;
 
 std::vector<Eigen::Matrix3d> RIC;
 std::vector<Eigen::Vector3d> TIC;
@@ -153,6 +165,9 @@ void readParameters(rclcpp::Node* node)
         ACC_W = fsSettings["acc_w"];
         GYR_N = fsSettings["gyr_n"];
         GYR_W = fsSettings["gyr_w"];
+        // 휠 preintegration 노이즈 (없으면 기본값) — Step1 휠 factor 이식용
+        VEL_N_wheel = fsSettings["vel_n_wheel"].empty() ? 0.05 : (double)fsSettings["vel_n_wheel"];
+        GYR_N_wheel = fsSettings["gyr_n_wheel"].empty() ? 0.05 : (double)fsSettings["gyr_n_wheel"];
         G.z() = fsSettings["g_norm"];
     }
 
@@ -231,5 +246,49 @@ void readParameters(rclcpp::Node* node)
         FIX_DEPTH = fsSettings["fix_depth"];
     else
         FIX_DEPTH = 1;
+
+    // ===== Wheel odometry tight-coupling (SW1-1829) =====
+    // use_wheel 키가 없으면 USE_WHEEL=0 → 휠 코드 경로 전부 skip(기존 VINS 동작 유지)
+    USE_WHEEL = fsSettings["use_wheel"].empty() ? 0 : (int)fsSettings["use_wheel"];
+    if (USE_WHEEL)
+    {
+        fsSettings["wheel_topic"] >> WHEEL_TOPIC;
+        printf("WHEEL_TOPIC: %s\n", WHEEL_TOPIC.c_str());
+
+        // 휠 preintegration 노이즈 (위 IMU 블록에서 이미 읽었으나, USE_IMU=0인 경우 대비 재확인)
+        VEL_N_wheel = fsSettings["vel_n_wheel"].empty() ? 0.05 : (double)fsSettings["vel_n_wheel"];
+        GYR_N_wheel = fsSettings["gyr_n_wheel"].empty() ? 0.05 : (double)fsSettings["gyr_n_wheel"];
+
+        // 휠 intrinsic 스케일 (없으면 1.0)
+        SX = fsSettings["sx"].empty() ? 1.0 : (double)fsSettings["sx"];
+        SY = fsSettings["sy"].empty() ? 1.0 : (double)fsSettings["sy"];
+        SW = fsSettings["sw"].empty() ? 1.0 : (double)fsSettings["sw"];
+
+        // 휠-body extrinsic (T_io): wheel.yaml에서 4x4 행렬로 제공
+        cv::Mat cv_T_io;
+        fsSettings["body_T_wheel"] >> cv_T_io;
+        if (!cv_T_io.empty())
+        {
+            Eigen::Matrix4d T_io;
+            cv::cv2eigen(cv_T_io, T_io);
+            RIO = T_io.block<3, 3>(0, 0);
+            TIO = T_io.block<3, 1>(0, 3);
+        }
+        RCLCPP_INFO_STREAM(node->get_logger(), "Wheel Extrinsic_R(RIO):" << std::endl << RIO);
+        RCLCPP_INFO_STREAM(node->get_logger(), "Wheel Extrinsic_T(TIO):" << TIO.transpose());
+
+        TD_WHEEL = fsSettings["td_wheel"].empty() ? 0.0 : (double)fsSettings["td_wheel"];
+        // Step1: extrinsic/intrinsic/td 모두 고정(=0). Step2에서 config로 1 지정 가능
+        ESTIMATE_EXTRINSIC_WHEEL = fsSettings["estimate_extrinsic_wheel"].empty()
+                                       ? 0 : (int)fsSettings["estimate_extrinsic_wheel"];
+        ESTIMATE_INTRINSIC_WHEEL = fsSettings["estimate_intrinsic_wheel"].empty()
+                                       ? 0 : (int)fsSettings["estimate_intrinsic_wheel"];
+        ESTIMATE_TD_WHEEL = fsSettings["estimate_td_wheel"].empty()
+                                ? 0 : (int)fsSettings["estimate_td_wheel"];
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_WHEEL: 1, sx=%.4f sy=%.4f sw=%.4f, est_ex=%d est_ix=%d est_td=%d",
+                    SX, SY, SW, ESTIMATE_EXTRINSIC_WHEEL, ESTIMATE_INTRINSIC_WHEEL, ESTIMATE_TD_WHEEL);
+    }
+
     fsSettings.release();
 }

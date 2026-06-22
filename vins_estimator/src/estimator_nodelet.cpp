@@ -22,6 +22,7 @@
 #include <sensor_msgs/msg/point_cloud.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <geometry_msgs/msg/point32.hpp>
+#include <nav_msgs/msg/odometry.hpp>  // 휠 오도메트리 구독 (SW1-1829)
 
 class EstimatorNode : public rclcpp::Node
 {
@@ -52,6 +53,12 @@ public:
                 IMU_TOPIC, sensor_qos,
                 std::bind(&EstimatorNode::imu_callback, this, std::placeholders::_1));
 
+        // 휠 오도메트리 구독 (nav_msgs/Odometry, BEST_EFFORT). USE_WHEEL=0 이면 미구독
+        if (USE_WHEEL)
+            sub_wheel = create_subscription<nav_msgs::msg::Odometry>(
+                WHEEL_TOPIC, sensor_qos,
+                std::bind(&EstimatorNode::wheel_callback, this, std::placeholders::_1));
+
         sub_relo_points = create_subscription<sensor_msgs::msg::PointCloud>(
             "/pose_graph/match_points", 10,
             std::bind(&EstimatorNode::relocalization_callback, this, std::placeholders::_1));
@@ -81,6 +88,7 @@ private:
     std::mutex                m_vis;
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr           sub_imu;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr         sub_wheel;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud>::SharedPtr     sub_relo_points;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr          sub_image;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr          sub_depth;
@@ -102,7 +110,8 @@ private:
     int    pub_count        = 1;
     int    input_count      = 0;
 
-    double last_imu_t = 0;
+    double last_imu_t   = 0;
+    double last_wheel_t = 0;
 
     void imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr &imu_msg)
     {
@@ -121,6 +130,27 @@ private:
                             imu_msg->angular_velocity.y,
                             imu_msg->angular_velocity.z);
         estimator.inputIMU(last_imu_t, acc, gyr);
+    }
+
+    // 휠 오도메트리 콜백 — twist(속도)를 휠 preintegration 입력으로 전달 (SW1-1829)
+    void wheel_callback(const nav_msgs::msg::Odometry::ConstSharedPtr &wheel_msg)
+    {
+        if (!wheel_msg) return;
+        double t = rclcpp::Time(wheel_msg->header.stamp).seconds();
+        if (t <= last_wheel_t)
+        {
+            RCLCPP_WARN(get_logger(), "wheel message in disorder! %f", t);
+            return;
+        }
+        last_wheel_t = t;
+        // odom.twist: 로봇 본체(또는 odom child) 기준 선속도/각속도
+        Eigen::Vector3d vel(wheel_msg->twist.twist.linear.x,
+                            wheel_msg->twist.twist.linear.y,
+                            wheel_msg->twist.twist.linear.z);
+        Eigen::Vector3d gyr(wheel_msg->twist.twist.angular.x,
+                            wheel_msg->twist.twist.angular.y,
+                            wheel_msg->twist.twist.angular.z);
+        estimator.inputWheel(last_wheel_t, vel, gyr);
     }
 
     void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr &color_msg)

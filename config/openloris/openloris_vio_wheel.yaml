@@ -1,0 +1,139 @@
+%YAML:1.0
+
+# =============================================================================
+# OpenLORIS office1-1 + Wheel factor E2E 검증용 config (SW1-1829)
+#   - 베이스: openloris_vio.yaml (vision+IMU)
+#   - 차이점: use_wheel:1 + wheel_topic:/odom + body_T_wheel(데이터셋 tf_static에서 산출)
+#   - A/B 비교: 베이스라인은 openloris_vio.yaml(use_wheel 없음=0), 본 파일이 wheel-on.
+#   ※ IMU는 imu_merge.py로 /d400/accel+gyro → /d400/imu0 병합 후 입력.
+# =============================================================================
+
+num_threads: 0
+
+#common parameters
+imu: 1
+static_init: 0
+imu_topic: "/d400/imu0"
+image_topic: "/d400/color/image_raw"
+depth_topic: "/d400/aligned_depth_to_color/image_raw"
+output_path: "/tmp/vins_openloris_output"
+
+#RGBD camera Ideal Range
+depth_min_dist: 0.3
+depth_max_dist: 3
+
+frontend_freq: 30
+keyframe_parallax: 10.0
+num_grid_rows: 7
+num_grid_cols: 8
+
+#unsynchronization parameters
+estimate_td: 1
+td: 0.000
+
+#camera calibration
+model_type: PINHOLE
+camera_name: camera
+image_width: 848
+image_height: 480
+
+distortion_parameters:
+   k1: 0.0
+   k2: 0.0
+   p1: 0.0
+   p2: 0.0
+projection_parameters:
+   fx: 611.4509887695312
+   fy: 611.4857177734375
+   cx: 433.2039794921875
+   cy: 249.4730224609375
+
+# Extrinsic parameter between IMU and Camera.
+estimate_extrinsic: 0
+#Rotation from camera frame to imu frame, imu^R_cam
+extrinsicRotation: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ 0.999975572679493,  0.003849141066713,  0.005854714944742,
+           -0.003828680351062,  0.999986658473099,  -0.003501944262433,
+           -0.005868115609379,  0.003479442469180,  0.999976848846595]
+#Translation from camera frame to imu frame, imu^T_cam
+extrinsicTranslation: !!opencv-matrix
+   rows: 3
+   cols: 1
+   dt: d
+   data: [0.0203127935529, -0.00510325236246, -0.0112013882026]
+
+#feature traker paprameters
+max_cnt: 130
+min_dist: 30
+freq: 10
+F_threshold: 1.0
+show_track: 0
+equalize: 0
+fisheye: 0
+
+#optimization parameters
+max_solver_time: 0.04
+max_num_iterations: 8
+
+#imu parameters       The more accurate parameters you provide, the better performance
+acc_n: 0.1
+gyr_n: 0.01
+acc_w: 0.0002
+gyr_w: 2.0e-5
+
+g_norm: 9.805
+
+#rolling shutter parameters
+rolling_shutter: 1
+rolling_shutter_tr: 0.033
+
+#loop closure parameters
+loop_closure: 0
+fast_relocalization: 0
+load_previous_pose_graph: 0
+pose_graph_save_path: "/tmp/vins_openloris_output/pose_graph"
+
+#visualization parameters
+save_image: 0
+visualize_imu_forward: 0
+visualize_camera_size: 0.4
+
+#暂时仅考虑动物
+dynamic_label: ["person", "cat", "dog", "bicycle", "car","bus"]
+
+# ================================================================
+# Wheel odometry tight-coupling (SW1-1829)
+#   body_T_wheel = T(d400_imu <- base_link), OpenLORIS tf_static에서 합성:
+#     base_link→d400_color · d400_color→d400_imu 체인의 역변환 (det(R)=1 검증)
+#   /odom twist는 base_link(휠 본체) 기준 → 이 extrinsic으로 body(IMU)로 정렬.
+#   OpenLORIS odom은 이미 metric → 스케일 sx/sy/sw=1.0. Step1=캘리브 고정(추정 off).
+# ================================================================
+use_wheel: 1
+wheel_topic: "/odom"                # nav_msgs/Odometry (twist 사용)
+
+# 휠 preintegration 노이즈 (속도/각속도)
+vel_n_wheel: 0.05
+gyr_n_wheel: 0.05
+
+# 휠 intrinsic 스케일 (vel-x, vel-y, yaw)
+sx: 1.0
+sy: 1.0
+sw: 1.0
+
+# 휠(odom, base_link) → body(IMU=d400_imu) extrinsic T_io (4x4)
+body_T_wheel: !!opencv-matrix
+   rows: 4
+   cols: 4
+   dt: d
+   data: [ 0.004222, -0.999914, -0.012414, -0.061064,
+           0.009945,  0.012456, -0.999873,  0.919328,
+           0.999942,  0.004098,  0.009997, -0.224370,
+           0.0,       0.0,       0.0,        1.0]
+
+td_wheel: 0.0                  # 휠 시간오프셋 초기값
+estimate_extrinsic_wheel: 0    # Step1=0 고정
+estimate_intrinsic_wheel: 0    # Step1=0 고정
+estimate_td_wheel: 0           # Step1=0 고정
