@@ -335,7 +335,11 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
                 bool result = false;
                 if (ESTIMATE_EXTRINSIC != 2 && (rclcpp::Time(header.stamp).seconds() - initial_timestamp) > 0.1)
                 {
-                    result            = initialStructure();
+                    // [SW1-1837] init scale을 IMU가 아니라 depth로 푼다.
+                    //   기존 initialStructure()는 monocular SfM + IMU로 scale 추정 →
+                    //   EDIE 지면 평면주행은 IMU 병진여기 부족 → scale 폭주(첫 위치 146m) → 발산.
+                    //   initialStructureWithDepth()는 depth로 메트릭 scale 직접 + 저여기/정지 폴백 보유.
+                    result            = initialStructureWithDepth();
                     initial_timestamp = rclcpp::Time(header.stamp).seconds();
                 }
                 // if init sfm success
