@@ -10,6 +10,9 @@
 
 // [SW1-1837] VIO 수치 안정성 수정 토글(clean A/B). 정의 시: IMU sqrt_info 상대 클램프 +
 // 장기 preintegration(재init 갭) IMU factor 가드. 주석 처리하면 원본 동작(no-fix).
+// [SW1-1837] VIO 수치 안정성 수정 토글. 정의 시: IMU sqrt_info 상대 클램프(조건수 ~1e7 제한)로
+// 장기-dt/PD-loss covariance에서 LLT(cov⁻¹)가 P/V 1e26으로 폭발하던 문제 해결. 주석 처리하면 원본 동작.
+// (clean 2×2: 클램프 단독으로 198m→2.74m. 장기-dt 가드는 불필요·단독 유해로 판명되어 미채택.)
 #define VIO_NUMERIC_FIX
 
 const double FOCAL_LENGTH = 460.0;

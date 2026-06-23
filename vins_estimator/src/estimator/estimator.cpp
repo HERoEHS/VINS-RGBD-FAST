@@ -1398,16 +1398,9 @@ void Estimator::optimization()
         for (int i = 0; i < frame_count; i++)  //预积分残差，总数目为frame_count
         {
             int j = i + 1;
-#ifdef VIO_NUMERIC_FIX
-            // [SW1-1837] 재init 갭에서 생기는 장기 preintegration(sum_dt~2s)은 IMU factor를
-            // ill-conditioned로 만들어 발산을 유발 → 1.0s 초과 시 IMU factor 미사용(휠+비전으로 대체).
-            if (pre_integrations[j]->sum_dt > 1.0)
-                continue;
-#else
             if (pre_integrations[j]->sum_dt >
                 10.0)  //两图像帧之间时间过长，不使用中间的预积分 tzhang
                 continue;
-#endif
             IMUFactor *imu_factor = new IMUFactor(pre_integrations[j]);
             //添加残差格式：残差因子，鲁棒核函数，优化变量（i时刻位姿，i时刻速度与偏置，i+1时刻位姿，i+1时刻速度与偏置）
             problem.AddResidualBlock(imu_factor, NULL, para_Pose[i], para_SpeedBias[i],

@@ -84,7 +84,7 @@ public:
         // sqrt_info.setIdentity();
         residual = sqrt_info * residual;
 
-#if 0  // [clean A/B] 관찰자 효과 제거 위해 계측 비활성 (조건수 분석 필요 시 1로)
+#if 0  // [SW1-1837 진단] 조건수 계측 (필요 시 1로). 관찰자 효과 있어 측정 시 OFF 권장
         // [SW1-1837 진단] IMU factor 조건수 계측 — sqrt_info=chol(cov⁻¹)를 어느 상태 블록이 키우는지 분리.
         //  P/R/V가 크면 진짜 병리(궤적 폭주 유발), Ba/Bg만 크면 bias 공분산이 원래 작아 생기는 정상 artifact.
         //  cost·로그 절약을 위해 경고(>1e8) 근처(si_max>1e6) 케이스만 고유값 분해+출력.
