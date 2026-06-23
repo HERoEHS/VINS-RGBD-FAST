@@ -99,7 +99,7 @@ class WheelFactor : public ceres::SizedCostFunction<6, 7, 7, 7, 1, 1, 1, 1>
             double dtd = td - pre_integration->linearized_td;
             if (pre_integration->jacobian.maxCoeff() > 1e8 || pre_integration->jacobian.minCoeff() < -1e8)
             {
-                ROS_WARN("numerical unstable in preintegration");
+                ROS_WARN("numerical unstable in WHEEL preintegration (preint jacobian)");
                 //std::cout << pre_integration->jacobian << std::endl;
 ///                ROS_BREAK();
             }
@@ -141,7 +141,7 @@ class WheelFactor : public ceres::SizedCostFunction<6, 7, 7, 7, 1, 1, 1, 1>
 
                 if (jacobian_pose_i.maxCoeff() > 1e8 || jacobian_pose_i.minCoeff() < -1e8)
                 {
-                    ROS_WARN("numerical unstable in preintegration");
+                    ROS_WARN("numerical unstable in WHEEL factor (pose_i jacobian)");
                     //std::cout << sqrt_info << std::endl;
                     //ROS_BREAK();
                 }
