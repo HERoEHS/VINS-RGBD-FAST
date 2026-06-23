@@ -63,12 +63,50 @@ public:
         Eigen::Map<Eigen::Matrix<double, 15, 1>> residual(residuals);
         residual = pre_integration->evaluate(Pi, Qi, Vi, Bai, Bgi, Pj, Qj, Vj, Baj, Bgj);
 
+        // [SW1-1837] covariance가 PD를 잃거나(lam_min≤0) 장기-dt로 ill-conditioned가 되면 LLT(cov⁻¹)가
+        // garbage sqrt_info를 만들어 P/V가 1e26까지 폭발(→5m 점프→reboot). 대칭화 + "상대" floor로
+        // 조건수를 ~1e7로 묶는다. eps=max(1e-12, 1e-7·max|diag|) — 단기-dt엔 절대 floor, 장기-dt엔
+        // 스케일 비례 floor (절대 1e-12만으론 장기-dt에서 siV가 1e11로 누수됐던 문제 해결).
+#ifdef VIO_NUMERIC_FIX
+        const double cov_scale = pre_integration->covariance.diagonal().cwiseAbs().maxCoeff();
+        const double pd_eps    = (1e-7 * cov_scale > 1e-12) ? 1e-7 * cov_scale : 1e-12;
+        Eigen::Matrix<double, 15, 15> cov_pd =
+            0.5 * (pre_integration->covariance + pre_integration->covariance.transpose());
+        cov_pd.diagonal().array() += pd_eps;
+        Eigen::Matrix<double, 15, 15> sqrt_info =
+            Eigen::LLT<Eigen::Matrix<double, 15, 15>>(cov_pd.inverse()).matrixL().transpose();
+#else
         Eigen::Matrix<double, 15, 15> sqrt_info =
             Eigen::LLT<Eigen::Matrix<double, 15, 15>>(pre_integration->covariance.inverse())
                 .matrixL()
                 .transpose();
+#endif
         // sqrt_info.setIdentity();
         residual = sqrt_info * residual;
+
+#if 0  // [clean A/B] 관찰자 효과 제거 위해 계측 비활성 (조건수 분석 필요 시 1로)
+        // [SW1-1837 진단] IMU factor 조건수 계측 — sqrt_info=chol(cov⁻¹)를 어느 상태 블록이 키우는지 분리.
+        //  P/R/V가 크면 진짜 병리(궤적 폭주 유발), Ba/Bg만 크면 bias 공분산이 원래 작아 생기는 정상 artifact.
+        //  cost·로그 절약을 위해 경고(>1e8) 근처(si_max>1e6) 케이스만 고유값 분해+출력.
+        {
+            double si_max = sqrt_info.cwiseAbs().maxCoeff();
+            if (si_max > 1e6)
+            {
+                Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 15, 15>> es(
+                    pre_integration->covariance, Eigen::EigenvaluesOnly);
+                double lam_min = es.eigenvalues().minCoeff();
+                double lam_max = es.eigenvalues().maxCoeff();
+                ROS_WARN(
+                    "[IMU-COND] dt=%.3f cond=%.2e lam_min=%.2e | siP=%.2e siR=%.2e siV=%.2e siBa=%.2e siBg=%.2e",
+                    pre_integration->sum_dt, lam_max / lam_min, lam_min,
+                    sqrt_info.block<3, 15>(O_P, 0).cwiseAbs().maxCoeff(),
+                    sqrt_info.block<3, 15>(O_R, 0).cwiseAbs().maxCoeff(),
+                    sqrt_info.block<3, 15>(O_V, 0).cwiseAbs().maxCoeff(),
+                    sqrt_info.block<3, 15>(O_BA, 0).cwiseAbs().maxCoeff(),
+                    sqrt_info.block<3, 15>(O_BG, 0).cwiseAbs().maxCoeff());
+            }
+        }
+#endif
 
         if (jacobians)
         {

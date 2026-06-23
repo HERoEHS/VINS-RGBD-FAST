@@ -8,6 +8,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <vector>
 
+// [SW1-1837] VIO 수치 안정성 수정 토글(clean A/B). 정의 시: IMU sqrt_info 상대 클램프 +
+// 장기 preintegration(재init 갭) IMU factor 가드. 주석 처리하면 원본 동작(no-fix).
+#define VIO_NUMERIC_FIX
+
 const double FOCAL_LENGTH = 460.0;
 const int    WINDOW_SIZE  = 10;
 const int    NUM_OF_CAM   = 1;
