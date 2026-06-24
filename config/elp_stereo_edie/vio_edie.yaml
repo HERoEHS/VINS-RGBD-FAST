@@ -120,8 +120,10 @@ visualize_camera_size: 0.4
 #   리부트 6→3로 개선(끝점 방 규모 복귀).
 #   [2026-06-24 재확인] VIO_NUMERIC_FIX + use_wheel:1 상태에서 edie_wheel_base_old 재현 시
 #   system reboot! 0회 확인 — "리부트 3회 미해결" 주석은 stale. 리부트는 해소됨.
-#   잔재 오차(RMSE 1.3m)의 실제 원인은 scale underestimation(VIO 궤적이 휠 odom 대비 압축)
-#   → 휠 factor를 init 경로에 연결하는 작업(SW1-1837 ③ 본체)이 다음 과제.
+#   잔재 오차(RMSE 1.3m): RMSE의 95.1%는 xy 궤적 형태 불일치. VIO는 전역 15.6% 거리
+#   과대추정(evo Sim(3) scale=0.8651)이나 scale 보정이 RMSE에 미치는 영향은 0.008m(무관).
+#   xy 불일치 원인 미확인 — 휠 intrinsic 미보정(sx/sy/sw=1.0) 또는 VIO drift 가능성.
+#   원인 파악 후 SW1-1837 ③ 본체(휠 factor→init 연결) 진행 여부 결정.
 #
 # ※ 적용 범위(SW1-1829): EDIE "기본(공칭) 자세" 단일 주행만 대상.
 #    EDIE는 다리(leg) 인출입으로 여러 자세에서 주행 → 자세별 extrinsic/intrinsic이
