@@ -1,5 +1,6 @@
 #include "estimator.h"
 #include "../utility/visualization.h"
+#include "../factor/zero_velocity_factor.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -1422,6 +1423,30 @@ void Estimator::optimization()
                                      para_Ex_Pose_wheel[0], para_Ix_sx_wheel[0],
                                      para_Ix_sy_wheel[0], para_Ix_sw_wheel[0], para_Td_wheel[0]);
         }
+    }
+
+    /*******[SW1-1837] Zero-velocity Update (ZUPT): 정지 프레임 속도 0 제약 → z drift 완화*******/
+    //   휠 preintegration의 평균 선속도/각속도로 프레임별 정지 판정.
+    //   정지면 para_SpeedBias[i]의 속도(0:3)를 0으로 당김(휠이 못 잡는 z velocity까지 제약).
+    if (USE_ZUPT && USE_WHEEL)
+    {
+        int zupt_cnt = 0;
+        for (int i = 1; i <= frame_count; i++)
+        {
+            if (!pre_integrations_wheel[i] || pre_integrations_wheel[i]->sum_dt < 1e-3)
+                continue;
+            double dt    = pre_integrations_wheel[i]->sum_dt;
+            double v_avg = pre_integrations_wheel[i]->delta_p.norm() / dt;  // 평균 선속도 [m/s]
+            double w_avg = 2.0 * std::acos(std::min(1.0, std::fabs(
+                               pre_integrations_wheel[i]->delta_q.w()))) / dt;  // 평균 각속도 [rad/s]
+            if (v_avg < ZUPT_VEL_THRESH && w_avg < ZUPT_GYR_THRESH)
+            {
+                ZeroVelocityFactor *zupt_factor = new ZeroVelocityFactor(ZUPT_WEIGHT);
+                problem.AddResidualBlock(zupt_factor, NULL, para_SpeedBias[i]);
+                zupt_cnt++;
+            }
+        }
+        (void)zupt_cnt;  // 정지 제약 프레임 수 (필요 시 ROS_DEBUG로 로깅)
     }
 
     /*******重投影残差*******/

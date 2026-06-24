@@ -158,3 +158,14 @@ td_wheel: 0.0                  # 휠 시간오프셋 초기값
 estimate_extrinsic_wheel: 0    # Step1=0 고정. Step2에서 1(온라인 추정)
 estimate_intrinsic_wheel: 0    # Step1=0 고정. Step2에서 1
 estimate_td_wheel: 0           # Step1=0 고정. Step2에서 1
+
+# ================================================================
+# Zero-velocity Update (ZUPT, SW1-1837) — 정지 시 속도 0 제약 → z drift 완화
+#   평지 주행서 VINS가 수평 acc bias를 오추정 → pitch bias → z drift 누적.
+#   정지 구간마다 속도(z 포함)를 0으로 끊어 누적을 막음.
+#   휠 factor는 평면 속도만 제약(z 못 잡음) → ZUPT가 z velocity까지 보완. use_wheel:1 필요.
+# ================================================================
+use_zupt: 1
+zupt_vel_thresh: 0.02   # 정지판정: 평균 선속도 임계 [m/s]
+zupt_gyr_thresh: 0.02   # 정지판정: 평균 각속도 임계 [rad/s]
+zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)

@@ -94,6 +94,12 @@ extern int             ESTIMATE_EXTRINSIC_WHEEL;   // Step2: 휠 extrinsic 온�
 extern int             ESTIMATE_INTRINSIC_WHEEL;   // Step2: 휠 intrinsic 온라인 추정 (0=고정)
 extern int             ESTIMATE_TD_WHEEL;          // Step2: 휠 td 온라인 추정 (0=고정)
 
+// ===== Zero-velocity Update (ZUPT, SW1-1837) =====
+extern int    USE_ZUPT;          // 정지 시 속도 0 제약 사용 여부 (0=미사용)
+extern double ZUPT_VEL_THRESH;   // 정지 판정: 평균 wheel 선속도 임계 [m/s]
+extern double ZUPT_GYR_THRESH;   // 정지 판정: 평균 wheel 각속도 임계 [rad/s]
+extern double ZUPT_WEIGHT;       // zero-velocity 잔차 가중치 (클수록 강하게 0)
+
 void readParameters(rclcpp::Node* node);
 
 enum SIZE_PARAMETERIZATION

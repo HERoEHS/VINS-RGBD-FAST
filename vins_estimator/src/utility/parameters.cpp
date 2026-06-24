@@ -8,6 +8,10 @@ double ACC_N, ACC_W;
 double GYR_N, GYR_W;
 double VEL_N_wheel, GYR_N_wheel;
 
+// ===== Zero-velocity Update (ZUPT, SW1-1837) =====
+int    USE_ZUPT;
+double ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT;
+
 // ===== Wheel odometry tight-coupling (SW1-1829) =====
 int             USE_WHEEL;
 std::string     WHEEL_TOPIC;
@@ -288,6 +292,18 @@ void readParameters(rclcpp::Node* node)
         RCLCPP_INFO(node->get_logger(),
                     "USE_WHEEL: 1, sx=%.4f sy=%.4f sw=%.4f, est_ex=%d est_ix=%d est_td=%d",
                     SX, SY, SW, ESTIMATE_EXTRINSIC_WHEEL, ESTIMATE_INTRINSIC_WHEEL, ESTIMATE_TD_WHEEL);
+    }
+
+    // ===== Zero-velocity Update (ZUPT, SW1-1837) =====
+    // use_zupt 키 없으면 0 → 비활성(기존 동작 유지). 정지 구간 속도0 제약으로 z drift 완화.
+    USE_ZUPT = fsSettings["use_zupt"].empty() ? 0 : (int)fsSettings["use_zupt"];
+    if (USE_ZUPT)
+    {
+        ZUPT_VEL_THRESH = fsSettings["zupt_vel_thresh"].empty() ? 0.02 : (double)fsSettings["zupt_vel_thresh"];
+        ZUPT_GYR_THRESH = fsSettings["zupt_gyr_thresh"].empty() ? 0.02 : (double)fsSettings["zupt_gyr_thresh"];
+        ZUPT_WEIGHT     = fsSettings["zupt_weight"].empty() ? 100.0 : (double)fsSettings["zupt_weight"];
+        RCLCPP_INFO(node->get_logger(), "USE_ZUPT: 1, vel_th=%.3f gyr_th=%.3f weight=%.1f",
+                    ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT);
     }
 
     fsSettings.release();
