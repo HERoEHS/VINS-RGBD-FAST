@@ -117,8 +117,11 @@ visualize_camera_size: 0.4
 # Wheel odometry tight-coupling (VIW-Fusion 휠 factor 이식, SW1-1829)
 # use_wheel: 1 = 연속 휠 제약 활성 (SW1-1837 ③ 1단계).
 #   depth-init + acc_n↑ 토대 위에서 휠을 켜니 scale 발산 |pos| 487m→178m(−63%),
-#   리부트 6→3로 개선(끝점 방 규모 복귀). 단 남은 리부트(big translation/z) 3회는
-#   미해결 → reboot-resistance 후속 작업(SW1-1837 ③ 2단계).
+#   리부트 6→3로 개선(끝점 방 규모 복귀).
+#   [2026-06-24 재확인] VIO_NUMERIC_FIX + use_wheel:1 상태에서 edie_wheel_base_old 재현 시
+#   system reboot! 0회 확인 — "리부트 3회 미해결" 주석은 stale. 리부트는 해소됨.
+#   잔재 오차(RMSE 1.3m)의 실제 원인은 scale underestimation(VIO 궤적이 휠 odom 대비 압축)
+#   → 휠 factor를 init 경로에 연결하는 작업(SW1-1837 ③ 본체)이 다음 과제.
 #
 # ※ 적용 범위(SW1-1829): EDIE "기본(공칭) 자세" 단일 주행만 대상.
 #    EDIE는 다리(leg) 인출입으로 여러 자세에서 주행 → 자세별 extrinsic/intrinsic이
