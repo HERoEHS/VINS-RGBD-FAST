@@ -25,11 +25,21 @@ find_package(Eigen3 REQUIRED)
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
+# Sophus (헤더 전용 라이브러리) 경로 — 이식성 확보.
+#   기존엔 /home/higony/Sophus 로 하드코딩돼 있어 다른 사용자/로봇(예: /home/edie)에서 빌드가 깨졌다.
+#   기본값은 홈 디렉토리(~/Sophus). 다른 위치면 빌드 시 -DSOPHUS_INCLUDE_DIR=<경로> 로 덮어쓴다.
+set(SOPHUS_INCLUDE_DIR "$ENV{HOME}/Sophus" CACHE PATH "Path to Sophus header-only library")
+if(NOT EXISTS "${SOPHUS_INCLUDE_DIR}/sophus")
+  message(WARNING "Sophus 헤더를 '${SOPHUS_INCLUDE_DIR}' 에서 못 찾음. "
+                  "git clone https://github.com/strasdat/Sophus 후 "
+                  "-DSOPHUS_INCLUDE_DIR=<경로> 로 지정하세요.")
+endif()
+
 include_directories(
   src
   ${CERES_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
-  /home/higony/Sophus
+  ${SOPHUS_INCLUDE_DIR}
 )
 
 set(VINS_LIB_SRCS
