@@ -193,15 +193,10 @@ void Estimator::processWheel(double t, double dt, const Vector3d &linear_velocit
 {
     (void)t;  // 시간은 호출부에서 dt로 환산 — VIW 시그니처 유지를 위해 인자만 보존
 
-    // [SW1-1837] wheel velocity outlier 게이팅: 비물리적 속도 글리치(예: dt→0로 106 m/s)를
-    //   적분 전에 하드 드롭한다. early-return으로 push_back을 건너뛰고 vel_0_wheel/gyr_0_wheel도
-    //   갱신하지 않아, 직전 유효 속도가 다음 적분의 기준으로 남는다(글리치값이 기준에 새지 않음).
-    //   임계 초과 글리치가 wheel factor로 주입돼 VINS가 발산하던 문제 방어. [[edie-wheel-odom-glitch]]
-    if (USE_WHEEL_VEL_GATE &&
-        (linear_velocity.norm() > WHEEL_VEL_MAX || angular_velocity.norm() > WHEEL_GYR_MAX))
-    {
-        return;  // 하드 드롭: 이 샘플은 적분에 반영하지 않음
-    }
+    // [SW1-1837] 주의: wheel velocity 글리치 게이팅은 여기서 per-sample 드롭하지 않는다.
+    //   per-sample 드롭은 preintegration의 dt 회계·연속성을 깨 오히려 발산 악화(_gt 5m→61m, A/B 확정).
+    //   대신 optimization()의 WheelFactor 추가 지점에서 "글리치 포함 구간의 factor만 skip"한다
+    //   (preintegration 자체는 손상시키지 않고 그 구간은 IMU/비전이 받침). [[edie-wheel-odom-glitch]]
 
     if (!first_wheel)
     {
@@ -1428,6 +1423,27 @@ void Estimator::optimization()
             int j = i + 1;
             if (pre_integrations_wheel[j]->sum_dt > 10.0)  // 간격 과대 시 미사용
                 continue;
+
+            // [SW1-1837] factor-구간 게이팅: 이 키프레임 구간에 비물리 속도 글리치 샘플이
+            //   하나라도 있으면 휠 factor를 추가하지 않는다(그 구간은 IMU/비전이 받침).
+            //   preintegration은 그대로 두고 factor만 빼므로 적분 일관성을 깨지 않는다.
+            //   임계는 조이스틱 실측 물리한계 기반(선 0.6, 각 3.3). [[edie-wheel-odom-glitch]]
+            if (USE_WHEEL_VEL_GATE)
+            {
+                bool glitch = false;
+                for (size_t k = 0; k < linear_velocity_buf_wheel[j].size(); k++)
+                {
+                    if (linear_velocity_buf_wheel[j][k].norm() > WHEEL_VEL_MAX ||
+                        angular_velocity_buf_wheel[j][k].norm() > WHEEL_GYR_MAX)
+                    {
+                        glitch = true;
+                        break;
+                    }
+                }
+                if (glitch)
+                    continue;  // 글리치 구간 휠 factor skip
+            }
+
             WheelFactor *wheel_factor = new WheelFactor(pre_integrations_wheel[j]);
             // 블록: pose_i, pose_j, T_io(extrinsic), sx, sy, sw, td_wheel
             problem.AddResidualBlock(wheel_factor, NULL, para_Pose[i], para_Pose[j],

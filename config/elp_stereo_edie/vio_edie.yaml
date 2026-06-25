@@ -171,11 +171,13 @@ zupt_gyr_thresh: 0.02   # 정지판정: 평균 각속도 임계 [rad/s]
 zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
 
 # ================================================================
-# Wheel velocity outlier 게이팅 (SW1-1837) — 비물리적 속도 글리치 하드 드롭
-#   wheel odom velocity 글리치(타임스탬프 dt→0 등으로 106 m/s)가 wheel factor 통해 VINS 발산.
-#   적분 전에 |v|/|w| 상한 초과 샘플을 드롭해 방어. 임계는 _old/_base bag 분포의 골 기반 통계값:
-#   실제 주행 본체 |v|≤0.57 m/s·|w|≤~3.0 rad/s / 글리치 |v|>1.0·|w|>5.0 → 골 중앙으로 설정(드롭률 0.3%).
+# Wheel velocity outlier 게이팅 (SW1-1837) — factor-구간 skip 방식
+#   wheel odom velocity 글리치(녹화공백+타임스탬프충돌로 106 m/s)가 wheel factor 통해 VINS 발산.
+#   ★방식: 글리치 샘플 포함 키프레임 구간은 WheelFactor만 추가 안 함(preintegration은 유지,
+#         그 구간은 IMU/비전이 받침). per-sample 드롭은 적분 일관성 깨 악화(_gt 5m→61m, A/B 확정)라 폐기.
+#   임계 근거 = 조이스틱 실측 로봇 물리 한계(컨트롤러 하드 포화): 선속도 ±0.5 m/s, 각속도 ±3.0 rad/s.
+#   포화값 + 측정노이즈 여유 → 0.6 / 3.3. 이를 초과하면 물리적으로 불가능 = 글리치.
 # ================================================================
 use_wheel_vel_gate: 1
-wheel_vel_max: 0.8   # 선속도 |v| 상한 [m/s], 초과 샘플 드롭
-wheel_gyr_max: 4.0   # 각속도 |w| 상한 [rad/s], 초과 샘플 드롭
+wheel_vel_max: 1.5 #0.6   # 선속도 |v| 상한 [m/s] (실측 포화 0.5 + 여유), 초과 구간 factor skip
+wheel_gyr_max: 3.3   # 각속도 |w| 상한 [rad/s] (실측 포화 3.0 + 여유), 초과 구간 factor skip
