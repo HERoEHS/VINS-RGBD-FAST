@@ -12,6 +12,10 @@ double VEL_N_wheel, GYR_N_wheel;
 int    USE_ZUPT;
 double ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT;
 
+// ===== Accelerometer-bias prior (SW1-1836) =====
+int    USE_ACC_BIAS_PRIOR;
+double ACC_BIAS_PRIOR_W_XY, ACC_BIAS_PRIOR_W_Z;
+
 // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
 int    USE_WHEEL_VEL_GATE;
 double WHEEL_VEL_MAX, WHEEL_GYR_MAX;
@@ -308,6 +312,18 @@ void readParameters(rclcpp::Node* node)
         ZUPT_WEIGHT     = fsSettings["zupt_weight"].empty() ? 100.0 : (double)fsSettings["zupt_weight"];
         RCLCPP_INFO(node->get_logger(), "USE_ZUPT: 1, vel_th=%.3f gyr_th=%.3f weight=%.1f",
                     ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT);
+    }
+
+    // ===== Accelerometer-bias prior (SW1-1836) =====
+    // use_acc_bias_prior 키 없으면 0 → 비활성(기존 동작 유지). 수평 acc bias 과대추정 억제용.
+    // 부팅 시 IMU 드라이버가 bias를 ~0 보정하므로 target=0에 당긴다. az는 이미 정확 → w_z 기본 0.
+    USE_ACC_BIAS_PRIOR = fsSettings["use_acc_bias_prior"].empty() ? 0 : (int)fsSettings["use_acc_bias_prior"];
+    if (USE_ACC_BIAS_PRIOR)
+    {
+        ACC_BIAS_PRIOR_W_XY = fsSettings["acc_bias_prior_w_xy"].empty() ? 50.0 : (double)fsSettings["acc_bias_prior_w_xy"];
+        ACC_BIAS_PRIOR_W_Z  = fsSettings["acc_bias_prior_w_z"].empty()  ? 0.0  : (double)fsSettings["acc_bias_prior_w_z"];
+        RCLCPP_INFO(node->get_logger(), "USE_ACC_BIAS_PRIOR: 1, w_xy=%.2f w_z=%.2f (target=0)",
+                    ACC_BIAS_PRIOR_W_XY, ACC_BIAS_PRIOR_W_Z);
     }
 
     // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====

@@ -1,6 +1,7 @@
 #include "estimator.h"
 #include "../utility/visualization.h"
 #include "../factor/zero_velocity_factor.h"
+#include "../factor/acc_bias_prior_factor.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -1485,6 +1486,21 @@ void Estimator::optimization()
         }
         // 이번 최적화에서 정지 제약이 걸린 프레임 수 요약
         RCLCPP_DEBUG(zupt_logger, "[ZUPT] applied %d / %d frames", zupt_cnt, frame_count);
+    }
+
+    /*******[SW1-1836] Accelerometer-bias prior: 수평 acc bias 과대추정 억제 → z drift 완화*******/
+    //   평지 observability 약점으로 vins가 수평 acc bias를 과대추정 → pitch bias → z 누설.
+    //   부팅 시 IMU 드라이버가 bias를 ~0 보정하므로, 윈도 각 프레임의 acc bias를 0으로 약하게 당긴다.
+    //   az는 이미 정확 → w_z 기본 0(수평 ax/ay만 제약). 검증은 live 연속주행 A/B(doc/ACC_BIAS_PRIOR.md).
+    if (USE_ACC_BIAS_PRIOR)
+    {
+        const Eigen::Vector3d ab_w(ACC_BIAS_PRIOR_W_XY, ACC_BIAS_PRIOR_W_XY, ACC_BIAS_PRIOR_W_Z);
+        const Eigen::Vector3d ab_target(0.0, 0.0, 0.0);  // 부팅 calibration이 bias를 ~0으로 만듦
+        for (int i = 0; i <= frame_count; i++)
+        {
+            AccBiasPriorFactor *ab_factor = new AccBiasPriorFactor(ab_w, ab_target);
+            problem.AddResidualBlock(ab_factor, NULL, para_SpeedBias[i]);
+        }
     }
 
     /*******重投影残差*******/

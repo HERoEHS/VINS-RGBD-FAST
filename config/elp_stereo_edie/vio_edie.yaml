@@ -171,6 +171,18 @@ zupt_gyr_thresh: 0.02   # 정지판정: 평균 각속도 임계 [rad/s]
 zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
 
 # ================================================================
+# Accelerometer-bias prior (SW1-1836)
+#   평지 주행서 수평 acc bias(ax/ay) 관측성 약함 → VINS 과대추정(실측 ay -0.21 vs 진짜 -0.056)
+#   → pitch bias → z drift. 부팅 시 IMU 드라이버가 bias를 ~0 보정하므로 acc bias를 0에 약하게
+#   당겨 과대추정을 억제한다. az는 이미 정확(0.031≈0.032) → w_z=0(수평만 제약).
+#   ⚠️ 미검증(SW1-1836): bag A/B는 재생 비결정성(±2.8m)으로 신뢰 불가 → live(녹화 OFF) 연속주행
+#      A/B로 가중치 확정 필요. 기본 OFF(기존 동작 유지).
+# ================================================================
+use_acc_bias_prior: 0
+acc_bias_prior_w_xy: 50.0   # 수평(ax,ay) prior 가중치 (클수록 강하게 0으로). live A/B로 튜닝
+acc_bias_prior_w_z: 0.0     # 수직(az) prior 가중치 (이미 정확 → 0)
+
+# ================================================================
 # Wheel velocity outlier 게이팅 (SW1-1837) — factor-구간 skip 방식
 #   wheel odom velocity 글리치(녹화공백+타임스탬프충돌로 106 m/s)가 wheel factor 통해 VINS 발산.
 #   ★방식: 글리치 샘플 포함 키프레임 구간은 WheelFactor만 추가 안 함(preintegration은 유지,

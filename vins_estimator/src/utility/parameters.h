@@ -100,6 +100,11 @@ extern double ZUPT_VEL_THRESH;   // 정지 판정: 평균 wheel 선속도 임계
 extern double ZUPT_GYR_THRESH;   // 정지 판정: 평균 wheel 각속도 임계 [rad/s]
 extern double ZUPT_WEIGHT;       // zero-velocity 잔차 가중치 (클수록 강하게 0)
 
+// ===== Accelerometer-bias prior (SW1-1836) =====
+extern int    USE_ACC_BIAS_PRIOR;   // acc bias를 target(0)으로 당기는 prior 사용 여부 (0=미사용)
+extern double ACC_BIAS_PRIOR_W_XY;  // 수평(ax,ay) prior 가중치 (클수록 강하게 0)
+extern double ACC_BIAS_PRIOR_W_Z;   // 수직(az) prior 가중치 (이미 정확 → 보통 0)
+
 // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
 // 비물리적 속도 글리치(예: 타임스탬프 dt→0로 106 m/s)를 적분 전 하드 드롭해 발산 방어.
 extern int    USE_WHEEL_VEL_GATE;  // wheel 속도 outlier 게이팅 사용 여부 (0=미사용)
