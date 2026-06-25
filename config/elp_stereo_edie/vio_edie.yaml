@@ -169,3 +169,13 @@ use_zupt: 1
 zupt_vel_thresh: 0.02   # 정지판정: 평균 선속도 임계 [m/s]
 zupt_gyr_thresh: 0.02   # 정지판정: 평균 각속도 임계 [rad/s]
 zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
+
+# ================================================================
+# Wheel velocity outlier 게이팅 (SW1-1837) — 비물리적 속도 글리치 하드 드롭
+#   wheel odom velocity 글리치(타임스탬프 dt→0 등으로 106 m/s)가 wheel factor 통해 VINS 발산.
+#   적분 전에 |v|/|w| 상한 초과 샘플을 드롭해 방어. 임계는 _old/_base bag 분포의 골 기반 통계값:
+#   실제 주행 본체 |v|≤0.57 m/s·|w|≤~3.0 rad/s / 글리치 |v|>1.0·|w|>5.0 → 골 중앙으로 설정(드롭률 0.3%).
+# ================================================================
+use_wheel_vel_gate: 1
+wheel_vel_max: 0.8   # 선속도 |v| 상한 [m/s], 초과 샘플 드롭
+wheel_gyr_max: 4.0   # 각속도 |w| 상한 [rad/s], 초과 샘플 드롭

@@ -192,6 +192,17 @@ void Estimator::processWheel(double t, double dt, const Vector3d &linear_velocit
                             const Vector3d &angular_velocity)
 {
     (void)t;  // 시간은 호출부에서 dt로 환산 — VIW 시그니처 유지를 위해 인자만 보존
+
+    // [SW1-1837] wheel velocity outlier 게이팅: 비물리적 속도 글리치(예: dt→0로 106 m/s)를
+    //   적분 전에 하드 드롭한다. early-return으로 push_back을 건너뛰고 vel_0_wheel/gyr_0_wheel도
+    //   갱신하지 않아, 직전 유효 속도가 다음 적분의 기준으로 남는다(글리치값이 기준에 새지 않음).
+    //   임계 초과 글리치가 wheel factor로 주입돼 VINS가 발산하던 문제 방어. [[edie-wheel-odom-glitch]]
+    if (USE_WHEEL_VEL_GATE &&
+        (linear_velocity.norm() > WHEEL_VEL_MAX || angular_velocity.norm() > WHEEL_GYR_MAX))
+    {
+        return;  // 하드 드롭: 이 샘플은 적분에 반영하지 않음
+    }
+
     if (!first_wheel)
     {
         first_wheel = true;

@@ -12,6 +12,10 @@ double VEL_N_wheel, GYR_N_wheel;
 int    USE_ZUPT;
 double ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT;
 
+// ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
+int    USE_WHEEL_VEL_GATE;
+double WHEEL_VEL_MAX, WHEEL_GYR_MAX;
+
 // ===== Wheel odometry tight-coupling (SW1-1829) =====
 int             USE_WHEEL;
 std::string     WHEEL_TOPIC;
@@ -304,6 +308,19 @@ void readParameters(rclcpp::Node* node)
         ZUPT_WEIGHT     = fsSettings["zupt_weight"].empty() ? 100.0 : (double)fsSettings["zupt_weight"];
         RCLCPP_INFO(node->get_logger(), "USE_ZUPT: 1, vel_th=%.3f gyr_th=%.3f weight=%.1f",
                     ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT);
+    }
+
+    // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
+    // 키 없으면 0 → 비활성(기존 동작 유지). 임계는 두 bag(_old/_base) 분포의 골 기반 통계값.
+    //   실제 주행 본체: |v|≤0.57 m/s, |w|≤~3.0 rad/s / 글리치: |v|>1.0, |w|>5.0 → 그 사이 골.
+    USE_WHEEL_VEL_GATE = fsSettings["use_wheel_vel_gate"].empty()
+                             ? 0 : (int)fsSettings["use_wheel_vel_gate"];
+    if (USE_WHEEL_VEL_GATE)
+    {
+        WHEEL_VEL_MAX = fsSettings["wheel_vel_max"].empty() ? 0.8 : (double)fsSettings["wheel_vel_max"];
+        WHEEL_GYR_MAX = fsSettings["wheel_gyr_max"].empty() ? 4.0 : (double)fsSettings["wheel_gyr_max"];
+        RCLCPP_INFO(node->get_logger(), "USE_WHEEL_VEL_GATE: 1, vel_max=%.2f m/s gyr_max=%.2f rad/s",
+                    WHEEL_VEL_MAX, WHEEL_GYR_MAX);
     }
 
     fsSettings.release();

@@ -100,6 +100,12 @@ extern double ZUPT_VEL_THRESH;   // 정지 판정: 평균 wheel 선속도 임계
 extern double ZUPT_GYR_THRESH;   // 정지 판정: 평균 wheel 각속도 임계 [rad/s]
 extern double ZUPT_WEIGHT;       // zero-velocity 잔차 가중치 (클수록 강하게 0)
 
+// ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
+// 비물리적 속도 글리치(예: 타임스탬프 dt→0로 106 m/s)를 적분 전 하드 드롭해 발산 방어.
+extern int    USE_WHEEL_VEL_GATE;  // wheel 속도 outlier 게이팅 사용 여부 (0=미사용)
+extern double WHEEL_VEL_MAX;       // 선속도 |v| 상한 [m/s], 초과 샘플 드롭
+extern double WHEEL_GYR_MAX;       // 각속도 |w| 상한 [rad/s], 초과 샘플 드롭
+
 void readParameters(rclcpp::Node* node);
 
 enum SIZE_PARAMETERIZATION
