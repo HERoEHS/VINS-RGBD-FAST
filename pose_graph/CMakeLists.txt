@@ -16,6 +16,15 @@ find_package(cv_bridge REQUIRED)
 find_package(camera_model REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem program_options system)
+
+# OpenCV: ROS cv_bridge와 동일한 시스템 OpenCV로 맞춰 ABI 충돌 방지(SW1-1837).
+#   /usr/local 등 커스텀 OpenCV 우선 선택 → 한 프로세스에 2버전 로드 → 크래시. 시스템 멀티아치 경로 힌트(이식성).
+if(NOT DEFINED OpenCV_DIR)
+  file(GLOB _sys_opencv_dirs "/usr/lib/*/cmake/opencv4")
+  if(_sys_opencv_dirs)
+    list(GET _sys_opencv_dirs 0 OpenCV_DIR)
+  endif()
+endif()
 find_package(OpenCV REQUIRED)
 find_package(Ceres REQUIRED)
 find_package(Eigen3 REQUIRED)

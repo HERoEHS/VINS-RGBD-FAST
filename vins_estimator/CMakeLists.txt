@@ -19,7 +19,20 @@ find_package(image_transport REQUIRED)
 find_package(camera_model REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem program_options system)
+
+# OpenCV: ROS cv_bridge와 동일한(시스템 apt) OpenCV를 써야 ABI가 맞는다.
+#   /usr/local 등에 커스텀 OpenCV가 설치돼 있으면 CMake가 그걸 먼저 잡아, cv_bridge(시스템 4.x)와
+#   한 프로세스에 OpenCV 2개가 로드 → cv::Mat ABI 충돌 → 비정상 메모리 할당으로 크래시(SW1-1837).
+#   외부 -DOpenCV_DIR 지정이 없으면 시스템 멀티아치 경로를 힌트로 준다(아키텍처 무관 glob = 이식성).
+if(NOT DEFINED OpenCV_DIR)
+  file(GLOB _sys_opencv_dirs "/usr/lib/*/cmake/opencv4")
+  if(_sys_opencv_dirs)
+    list(GET _sys_opencv_dirs 0 OpenCV_DIR)
+    message(STATUS "OpenCV_DIR 힌트(시스템 apt): ${OpenCV_DIR}")
+  endif()
+endif()
 find_package(OpenCV REQUIRED)
+message(STATUS "Using OpenCV ${OpenCV_VERSION} from ${OpenCV_DIR}")
 find_package(Ceres REQUIRED)
 find_package(Eigen3 REQUIRED)
 
