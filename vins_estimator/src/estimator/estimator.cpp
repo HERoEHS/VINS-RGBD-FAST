@@ -1457,6 +1457,9 @@ void Estimator::optimization()
     //   정지면 para_SpeedBias[i]의 속도(0:3)를 0으로 당김(휠이 못 잡는 z velocity까지 제약).
     if (USE_ZUPT && USE_WHEEL)
     {
+        // 디버그용 named logger — optimization()엔 노드 핸들이 없어 get_logger 사용.
+        // DEBUG 레벨은 ROS2 기본 비활성 → 실행 시 `--ros-args --log-level vins_zupt:=debug` 필요.
+        auto zupt_logger = rclcpp::get_logger("vins_zupt");
         int zupt_cnt = 0;
         for (int i = 1; i <= frame_count; i++)
         {
@@ -1466,14 +1469,22 @@ void Estimator::optimization()
             double v_avg = pre_integrations_wheel[i]->delta_p.norm() / dt;  // 평균 선속도 [m/s]
             double w_avg = 2.0 * std::acos(std::min(1.0, std::fabs(
                                pre_integrations_wheel[i]->delta_q.w()))) / dt;  // 평균 각속도 [rad/s]
-            if (v_avg < ZUPT_VEL_THRESH && w_avg < ZUPT_GYR_THRESH)
+            // 두 평균이 모두 임계 미만이면 정지로 판정 (AND 조건)
+            bool is_zupt = (v_avg < ZUPT_VEL_THRESH && w_avg < ZUPT_GYR_THRESH);
+            // 프레임별 실측값 vs 임계값 + 판정 결과 (정지로 판정 시 STOP, 아니면 move)
+            RCLCPP_DEBUG(zupt_logger,
+                         "[ZUPT] frame=%d v_avg=%.4f(th %.3f) w_avg=%.4f(th %.3f) -> %s",
+                         i, v_avg, ZUPT_VEL_THRESH, w_avg, ZUPT_GYR_THRESH,
+                         is_zupt ? "STOP" : "move");
+            if (is_zupt)
             {
                 ZeroVelocityFactor *zupt_factor = new ZeroVelocityFactor(ZUPT_WEIGHT);
                 problem.AddResidualBlock(zupt_factor, NULL, para_SpeedBias[i]);
                 zupt_cnt++;
             }
         }
-        (void)zupt_cnt;  // 정지 제약 프레임 수 (필요 시 ROS_DEBUG로 로깅)
+        // 이번 최적화에서 정지 제약이 걸린 프레임 수 요약
+        RCLCPP_DEBUG(zupt_logger, "[ZUPT] applied %d / %d frames", zupt_cnt, frame_count);
     }
 
     /*******重投影残差*******/
