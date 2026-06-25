@@ -83,4 +83,16 @@ install(DIRECTORY launch/
   OPTIONAL
 )
 
+# ===== 테스트 (SW1-1837 ZUPT 회귀) =====
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  # ZeroVelocityFactor는 헤더-only(ceres+Eigen 의존)라 vins_lib 링크 없이 단독 검증 가능
+  ament_add_gtest(test_zero_velocity_factor test/test_zero_velocity_factor.cpp)
+  target_include_directories(test_zero_velocity_factor PRIVATE
+    ${CERES_INCLUDE_DIRS}
+    ${EIGEN3_INCLUDE_DIR}
+  )
+  target_link_libraries(test_zero_velocity_factor ${CERES_LIBRARIES})
+endif()
+
 ament_package()
