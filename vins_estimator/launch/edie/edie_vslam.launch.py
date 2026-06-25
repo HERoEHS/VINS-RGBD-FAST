@@ -36,6 +36,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'rviz', default_value='false',
             description='RViz 실행 여부 (디스플레이 필요, SSH 헤드리스면 false)'),
+        DeclareLaunchArgument(
+            'log_level', default_value='debug',
+            description='vins_estimator RCLCPP 로그 레벨 (debug/info/warn/error)'),
     ]
 
     estimator = Node(
@@ -43,6 +46,12 @@ def generate_launch_description():
         executable='vins_estimator_node',
         name='vins_estimator',
         output='screen',
+        # emulate_tty: stdout을 TTY로 위장 → printf/std::cout 가 풀버퍼링 안 되고 실시간 출력
+        #   (RCLCPP_INFO/WARN 는 output='screen'만으로도 보이지만, estimator.cpp의 printf/cout는 이게 있어야 보임)
+        emulate_tty=True,
+        # --log-level 로 RCLCPP 로그 레벨 조절 (기본 info; 'debug' 주면 RCLCPP_DEBUG 까지 표시)
+        arguments=['--ros-args', '--log-level',
+                   ['vins_estimator:=', LaunchConfiguration('log_level')]],
         parameters=[{
             'config_file': LaunchConfiguration('config_file'),
             'vins_folder': LaunchConfiguration('vins_folder'),
