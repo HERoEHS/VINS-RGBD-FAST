@@ -135,7 +135,7 @@ wheel_topic: "/edie/diff_drive_controller/odom"   # nav_msgs/Odometry (twist 사
 
 # 휠 preintegration 노이즈 (속도/각속도) — 캘리브 후 조정
 vel_n_wheel: 0.1 #0.05
-gyr_n_wheel: 0.1 #0.05
+gyr_n_wheel: 0.5 #0.1 #0.05
 
 # 휠 intrinsic 스케일 (vel-x, vel-y, yaw). 캘리브 전 기본 1.0
 sx: 1.0
@@ -180,8 +180,8 @@ zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
 #      A/B로 가중치 확정 필요. 기본 OFF(기존 동작 유지).
 # ================================================================
 use_acc_bias_prior: 1
-acc_bias_prior_w_xy: 50.0   # 수평(ax,ay) prior 가중치 (클수록 강하게 0으로). live A/B로 튜닝
-acc_bias_prior_w_z: 5.0 #0.0     # 수직(az) prior 가중치 (이미 정확 → 0)
+acc_bias_prior_w_xy: 100.0   # 수평(ax,ay) prior 가중치 (클수록 강하게 0으로). live A/B로 튜닝
+acc_bias_prior_w_z: 5.0     # 수직(az) prior 가중치 (이미 정확 → 0)
 
 # ================================================================
 # Wheel velocity outlier 게이팅 (SW1-1837) — factor-구간 skip 방식
