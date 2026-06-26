@@ -164,6 +164,7 @@ estimate_td_wheel: 0           # Step1=0 고정. Step2에서 1
 #   평지 주행서 VINS가 수평 acc bias를 오추정 → pitch bias → z drift 누적.
 #   정지 구간마다 속도(z 포함)를 0으로 끊어 누적을 막음.
 #   휠 factor는 평면 속도만 제약(z 못 잡음) → ZUPT가 z velocity까지 보완. use_wheel:1 필요.
+#   이건 안 써야할 듯함. weight 조정(100 -> 200, 200 -> 100)해도 z drift는 여전히 발생. → SW1-1837 ④ ZUPT는 OFF(0)로.
 # ================================================================
 use_zupt: 0
 zupt_vel_thresh: 0.02   # 정지판정: 평균 선속도 임계 [m/s]
@@ -191,5 +192,5 @@ acc_bias_prior_w_z: 5.0 #0.0     # 수직(az) prior 가중치 (이미 정확 →
 #   포화값 + 측정노이즈 여유 → 0.6 / 3.3. 이를 초과하면 물리적으로 불가능 = 글리치.
 # ================================================================
 use_wheel_vel_gate: 1
-wheel_vel_max: 1.5 #0.6   # 선속도 |v| 상한 [m/s] (실측 포화 0.5 + 여유), 초과 구간 factor skip
+wheel_vel_max: 0.6   # 선속도 |v| 상한 [m/s] (실측 포화 0.5 + 여유), 초과 구간 factor skip
 wheel_gyr_max: 3.3   # 각속도 |w| 상한 [rad/s] (실측 포화 3.0 + 여유), 초과 구간 factor skip
