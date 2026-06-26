@@ -135,7 +135,7 @@ wheel_topic: "/edie/diff_drive_controller/odom"   # nav_msgs/Odometry (twist 사
 
 # 휠 preintegration 노이즈 (속도/각속도) — 캘리브 후 조정
 vel_n_wheel: 0.1 #0.05
-gyr_n_wheel: 0.5 #0.1 #0.05
+gyr_n_wheel: 0.3 #0.5 #0.1 #0.05
 
 # 휠 intrinsic 스케일 (vel-x, vel-y, yaw). 캘리브 전 기본 1.0
 sx: 1.0
