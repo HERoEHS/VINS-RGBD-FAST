@@ -134,8 +134,8 @@ use_wheel: 1
 wheel_topic: "/edie/diff_drive_controller/odom"   # nav_msgs/Odometry (twist 사용)
 
 # 휠 preintegration 노이즈 (속도/각속도) — 캘리브 후 조정
-vel_n_wheel: 0.05
-gyr_n_wheel: 0.05
+vel_n_wheel: 0.1 #0.05
+gyr_n_wheel: 0.1 #0.05
 
 # 휠 intrinsic 스케일 (vel-x, vel-y, yaw). 캘리브 전 기본 1.0
 sx: 1.0
@@ -165,7 +165,7 @@ estimate_td_wheel: 0           # Step1=0 고정. Step2에서 1
 #   정지 구간마다 속도(z 포함)를 0으로 끊어 누적을 막음.
 #   휠 factor는 평면 속도만 제약(z 못 잡음) → ZUPT가 z velocity까지 보완. use_wheel:1 필요.
 # ================================================================
-use_zupt: 0 #1
+use_zupt: 0
 zupt_vel_thresh: 0.02   # 정지판정: 평균 선속도 임계 [m/s]
 zupt_gyr_thresh: 0.02   # 정지판정: 평균 각속도 임계 [rad/s]
 zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
@@ -180,7 +180,7 @@ zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
 # ================================================================
 use_acc_bias_prior: 1
 acc_bias_prior_w_xy: 50.0   # 수평(ax,ay) prior 가중치 (클수록 강하게 0으로). live A/B로 튜닝
-acc_bias_prior_w_z: 0.0     # 수직(az) prior 가중치 (이미 정확 → 0)
+acc_bias_prior_w_z: 5.0 #0.0     # 수직(az) prior 가중치 (이미 정확 → 0)
 
 # ================================================================
 # Wheel velocity outlier 게이팅 (SW1-1837) — factor-구간 skip 방식
