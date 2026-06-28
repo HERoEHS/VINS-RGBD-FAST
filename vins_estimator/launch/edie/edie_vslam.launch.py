@@ -39,6 +39,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'log_level', default_value='debug',
             description='vins_estimator RCLCPP 로그 레벨 (debug/info/warn/error)'),
+        DeclareLaunchArgument(
+            'use_sim_time', default_value='false',
+            description="bag 재생 시 true (ros2 bag play --clock 과 짝). "
+                        "라이브 실행은 false 유지. 필수 — 안 주면 TF lookup이 wall time 으로 가 buffer miss."),
     ]
 
     estimator = Node(
@@ -55,6 +59,7 @@ def generate_launch_description():
         parameters=[{
             'config_file': LaunchConfiguration('config_file'),
             'vins_folder': LaunchConfiguration('vins_folder'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
     )
 
@@ -64,6 +69,7 @@ def generate_launch_description():
         name='vins_rviz',
         condition=IfCondition(LaunchConfiguration('rviz')),
         output='log',
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
     return LaunchDescription(args + [estimator, rviz])
