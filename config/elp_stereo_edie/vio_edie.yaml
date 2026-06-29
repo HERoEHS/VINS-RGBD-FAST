@@ -134,8 +134,12 @@ use_wheel: 1
 wheel_topic: "/edie/diff_drive_controller/odom"   # nav_msgs/Odometry (twist 사용)
 
 # 휠 preintegration 노이즈 (속도/각속도) — 캘리브 후 조정
-vel_n_wheel: 0.1 #0.05
-gyr_n_wheel: 0.3 #0.5 #0.1 #0.05
+# 휠 preintegration의 process noise covariance Q 에 쓰인다.
+# 최적화 효과: factor 가중치 ∝ 1/σ² → σ 크면 약한 제약, σ 작으면 강한 제약
+## 0.3은 σ 기준 17도/s 수준의 노이즈 가정 → 휠 yaw 제약이 상당히 느슨함 (IMU yaw에 우선권 양보).
+## 0.05였다면 yaw에서 휠을 강하게 따라가게 되어, 슬립/스케일 오차가 yaw drift로 직결됐을 것.
+vel_n_wheel: 0.1      # σ = 0.1 m/s   → variance 0.01
+gyr_n_wheel: 0.3      # σ = 0.3 rad/s → variance 0.09
 
 # 휠 intrinsic 스케일 (vel-x, vel-y, yaw). 캘리브 전 기본 1.0
 sx: 1.0
