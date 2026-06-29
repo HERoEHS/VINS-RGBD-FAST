@@ -1,9 +1,12 @@
-#!/usr/bin/env python3
+ #!/usr/bin/env python3
 # AprilTag 4-board GT extractor from a ROS 2 image topic.
 #
 # This script does not open or replay rosbag files. Start the camera publisher or
 # run `ros2 bag play ...` separately, then this node subscribes to the image topic
 # and writes a world-frame TUM trajectory as detections arrive.
+
+# 명령어: 
+# python3 /home/edie/ros2_ws/src/edie9/edie_localization/VINS-RGBD-FAST/scripts/april_gt/gt_apriltag_4board.py   --K 397.64,397.64,339.36,270.85   --tag-size 0.024   --allowed-boards AR1,AR2,AR3   --frame-id map   --child-frame-id apriltag_gt_camera   --gt-odom-topic /apriltag_gt/odom   --gt-path-topic /apriltag_gt/path   --publish-tf   --publish-board-tf   --output ~/ros2_ws/bag/live_apriltag_gt.tum
 
 import argparse
 import os
@@ -12,9 +15,12 @@ from datetime import datetime
 import cv2
 import numpy as np
 import rclpy
+from geometry_msgs.msg import PoseStamped, TransformStamped
+from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
+from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 
 DEFAULT_GRID_ROWS = 6
@@ -205,6 +211,21 @@ def parse_board_list(value):
     return boards
 
 
+def make_transform(stamp, parent_frame, child_frame, translation, quat_xyzw):
+    transform = TransformStamped()
+    transform.header.stamp = stamp
+    transform.header.frame_id = parent_frame
+    transform.child_frame_id = child_frame
+    transform.transform.translation.x = float(translation[0])
+    transform.transform.translation.y = float(translation[1])
+    transform.transform.translation.z = float(translation[2])
+    transform.transform.rotation.x = float(quat_xyzw[0])
+    transform.transform.rotation.y = float(quat_xyzw[1])
+    transform.transform.rotation.z = float(quat_xyzw[2])
+    transform.transform.rotation.w = float(quat_xyzw[3])
+    return transform
+
+
 class FourBoardGtNode(Node):
     def __init__(self, args):
         super().__init__("apriltag_4board_gt_extractor")
@@ -250,6 +271,15 @@ class FourBoardGtNode(Node):
         self.out = open(self.output, "w")
         self.debug = open(self.debug_output, "w")
         self.debug.write("t_sec,ar,n_inliers,mean_reproj_px,rect_dist_m,jump_m,score,tx,ty,tz\n")
+        self.frame_id = args.frame_id
+        self.child_frame_id = args.child_frame_id
+        self.path = Path()
+        self.path.header.frame_id = self.frame_id
+        self.odom_pub = self.create_publisher(Odometry, args.gt_odom_topic, 10)
+        self.path_pub = self.create_publisher(Path, args.gt_path_topic, 10)
+        self.publish_tf = args.publish_tf
+        self.tf_broadcaster = TransformBroadcaster(self) if self.publish_tf else None
+        self.static_tf_broadcaster = StaticTransformBroadcaster(self) if args.publish_board_tf else None
 
         self.n_frames = 0
         self.n_no_detect = 0
@@ -261,6 +291,11 @@ class FourBoardGtNode(Node):
         self.create_subscription(Image, args.image_topic, self.on_image, qos_profile_sensor_data)
         self.get_logger().info(f"subscribed: {args.image_topic}")
         self.get_logger().info(f"writing TUM: {self.output}")
+        self.get_logger().info(f"publishing: {args.gt_odom_topic} (Odometry), {args.gt_path_topic} (Path), frame_id={self.frame_id}")
+        if self.publish_tf:
+            self.get_logger().info(f"publishing dynamic TF: {self.frame_id} -> {self.child_frame_id}")
+        if args.publish_board_tf:
+            self.publish_static_board_tfs(args.rows, args.cols, args.tag_size, args.tag_spacing)
         id_ranges = ", ".join(
             f"{b['name']}={b['first_id']}-{b['first_id'] + args.rows * args.cols - 1}" for b in BOARDS
         )
@@ -273,6 +308,31 @@ class FourBoardGtNode(Node):
             "board selection score = reproj_px "
             f"+ {self.rect_prior_weight:g}*rect_dist_m "
             f"+ {self.jump_prior_weight:g}*min(jump_m,{self.jump_clip:g})"
+        )
+
+    def publish_static_board_tfs(self, rows, cols, tag_size, tag_spacing):
+        step = tag_size * (1.0 + tag_spacing)
+        grid_span = (max(rows, cols) - 1) * step + tag_size
+        grid_half = grid_span / 2.0
+        stamp = self.get_clock().now().to_msg()
+        transforms = []
+        active_names = {board["name"] for board in self.board_world_objs}
+        for board in BOARDS:
+            if board["name"] not in active_names:
+                continue
+            board_origin = board["center"] + board["R"] @ np.array([-grid_half, -grid_half, 0.0])
+            transforms.append(
+                make_transform(
+                    stamp,
+                    self.frame_id,
+                    f"{board['name']}_board",
+                    board_origin,
+                    rot_to_quat(board["R"]),
+                )
+            )
+        self.static_tf_broadcaster.sendTransform(transforms)
+        self.get_logger().info(
+            "published static board TFs: " + ", ".join(transform.child_frame_id for transform in transforms)
         )
 
     def rect_distance(self, T_wc):
@@ -346,10 +406,41 @@ class FourBoardGtNode(Node):
         self.per_board_count[board_name] += 1
         self.last_ar = board_name
         self.last_position = T_wc[:3, 3].copy()
+        self.publish_pose(msg, T_wc, (qx, qy, qz, qw))
         if len(self.poses) % 30 == 0:
             self.out.flush()
             self.debug.flush()
             self.get_logger().info(f"GT poses={len(self.poses)}, frames={self.n_frames}, last={board_name}")
+
+    def publish_pose(self, image_msg, T_wc, quat_xyzw):
+        stamp = image_msg.header.stamp
+        tx, ty, tz = T_wc[:3, 3]
+        qx, qy, qz, qw = quat_xyzw
+
+        odom = Odometry()
+        odom.header.stamp = stamp
+        odom.header.frame_id = self.frame_id
+        odom.child_frame_id = self.child_frame_id
+        odom.pose.pose.position.x = float(tx)
+        odom.pose.pose.position.y = float(ty)
+        odom.pose.pose.position.z = float(tz)
+        odom.pose.pose.orientation.x = float(qx)
+        odom.pose.pose.orientation.y = float(qy)
+        odom.pose.pose.orientation.z = float(qz)
+        odom.pose.pose.orientation.w = float(qw)
+        self.odom_pub.publish(odom)
+
+        pose = PoseStamped()
+        pose.header = odom.header
+        pose.pose = odom.pose.pose
+        self.path.header.stamp = stamp
+        self.path.poses.append(pose)
+        self.path_pub.publish(self.path)
+
+        if self.tf_broadcaster is not None:
+            self.tf_broadcaster.sendTransform(
+                make_transform(stamp, self.frame_id, self.child_frame_id, np.array([tx, ty, tz]), quat_xyzw)
+            )
 
     def finish(self):
         self.out.flush()
@@ -414,6 +505,12 @@ def main():
     parser.add_argument("--image-topic", default=DEFAULT_IMAGE_TOPIC)
     parser.add_argument("--K", required=True, help="rectified intrinsics: fx,fy,cx,cy")
     parser.add_argument("--output", default=default_output_path("apriltag_4b_gt"), help="output TUM path")
+    parser.add_argument("--gt-odom-topic", default="/apriltag_gt/odom", help="published AprilTag GT Odometry topic")
+    parser.add_argument("--gt-path-topic", default="/apriltag_gt/path", help="published AprilTag GT Path topic")
+    parser.add_argument("--frame-id", default="april_gt_world", help="frame_id for published GT odom/path")
+    parser.add_argument("--child-frame-id", default="apriltag_camera", help="child_frame_id for published GT odometry")
+    parser.add_argument("--publish-tf", action="store_true", help="publish dynamic TF from --frame-id to --child-frame-id")
+    parser.add_argument("--publish-board-tf", action="store_true", help="publish static TFs for active board origins")
     parser.add_argument("--tag-size", type=float, default=DEFAULT_TAG_SIZE)
     parser.add_argument("--tag-spacing", type=float, default=DEFAULT_TAG_SPACING)
     parser.add_argument("--rows", type=int, default=DEFAULT_GRID_ROWS)
