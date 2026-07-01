@@ -135,6 +135,14 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
   target_link_libraries(test_vertical_velocity_factor ${CERES_LIBRARIES})
+
+  # PlaneFactor(AutoDiff, ceres+Eigen 헤더-only) 단독 검증
+  ament_add_gtest(test_plane_factor test/test_plane_factor.cpp)
+  target_include_directories(test_plane_factor PRIVATE
+    ${CERES_INCLUDE_DIRS}
+    ${EIGEN3_INCLUDE_DIR}
+  )
+  target_link_libraries(test_plane_factor ${CERES_LIBRARIES})
 endif()
 
 ament_package()
