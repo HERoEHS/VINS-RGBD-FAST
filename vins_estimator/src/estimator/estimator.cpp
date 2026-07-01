@@ -1289,30 +1289,21 @@ void Estimator::initPlane()
     const int cnt = frame_count;
     if (cnt <= 0)
         return;
-    double                          sum_zpw = 0.0;
-    std::vector<Eigen::Quaterniond> qpws;
+    // ★[SW1-1837 수정] 평면 법선을 편향된 pose 자세에서 뽑지 않는다.
+    //   VINS world z축은 이미 중력정렬됨 → 평평한 바닥의 법선 = world-up = e3.
+    //   법선을 편향 자세((Rs·rio)^T) 평균으로 잡으면 그 tilt(실측 14°→18°)를 전 구간 강제해
+    //   z-drift를 오히려 키웠다(순환참조: 병(편향 자세)으로 병을 고치려 함). 실측 검증:
+    //   자유 법선일 때 전역평면 기울기 OFF 14.4°→PLANE 18.1°로 악화.
+    //   → 법선은 world-up(Identity)으로 고정하고 optimization에서 상수 처리(SetParameterBlockConstant).
+    //     그러면 roll/pitch 잔차가 자세를 '절대 수평'으로 당겨 pitch bias를 근본 교정한다.
+    rpw = Eigen::Matrix3d::Identity();
+    // 높이 zpw만 데이터에서 추정(법선=Identity이므로 pw = P_wheel, zpw = -mean(P_wheel.z)).
+    double sum_zpw = 0.0;
     for (int i = 0; i < cnt; ++i)
-    {
-        Eigen::Matrix3d rpw_i = (Rs[i] * rio).transpose();
-        qpws.emplace_back(Eigen::Quaterniond(rpw_i));
-        sum_zpw += -(rpw_i * (Ps[i] + Rs[i] * tio))[2];
-    }
-    // 쿼터니언 평균 (Markley: Σ q·qᵀ 의 최대 고유벡터)
-    Eigen::Matrix4d M = Eigen::Matrix4d::Zero();
-    for (const auto &q : qpws)
-    {
-        Eigen::Vector4d v(q.w(), q.x(), q.y(), q.z());
-        M += v * v.transpose();
-    }
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> es(M);
-    Eigen::Vector4d    vmax = es.eigenvectors().col(3);  // 최대 고유값 = 마지막 열
-    Eigen::Quaterniond qpw(vmax(0), vmax(1), vmax(2), vmax(3));
-    rpw = qpw.normalized().toRotationMatrix();
-    // 평면 yaw는 미관측 → 제거
-    double yaw = Utility::R2ypr(rpw).x();
-    rpw        = Utility::ypr2R(Eigen::Vector3d(-yaw, 0.0, 0.0)) * rpw;
-    zpw        = sum_zpw / cnt;
-    RCLCPP_INFO(rclcpp::get_logger("vins_plane"), "[PLANE] init: zpw=%.4f (frames=%d)", zpw, cnt);
+        sum_zpw += -(Ps[i] + Rs[i] * tio)[2];
+    zpw = sum_zpw / cnt;
+    RCLCPP_INFO(rclcpp::get_logger("vins_plane"),
+                "[PLANE] init: normal=world-up(fixed), zpw=%.4f (frames=%d)", zpw, cnt);
 }
 
 bool Estimator::failureDetection()
@@ -1430,11 +1421,14 @@ void Estimator::optimization()
 
         // ===== 지면평면 제약 (SW1-1837): z 위치 + roll/pitch 자세를 추정 평면에 묶음 =====
         //   vz-only(VerticalVelocityFactor)가 xy로 오차 전가한 것과 달리 근본 pitch까지 교정.
-        //   평면(방향 qpw + 높이 zpw)은 최적화 변수. VI 초기화 완료(openPlaneEstimation) 후 활성.
+        //   ★법선(para_plane_R)은 world-up으로 '고정'(SetParameterBlockConstant) — 자유변수로 두면
+        //     {평면+궤적}이 통째로 기우는 gauge 자유도가 편향 방향으로 흘러 tilt를 키운다(실측 14°→18°).
+        //     중력정렬된 world z가 절대 수평 기준. 높이 zpw만 최적화. VI 초기화 완료 후 활성.
         if (USE_PLANE && openPlaneEstimation)
         {
             ceres::LocalParameterization *plane_r_param = new ceres::EigenQuaternionParameterization();
             problem.AddParameterBlock(para_plane_R[0], 4, plane_r_param);
+            problem.SetParameterBlockConstant(para_plane_R[0]);   // 법선 = world-up 고정
             problem.AddParameterBlock(para_plane_Z[0], 1);
             for (int i = 0; i <= frame_count; i++)
             {

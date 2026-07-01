@@ -215,9 +215,9 @@ vertical_vel_weight: 300.0 #20.0    # σ≈1/w=0.05 m/s (평지 실제 Vz 여유
 #   ⚠️ 단일 전역평면 가정 → 경사/다층서 회전오차(PL-VIWO2). B2C는 지형변화 게이팅 후속.
 #   가중치 sqrt_info = diag(pitch_n_inv, roll_n_inv, zpw_n_inv). 배포조건 다회 A/B로 튜닝.
 # ================================================================
-use_plane: 0        # 0=미사용(기존 동작 유지). 검증 시 1 (vz-only는 use_vertical_vel:0으로)
-pitch_n_inv: 10.0   # pitch 정렬 잔차 가중치
-roll_n_inv: 10.0    # roll 정렬 잔차 가중치
+use_plane: 1        # 0=미사용(기존 동작 유지). 검증 시 1 (vz-only는 use_vertical_vel:0으로)
+pitch_n_inv: 50.0 #10.0   # pitch 정렬 잔차 가중치
+roll_n_inv: 50.0 #10.0    # roll 정렬 잔차 가중치
 zpw_n_inv: 10.0     # z(고도) 잔차 가중치
 
 # ================================================================
