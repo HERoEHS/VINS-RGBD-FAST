@@ -16,6 +16,10 @@ double ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT;
 int    USE_ACC_BIAS_PRIOR;
 double ACC_BIAS_PRIOR_W_XY, ACC_BIAS_PRIOR_W_Z;
 
+// ===== Vertical-velocity soft constraint (SW1-1837, planar-motion Level1) =====
+int    USE_VERTICAL_VEL;
+double VERTICAL_VEL_WEIGHT;
+
 // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
 int    USE_WHEEL_VEL_GATE;
 double WHEEL_VEL_MAX, WHEEL_GYR_MAX;
@@ -324,6 +328,15 @@ void readParameters(rclcpp::Node* node)
         ACC_BIAS_PRIOR_W_Z  = fsSettings["acc_bias_prior_w_z"].empty()  ? 0.0  : (double)fsSettings["acc_bias_prior_w_z"];
         RCLCPP_INFO(node->get_logger(), "USE_ACC_BIAS_PRIOR: 1, w_xy=%.2f w_z=%.2f (target=0)",
                     ACC_BIAS_PRIOR_W_XY, ACC_BIAS_PRIOR_W_Z);
+    }
+
+    // ===== Vertical-velocity soft constraint (SW1-1837, planar-motion Level1) =====
+    // use_vertical_vel 키 없으면 0 → 비활성(기존 동작 유지). 지면 로봇 z-drift 억제(주행 중 상시 Vz→0).
+    USE_VERTICAL_VEL = fsSettings["use_vertical_vel"].empty() ? 0 : (int)fsSettings["use_vertical_vel"];
+    if (USE_VERTICAL_VEL)
+    {
+        VERTICAL_VEL_WEIGHT = fsSettings["vertical_vel_weight"].empty() ? 20.0 : (double)fsSettings["vertical_vel_weight"];
+        RCLCPP_INFO(node->get_logger(), "USE_VERTICAL_VEL: 1, weight=%.2f (Vz->0)", VERTICAL_VEL_WEIGHT);
     }
 
     // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====

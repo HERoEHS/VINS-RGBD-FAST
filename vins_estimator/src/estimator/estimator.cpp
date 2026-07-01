@@ -2,6 +2,7 @@
 #include "../utility/visualization.h"
 #include "../factor/zero_velocity_factor.h"
 #include "../factor/acc_bias_prior_factor.h"
+#include "../factor/vertical_velocity_factor.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -1500,6 +1501,18 @@ void Estimator::optimization()
         {
             AccBiasPriorFactor *ab_factor = new AccBiasPriorFactor(ab_w, ab_target);
             problem.AddResidualBlock(ab_factor, NULL, para_SpeedBias[i]);
+        }
+    }
+
+    /*******[SW1-1837] Vertical-velocity soft constraint (planar-motion Level1): 주행중 Vz→0 → z drift 억제*******/
+    //   지면 로봇은 평지서 월드 수직속도≈0. ZUPT(정지만)·휠(평면만)이 못 잡는 z를 주행 중에도 상시 약하게 억제.
+    //   ⚠️ 평지 가정 → 경사 미대응(소프트). 지형 게이팅·바디NHC·plane_factor(자세까지)는 후속(Level2/이식).
+    if (USE_VERTICAL_VEL)
+    {
+        for (int i = 0; i <= frame_count; i++)
+        {
+            VerticalVelocityFactor *vz_factor = new VerticalVelocityFactor(VERTICAL_VEL_WEIGHT);
+            problem.AddResidualBlock(vz_factor, NULL, para_SpeedBias[i]);
         }
     }
 

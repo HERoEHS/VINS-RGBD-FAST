@@ -192,9 +192,20 @@ zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
 #      OFF/ON 각 다회 기록 후 '평균' 비교(노이즈 √N 감소). 1.0으로 올리면 결정론이나 LIVE와 달라
 #      전이 안 됨(튜닝은 배포조건에서). 또는 live A/B. 도구: scripts/ab_compare.py. (06-30)
 # ================================================================
-use_acc_bias_prior: 1       # ★A/B 토글(이 값만 변수): 0=OFF(baseline), 1=ON. 미확정(상단 주석 참조)
+use_acc_bias_prior: 0 #1       # ★A/B 토글(이 값만 변수): 0=OFF(baseline), 1=ON. 미확정(상단 주석 참조)
 acc_bias_prior_w_xy: 20.0   # 수평(ax,ay) prior 가중치. σ≈1/w=0.05 (이전 100=σ0.01 과강 → live A/B로 확정)
 acc_bias_prior_w_z: 0.0     # 수직(az) prior 가중치 — az는 이미 정확 → 0(미사용)
+
+# ================================================================
+# Vertical-velocity soft constraint (SW1-1837, planar-motion Level1 PoC)
+#   지면 로봇은 평지 주행서 월드 수직속도 Vz≈0 → z-drift(=∫Vz)를 주행 중에도 상시 억제.
+#   휠은 평면속도만·ZUPT는 정지만 제약 → 못 잡는 z를 보완. residual=w·Vz (para_SpeedBias의 Vz만).
+#   ⚠️ 평지 가정 → 경사서 진짜 Vz를 거스름(소프트라 완화). 지형 게이팅·바디NHC·plane_factor(자세까지)는
+#      후속(Level2/VIW-Fusion 이식). acc_bias_prior가 z에 무효 확정(07-01)이라 그 대체 실험.
+#      검증: 배포조건 다회 A/B(scripts/ab_compare_multi.py + z_drift_motion.py).
+# ================================================================
+use_vertical_vel: 1          # 0=미사용(기존 동작 유지). PoC 검증 시 1
+vertical_vel_weight: 300.0 #20.0    # σ≈1/w=0.05 m/s (평지 실제 Vz 여유). live A/B로 확정
 
 # ================================================================
 # Wheel velocity outlier 게이팅 (SW1-1837) — factor-구간 skip 방식

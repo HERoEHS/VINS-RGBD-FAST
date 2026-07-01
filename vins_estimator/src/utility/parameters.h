@@ -105,6 +105,10 @@ extern int    USE_ACC_BIAS_PRIOR;   // acc bias를 target(0)으로 당기는 pri
 extern double ACC_BIAS_PRIOR_W_XY;  // 수평(ax,ay) prior 가중치 (클수록 강하게 0)
 extern double ACC_BIAS_PRIOR_W_Z;   // 수직(az) prior 가중치 (이미 정확 → 보통 0)
 
+// ===== Vertical-velocity soft constraint (SW1-1837, planar-motion Level1) =====
+extern int    USE_VERTICAL_VEL;     // 월드 수직속도 Vz를 0으로 상시 당기는 제약 사용 여부 (0=미사용)
+extern double VERTICAL_VEL_WEIGHT;  // 잔차 가중치 (클수록 강하게 0). σ≈1/w [m/s]
+
 // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
 // 비물리적 속도 글리치(예: 타임스탬프 dt→0로 106 m/s)를 적분 전 하드 드롭해 발산 방어.
 extern int    USE_WHEEL_VEL_GATE;  // wheel 속도 outlier 게이팅 사용 여부 (0=미사용)

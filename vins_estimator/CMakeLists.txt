@@ -127,6 +127,14 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
   target_link_libraries(test_acc_bias_prior_factor ${CERES_LIBRARIES})
+
+  # VerticalVelocityFactor도 헤더-only(ceres+Eigen)라 vins_lib 링크 없이 단독 검증 가능
+  ament_add_gtest(test_vertical_velocity_factor test/test_vertical_velocity_factor.cpp)
+  target_include_directories(test_vertical_velocity_factor PRIVATE
+    ${CERES_INCLUDE_DIRS}
+    ${EIGEN3_INCLUDE_DIR}
+  )
+  target_link_libraries(test_vertical_velocity_factor ${CERES_LIBRARIES})
 endif()
 
 ament_package()
