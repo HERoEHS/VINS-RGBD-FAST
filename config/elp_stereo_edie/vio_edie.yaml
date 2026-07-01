@@ -116,6 +116,9 @@ visualize_camera_size: 0.4
 # ================================================================
 # Wheel odometry tight-coupling (VIW-Fusion 휠 factor 이식, SW1-1829)
 # use_wheel: 1 = 연속 휠 제약 활성 (SW1-1837 ③ 1단계).
+#   ★07-01 확정: use_wheel:0이면 발산(실측 |pos| 70m, 점프 83%, 순간 20m/s). 이 bag은 비전/depth만으론
+#   스케일을 못 잡아(init depth 무시) 휠 metric 속도제약이 필수 앵커. 휠 글리치(작은 xy 점프)는
+#   '소스측(컨트롤러) 수정' 대상이지 '휠 제거' 대상 아님. 도구: scripts/jump_check.py.
 #   depth-init + acc_n↑ 토대 위에서 휠을 켜니 scale 발산 |pos| 487m→178m(−63%),
 #   리부트 6→3로 개선(끝점 방 규모 복귀).
 #   [2026-06-24 재확인] VIO_NUMERIC_FIX + use_wheel:1 상태에서 edie_wheel_base_old 재현 시
@@ -130,7 +133,7 @@ visualize_camera_size: 0.4
 #    다르므로 자세 적응형(pose-adaptive) 융합은 별도 이슈(SW1-1836)로 분리. 본 config는
 #    다리가 공칭 자세로 고정된 상태 1개만 가정한다.
 # ================================================================
-use_wheel: 1
+use_wheel: 1   # 필수 스케일 앵커 (use_wheel:0 → 발산 70m, 상단 주석 ★07-01 참조)
 wheel_topic: "/edie/diff_drive_controller/odom"   # nav_msgs/Odometry (twist 사용)
 
 # 휠 preintegration 노이즈 (속도/각속도) — 캘리브 후 조정
@@ -183,10 +186,13 @@ zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
 #   [w_xy 강도] prior 표준편차 σ≈1/w_xy. w_xy=100→σ0.01은 너무 빡빡해 '진짜' bias(-0.056)까지
 #      0으로 막아 그 잔차가 pitch로 샌다. w_xy=20→σ0.05면 과대추정(-0.21)은 4.2σ로 강하게 누르되
 #      진짜 -0.056은 1.1σ로 허용 → 자세 전가 최소화. (06-30 σ 분석)
-#   ⚠️ 미검증(SW1-1836): bag A/B는 재생 비결정성(±2.8m)으로 신뢰 불가 → live(녹화 OFF) 연속주행
-#      A/B로 가중치 확정 필요.
+#   ⚠️ 미확정(SW1-1836): 1차 bag A/B(max_solver_time 0.04, 단일 run)에서 prior 효과가 ≤3mm로
+#      노이즈 바닥(OFF↔OFF z-APE ±3.6mm / xy ±3.6cm)에 묻혀 판정 불가. 비결정 원천은 bag이 아니라
+#      max_solver_time 솔버 컷오프(estimator.cpp). 확정법: max_solver_time는 0.04(=LIVE 조건) 유지 +
+#      OFF/ON 각 다회 기록 후 '평균' 비교(노이즈 √N 감소). 1.0으로 올리면 결정론이나 LIVE와 달라
+#      전이 안 됨(튜닝은 배포조건에서). 또는 live A/B. 도구: scripts/ab_compare.py. (06-30)
 # ================================================================
-use_acc_bias_prior: 1
+use_acc_bias_prior: 1       # ★A/B 토글(이 값만 변수): 0=OFF(baseline), 1=ON. 미확정(상단 주석 참조)
 acc_bias_prior_w_xy: 20.0   # 수평(ax,ay) prior 가중치. σ≈1/w=0.05 (이전 100=σ0.01 과강 → live A/B로 확정)
 acc_bias_prior_w_z: 0.0     # 수직(az) prior 가중치 — az는 이미 정확 → 0(미사용)
 
