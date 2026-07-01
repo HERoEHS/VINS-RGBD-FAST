@@ -20,6 +20,10 @@ double ACC_BIAS_PRIOR_W_XY, ACC_BIAS_PRIOR_W_Z;
 int    USE_VERTICAL_VEL;
 double VERTICAL_VEL_WEIGHT;
 
+// ===== Ground-plane constraint (SW1-1837, VIW-Fusion plane_factor 이식) =====
+int    USE_PLANE;
+double PITCH_N_INV, ROLL_N_INV, ZPW_N_INV;
+
 // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
 int    USE_WHEEL_VEL_GATE;
 double WHEEL_VEL_MAX, WHEEL_GYR_MAX;
@@ -337,6 +341,19 @@ void readParameters(rclcpp::Node* node)
     {
         VERTICAL_VEL_WEIGHT = fsSettings["vertical_vel_weight"].empty() ? 20.0 : (double)fsSettings["vertical_vel_weight"];
         RCLCPP_INFO(node->get_logger(), "USE_VERTICAL_VEL: 1, weight=%.2f (Vz->0)", VERTICAL_VEL_WEIGHT);
+    }
+
+    // ===== Ground-plane constraint (SW1-1837, VIW-Fusion plane_factor 이식) =====
+    // use_plane 키 없으면 0 → 비활성(기존 동작 유지). z 위치+roll/pitch 자세를 추정 평면에 묶음.
+    // ⚠️ USE_WHEEL 필요(평면 factor가 휠 extrinsic 사용). 단일 전역평면 가정(경사 미대응).
+    USE_PLANE = fsSettings["use_plane"].empty() ? 0 : (int)fsSettings["use_plane"];
+    if (USE_PLANE)
+    {
+        PITCH_N_INV = fsSettings["pitch_n_inv"].empty() ? 10.0 : (double)fsSettings["pitch_n_inv"];
+        ROLL_N_INV  = fsSettings["roll_n_inv"].empty()  ? 10.0 : (double)fsSettings["roll_n_inv"];
+        ZPW_N_INV   = fsSettings["zpw_n_inv"].empty()   ? 10.0 : (double)fsSettings["zpw_n_inv"];
+        RCLCPP_INFO(node->get_logger(), "USE_PLANE: 1, pitch/roll/zpw_n_inv=%.2f/%.2f/%.2f",
+                    PITCH_N_INV, ROLL_N_INV, ZPW_N_INV);
     }
 
     // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====

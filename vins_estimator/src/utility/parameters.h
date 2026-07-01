@@ -109,6 +109,10 @@ extern double ACC_BIAS_PRIOR_W_Z;   // 수직(az) prior 가중치 (이미 정확
 extern int    USE_VERTICAL_VEL;     // 월드 수직속도 Vz를 0으로 상시 당기는 제약 사용 여부 (0=미사용)
 extern double VERTICAL_VEL_WEIGHT;  // 잔차 가중치 (클수록 강하게 0). σ≈1/w [m/s]
 
+// ===== Ground-plane constraint (SW1-1837, VIW-Fusion plane_factor 이식) =====
+extern int    USE_PLANE;                        // 지면평면 제약 사용 여부 (0=미사용)
+extern double PITCH_N_INV, ROLL_N_INV, ZPW_N_INV;  // 평면 잔차 sqrt_info (pitch/roll 자세, z 높이)
+
 // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
 // 비물리적 속도 글리치(예: 타임스탬프 dt→0로 106 m/s)를 적분 전 하드 드롭해 발산 방어.
 extern int    USE_WHEEL_VEL_GATE;  // wheel 속도 outlier 게이팅 사용 여부 (0=미사용)

@@ -193,6 +193,15 @@ public:
     double para_Ix_sy_wheel[1][1]{};
     double para_Ix_sw_wheel[1][1]{};
     double para_Td_wheel[1][1]{};
+
+    // ===== Ground-plane constraint (SW1-1837, VIW-Fusion plane_factor 이식) =====
+    double          para_plane_R[1][4]{{0, 0, 0, 1}};   // 지면평면 방향 quaternion (x,y,z,w)
+    double          para_plane_Z[1][1]{};               // 지면평면 높이 zpw
+    Eigen::Matrix3d rpw                 = Eigen::Matrix3d::Identity();  // 평면 방향(world→plane)
+    double          zpw                 = 0.0;          // 평면 높이
+    bool            openPlaneEstimation = false;        // VI 초기화 완료 후 평면 추정 활성
+    void            initPlane();                        // 윈도 pose 평균으로 평면 초기화
+
     int    find_solved[WINDOW_SIZE + 1]{};
 
     MarginalizationInfo *last_marginalization_info{};

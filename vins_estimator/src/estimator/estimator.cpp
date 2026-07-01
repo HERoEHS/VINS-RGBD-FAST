@@ -3,6 +3,7 @@
 #include "../factor/zero_velocity_factor.h"
 #include "../factor/acc_bias_prior_factor.h"
 #include "../factor/vertical_velocity_factor.h"
+#include "../factor/plane_factor.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -397,6 +398,8 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
                         solver_flag = NON_LINEAR;
                         slideWindow();
                         ROS_INFO("Initialization finish!");
+                        // [SW1-1837] VI 초기화 완료 → 지면평면 초기화 후 제약 활성
+                        if (USE_PLANE) { initPlane(); openPlaneEstimation = true; }
                         last_R  = Rs[WINDOW_SIZE];
                         last_P  = Ps[WINDOW_SIZE];
                         last_R0 = Rs[0];
@@ -1105,6 +1108,17 @@ void Estimator::vector2double()
         para_Td_wheel[0][0] = td_wheel;
     }
 
+    // 지면평면 파라미터 → ceres (SW1-1837)
+    if (USE_PLANE)
+    {
+        Eigen::Quaterniond q_pw(rpw);
+        para_plane_R[0][0] = q_pw.x();
+        para_plane_R[0][1] = q_pw.y();
+        para_plane_R[0][2] = q_pw.z();
+        para_plane_R[0][3] = q_pw.w();
+        para_plane_Z[0][0] = zpw;
+    }
+
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < f_manager.getFeatureCount(); i++)
         para_Feature[i][0] = dep(i);
@@ -1249,12 +1263,56 @@ void Estimator::double2vector()
         td_wheel = para_Td_wheel[0][0];
     }
 
+    // ceres → 지면평면 파라미터 (SW1-1837)
+    if (USE_PLANE)
+    {
+        rpw = Eigen::Quaterniond(para_plane_R[0][3], para_plane_R[0][0],
+                                 para_plane_R[0][1], para_plane_R[0][2])
+                  .normalized()
+                  .toRotationMatrix();
+        zpw = para_plane_Z[0][0];
+    }
+
     VectorXd dep = f_manager.getDepthVector();
     for (int i = 0; i < f_manager.getFeatureCount(); i++)
         dep(i) = para_Feature[i][0];
     f_manager.setDepth(dep);
     if (ESTIMATE_TD && USE_IMU)
         td = para_Td[0][0];
+}
+
+// [SW1-1837] 지면평면 초기화 — 윈도 pose들 평균으로 평면 방향(rpw)·높이(zpw) 추정.
+//   rpw_i = (Rs[i]·rio)^T = world→바퀴평면. 쿼터니언 평균(Markley) 후 yaw 제거(평면 yaw 미관측).
+//   zpw = 바퀴 고도(-(rpw·wheel_pos).z) 평균. 지면 관측 없이 pose만으로 = 순수 상태 prior.
+void Estimator::initPlane()
+{
+    const int cnt = frame_count;
+    if (cnt <= 0)
+        return;
+    double                          sum_zpw = 0.0;
+    std::vector<Eigen::Quaterniond> qpws;
+    for (int i = 0; i < cnt; ++i)
+    {
+        Eigen::Matrix3d rpw_i = (Rs[i] * rio).transpose();
+        qpws.emplace_back(Eigen::Quaterniond(rpw_i));
+        sum_zpw += -(rpw_i * (Ps[i] + Rs[i] * tio))[2];
+    }
+    // 쿼터니언 평균 (Markley: Σ q·qᵀ 의 최대 고유벡터)
+    Eigen::Matrix4d M = Eigen::Matrix4d::Zero();
+    for (const auto &q : qpws)
+    {
+        Eigen::Vector4d v(q.w(), q.x(), q.y(), q.z());
+        M += v * v.transpose();
+    }
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> es(M);
+    Eigen::Vector4d    vmax = es.eigenvectors().col(3);  // 최대 고유값 = 마지막 열
+    Eigen::Quaterniond qpw(vmax(0), vmax(1), vmax(2), vmax(3));
+    rpw = qpw.normalized().toRotationMatrix();
+    // 평면 yaw는 미관측 → 제거
+    double yaw = Utility::R2ypr(rpw).x();
+    rpw        = Utility::ypr2R(Eigen::Vector3d(-yaw, 0.0, 0.0)) * rpw;
+    zpw        = sum_zpw / cnt;
+    RCLCPP_INFO(rclcpp::get_logger("vins_plane"), "[PLANE] init: zpw=%.4f (frames=%d)", zpw, cnt);
 }
 
 bool Estimator::failureDetection()
@@ -1369,6 +1427,23 @@ void Estimator::optimization()
             openExWheelEstimation = true;
         else
             problem.SetParameterBlockConstant(para_Ex_Pose_wheel[0]);
+
+        // ===== 지면평면 제약 (SW1-1837): z 위치 + roll/pitch 자세를 추정 평면에 묶음 =====
+        //   vz-only(VerticalVelocityFactor)가 xy로 오차 전가한 것과 달리 근본 pitch까지 교정.
+        //   평면(방향 qpw + 높이 zpw)은 최적화 변수. VI 초기화 완료(openPlaneEstimation) 후 활성.
+        if (USE_PLANE && openPlaneEstimation)
+        {
+            ceres::LocalParameterization *plane_r_param = new ceres::EigenQuaternionParameterization();
+            problem.AddParameterBlock(para_plane_R[0], 4, plane_r_param);
+            problem.AddParameterBlock(para_plane_Z[0], 1);
+            for (int i = 0; i <= frame_count; i++)
+            {
+                ceres::CostFunction *plane_factor =
+                    PlaneFactor::Create(PITCH_N_INV, ROLL_N_INV, ZPW_N_INV);
+                problem.AddResidualBlock(plane_factor, NULL, para_Pose[i],
+                                         para_Ex_Pose_wheel[0], para_plane_R[0], para_plane_Z[0]);
+            }
+        }
 
         // 휠 intrinsic 스케일 sx/sy/sw
         problem.AddParameterBlock(para_Ix_sx_wheel[0], 1);

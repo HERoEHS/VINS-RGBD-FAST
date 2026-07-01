@@ -208,6 +208,19 @@ use_vertical_vel: 1          # 0=미사용(기존 동작 유지). PoC 검증 시
 vertical_vel_weight: 300.0 #20.0    # σ≈1/w=0.05 m/s (평지 실제 Vz 여유). live A/B로 확정
 
 # ================================================================
+# Ground-plane constraint (SW1-1837, VIW-Fusion plane_factor 이식)
+#   지면 로봇을 '추정 지면평면'에 묶음 — z 위치 + roll/pitch 자세 동시. vz-only(Level1)가 xy로
+#   오차 전가(+54%)한 것과 달리 근본 pitch까지 교정(→ xy 무손해 기대). 평면(방향·높이)은 최적화
+#   변수로 추정, 지면 관측(특징점·하방시야) 불필요한 순수 상태 prior. VI 초기화 후 활성. use_wheel:1 필요.
+#   ⚠️ 단일 전역평면 가정 → 경사/다층서 회전오차(PL-VIWO2). B2C는 지형변화 게이팅 후속.
+#   가중치 sqrt_info = diag(pitch_n_inv, roll_n_inv, zpw_n_inv). 배포조건 다회 A/B로 튜닝.
+# ================================================================
+use_plane: 0        # 0=미사용(기존 동작 유지). 검증 시 1 (vz-only는 use_vertical_vel:0으로)
+pitch_n_inv: 10.0   # pitch 정렬 잔차 가중치
+roll_n_inv: 10.0    # roll 정렬 잔차 가중치
+zpw_n_inv: 10.0     # z(고도) 잔차 가중치
+
+# ================================================================
 # Wheel velocity outlier 게이팅 (SW1-1837) — factor-구간 skip 방식
 #   wheel odom velocity 글리치(녹화공백+타임스탬프충돌로 106 m/s)가 wheel factor 통해 VINS 발산.
 #   ★방식: 글리치 샘플 포함 키프레임 구간은 WheelFactor만 추가 안 함(preintegration은 유지,
