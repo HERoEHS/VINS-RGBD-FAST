@@ -1271,6 +1271,12 @@ void Estimator::double2vector()
                   .normalized()
                   .toRotationMatrix();
         zpw = para_plane_Z[0][0];
+        // // [SW1-1837] zpw 추적 로그 — 자유변수 zpw가 드리프트한 궤적 고도를 쫓아가는지 관측용.
+        // //   평면 잔차가 0이려면 zpw ≈ -z_wheel(최신 프레임 바퀴 고도) → 두 값이 나란히 내려가면
+        // //   'zpw 윈도우 재앵커'(전역 z 앵커 부재)의 직접 증거. 분석: 로그에서 [ZPW] grep 후 plot.
+        // RCLCPP_INFO(rclcpp::get_logger("vins_plane"), "[ZPW] t=%.3f zpw=%.4f z_wheel=%.4f",
+        //             Headers[frame_count], zpw,
+        //             (Ps[frame_count] + Rs[frame_count] * tio)[2]);
     }
 
     VectorXd dep = f_manager.getDepthVector();
