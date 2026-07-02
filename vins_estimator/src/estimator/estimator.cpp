@@ -1592,17 +1592,27 @@ void Estimator::optimization()
         }
     }
 
-    /*******[SW1-1837] Body-frame NHC (planar-motion Level2): 바퀴 프레임 vy·vz→0*******/
+    /*******[SW1-1837] Body-frame NHC (planar-motion Level2, 레버암 보상 v2): 바퀴원점 vy·vz→0*******/
     //   월드 vz 제약과의 차이 = '같은 속도를 어느 축으로 재느냐'. 경사(pitch θ)에선 월드 vz=|v|sinθ≠0
     //   (0 강제는 오차 주입)이지만 바디 vz는 여전히 0(바닥을 뚫거나 뜨지 않음) → 게이팅 없이 참.
-    //   횡방향 vy≈0(무슬립)도 함께. rio는 상수로 전달 — 파라미터 블록로 넣으면 use_wheel:0일 때
-    //   자유 회전 gauge가 편향 방향으로 흘러갈 위험(plane 자유법선의 tilt 각인과 동일, 07-01 실증).
+    //   ★레버암(07-02 실증): 상태 V는 IMU 위치 속도라 제자리회전 중 실제 횡속도 ω×t_io(≈0.32m/s)가
+    //   있음 — 보상 없이 vy=0 강제 시 xy +80% 악화. 프레임별 gyro 측정(angular_velocity_buf 마지막
+    //   샘플 ≈ 그 프레임 시각의 ω)을 상수로 넘기고 bias는 상태 Bg로 잔차 안에서 보정.
+    //   rio·tio는 상수 전달 — 파라미터 블록로 넣으면 use_wheel:0일 때 자유 gauge 위험(07-01 실증).
     if (USE_BODY_NHC)
     {
         const Eigen::Quaterniond qio(rio);
         for (int i = 0; i <= frame_count; i++)
         {
-            ceres::CostFunction *nhc_factor = BodyNhcFactor::Create(qio, NHC_Y_WEIGHT, NHC_Z_WEIGHT);
+            // 프레임 i 시각의 각속도: buf[i]의 마지막 IMU 샘플. 비어 있으면(슬라이드 직후 등)
+            // 다음 프레임 buf의 첫 샘플로 대체, 그것도 없으면 레버암 항 생략(0) — 소프트라 허용.
+            Eigen::Vector3d gyr_i = Eigen::Vector3d::Zero();
+            if (!angular_velocity_buf[i].empty())
+                gyr_i = angular_velocity_buf[i].back();
+            else if (i + 1 <= frame_count && !angular_velocity_buf[i + 1].empty())
+                gyr_i = angular_velocity_buf[i + 1].front();
+            ceres::CostFunction *nhc_factor =
+                BodyNhcFactor::Create(qio, tio, gyr_i, NHC_Y_WEIGHT, NHC_Z_WEIGHT);
             problem.AddResidualBlock(nhc_factor, NULL, para_Pose[i], para_SpeedBias[i]);
         }
     }
