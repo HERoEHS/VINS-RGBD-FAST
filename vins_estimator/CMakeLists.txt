@@ -143,6 +143,14 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
   target_link_libraries(test_plane_factor ${CERES_LIBRARIES})
+
+  # BodyNhcFactor(AutoDiff, ceres+Eigen 헤더-only) 단독 검증
+  ament_add_gtest(test_body_nhc_factor test/test_body_nhc_factor.cpp)
+  target_include_directories(test_body_nhc_factor PRIVATE
+    ${CERES_INCLUDE_DIRS}
+    ${EIGEN3_INCLUDE_DIR}
+  )
+  target_link_libraries(test_body_nhc_factor ${CERES_LIBRARIES})
 endif()
 
 ament_package()

@@ -221,6 +221,19 @@ roll_n_inv: 50.0 #10.0    # roll 정렬 잔차 가중치
 zpw_n_inv: 10.0     # z(고도) 잔차 가중치
 
 # ================================================================
+# Body-frame NHC (SW1-1837, planar-motion Level2) — 바퀴 프레임 횡(vy)·수직(vz) 속도 ≈ 0
+#   월드 vz 제약(use_vertical_vel)과의 차이 = '같은 속도를 어느 축으로 재느냐'.
+#   평지에선 둘이 동일. 경사(pitch θ)에선 월드 vz=|v|·sinθ≠0(0 강제는 오차 주입=게이팅 필요)이지만
+#   바디 vz는 여전히 0(차체 기준 그냥 전진) → NHC는 경사에서도 게이팅 없이 참(지형 강건).
+#   범프/문턱/슬립 구간(순간 vy·vz≠0)의 factor-skip은 후속. 레버암(ω×t_io)은 무시(소프트 σ가 흡수).
+#   σ≈1/w [m/s]: 드리프트 vz가 mm/s 수준이라 w는 수백 필요(w20 무효 실증, vertical_vel 교훈).
+#   권장 A/B: use_body_nhc:1 + use_vertical_vel:0 (월드 vz의 대체재) + use_plane 유지.
+# ================================================================
+use_body_nhc: 0      # 0=미사용(기존 동작 유지). Level2 검증 시 1
+nhc_y_weight: 300.0  # 바디 횡방향(vy) 잔차 가중
+nhc_z_weight: 300.0  # 바디 수직(vz) 잔차 가중
+
+# ================================================================
 # Wheel velocity outlier 게이팅 (SW1-1837) — factor-구간 skip 방식
 #   wheel odom velocity 글리치(녹화공백+타임스탬프충돌로 106 m/s)가 wheel factor 통해 VINS 발산.
 #   ★방식: 글리치 샘플 포함 키프레임 구간은 WheelFactor만 추가 안 함(preintegration은 유지,

@@ -24,6 +24,10 @@ double VERTICAL_VEL_WEIGHT;
 int    USE_PLANE;
 double PITCH_N_INV, ROLL_N_INV, ZPW_N_INV;
 
+// ===== Body-frame NHC (SW1-1837, planar-motion Level2) =====
+int    USE_BODY_NHC;
+double NHC_Y_WEIGHT, NHC_Z_WEIGHT;
+
 // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
 int    USE_WHEEL_VEL_GATE;
 double WHEEL_VEL_MAX, WHEEL_GYR_MAX;
@@ -354,6 +358,18 @@ void readParameters(rclcpp::Node* node)
         ZPW_N_INV   = fsSettings["zpw_n_inv"].empty()   ? 10.0 : (double)fsSettings["zpw_n_inv"];
         RCLCPP_INFO(node->get_logger(), "USE_PLANE: 1, pitch/roll/zpw_n_inv=%.2f/%.2f/%.2f",
                     PITCH_N_INV, ROLL_N_INV, ZPW_N_INV);
+    }
+
+    // ===== Body-frame NHC (SW1-1837, planar-motion Level2) =====
+    // use_body_nhc 키 없으면 0 → 비활성(기존 동작 유지). 바퀴 프레임 횡(vy)·수직(vz) 속도를 0으로
+    // 상시 소프트 제약. 월드 vz(use_vertical_vel)와 달리 바디 기준이라 경사에서도 참(지형 강건).
+    USE_BODY_NHC = fsSettings["use_body_nhc"].empty() ? 0 : (int)fsSettings["use_body_nhc"];
+    if (USE_BODY_NHC)
+    {
+        NHC_Y_WEIGHT = fsSettings["nhc_y_weight"].empty() ? 300.0 : (double)fsSettings["nhc_y_weight"];
+        NHC_Z_WEIGHT = fsSettings["nhc_z_weight"].empty() ? 300.0 : (double)fsSettings["nhc_z_weight"];
+        RCLCPP_INFO(node->get_logger(), "USE_BODY_NHC: 1, w_y/w_z=%.2f/%.2f (body vy,vz->0)",
+                    NHC_Y_WEIGHT, NHC_Z_WEIGHT);
     }
 
     // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====

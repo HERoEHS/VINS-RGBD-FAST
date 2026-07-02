@@ -113,6 +113,10 @@ extern double VERTICAL_VEL_WEIGHT;  // 잔차 가중치 (클수록 강하게 0).
 extern int    USE_PLANE;                        // 지면평면 제약 사용 여부 (0=미사용)
 extern double PITCH_N_INV, ROLL_N_INV, ZPW_N_INV;  // 평면 잔차 sqrt_info (pitch/roll 자세, z 높이)
 
+// ===== Body-frame NHC (SW1-1837, planar-motion Level2) =====
+extern int    USE_BODY_NHC;               // 바디(바퀴) 프레임 vy·vz≈0 제약 사용 여부 (0=미사용)
+extern double NHC_Y_WEIGHT, NHC_Z_WEIGHT; // 잔차 가중치 (횡/수직). σ≈1/w [m/s]
+
 // ===== Wheel velocity outlier 게이팅 (SW1-1837) =====
 // 비물리적 속도 글리치(예: 타임스탬프 dt→0로 106 m/s)를 적분 전 하드 드롭해 발산 방어.
 extern int    USE_WHEEL_VEL_GATE;  // wheel 속도 outlier 게이팅 사용 여부 (0=미사용)

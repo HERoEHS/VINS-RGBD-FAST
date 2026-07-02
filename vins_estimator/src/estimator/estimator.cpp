@@ -4,6 +4,7 @@
 #include "../factor/acc_bias_prior_factor.h"
 #include "../factor/vertical_velocity_factor.h"
 #include "../factor/plane_factor.h"
+#include "../factor/body_nhc_factor.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -1588,6 +1589,21 @@ void Estimator::optimization()
         {
             VerticalVelocityFactor *vz_factor = new VerticalVelocityFactor(VERTICAL_VEL_WEIGHT);
             problem.AddResidualBlock(vz_factor, NULL, para_SpeedBias[i]);
+        }
+    }
+
+    /*******[SW1-1837] Body-frame NHC (planar-motion Level2): 바퀴 프레임 vy·vz→0*******/
+    //   월드 vz 제약과의 차이 = '같은 속도를 어느 축으로 재느냐'. 경사(pitch θ)에선 월드 vz=|v|sinθ≠0
+    //   (0 강제는 오차 주입)이지만 바디 vz는 여전히 0(바닥을 뚫거나 뜨지 않음) → 게이팅 없이 참.
+    //   횡방향 vy≈0(무슬립)도 함께. rio는 상수로 전달 — 파라미터 블록로 넣으면 use_wheel:0일 때
+    //   자유 회전 gauge가 편향 방향으로 흘러갈 위험(plane 자유법선의 tilt 각인과 동일, 07-01 실증).
+    if (USE_BODY_NHC)
+    {
+        const Eigen::Quaterniond qio(rio);
+        for (int i = 0; i <= frame_count; i++)
+        {
+            ceres::CostFunction *nhc_factor = BodyNhcFactor::Create(qio, NHC_Y_WEIGHT, NHC_Z_WEIGHT);
+            problem.AddResidualBlock(nhc_factor, NULL, para_Pose[i], para_SpeedBias[i]);
         }
     }
 
