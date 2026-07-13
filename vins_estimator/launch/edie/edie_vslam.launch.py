@@ -2,18 +2,16 @@
 # [SW1-1837] edie 라이브 VIO 실행 launch — 실 로봇에서 vins_estimator만 헤드리스로 띄운다.
 #   gate1_klt.launch.py와 달리 rqt/bag 자동실행 없음 → SSH 헤드리스 라이브 테스트 친화.
 #   config_file/vins_folder는 ~(홈) 기준 기본값이라 사용자·로봇 어디서나 동작(이식성).
-#   RViz는 옵션(rviz:=true, 디스플레이 필요).
+#   시각화가 필요하면 별도 쉘에서 rviz2 직접 실행 (bag 재생 시: rviz2 --ros-args -p use_sim_time:=true).
 #
 # 사용 예:
 #   ros2 launch vins_estimator edie_live.launch.py                 # 헤드리스 라이브
-#   ros2 launch vins_estimator edie_live.launch.py rviz:=true      # 시각화 포함
 #   ros2 launch vins_estimator edie_live.launch.py config_file:=<다른 yaml>
 #   ※ 게이팅 on/off는 config(vio_edie.yaml)의 use_wheel_vel_gate로 토글 후 재실행.
 import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -33,9 +31,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'vins_folder', default_value=vins_root_default,
             description="VINS-RGBD-FAST 루트 경로 (끝에 '/' 포함)"),
-        DeclareLaunchArgument(
-            'rviz', default_value='false',
-            description='RViz 실행 여부 (디스플레이 필요, SSH 헤드리스면 false)'),
         DeclareLaunchArgument(
             'log_level', default_value='debug',
             description='vins_estimator RCLCPP 로그 레벨 (debug/info/warn/error)'),
@@ -63,13 +58,4 @@ def generate_launch_description():
         }],
     )
 
-    rviz = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='vins_rviz',
-        condition=IfCondition(LaunchConfiguration('rviz')),
-        output='log',
-        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
-    )
-
-    return LaunchDescription(args + [estimator, rviz])
+    return LaunchDescription(args + [estimator])
