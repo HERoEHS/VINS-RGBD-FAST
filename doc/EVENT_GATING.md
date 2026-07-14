@@ -71,6 +71,12 @@ leg_cmd_topic_r: "/edie/r_leg_position_controller/command"
 
 ## 한계 / 후속 (Phase 2+)
 
+- **`leg_rate_min`의 실제 의미(07-14 실측)**: 다리 엔코더는 1-LSB(0.017rad) 양자화라 100Hz
+  순간 변화율이 '0 또는 ≥1.7rad/s'의 이진 신호다(스윙 중에도 0.05~1.0rad/s 샘플 0개).
+  따라서 rate_min은 (0, 1.7) 구간에서 불감이며, 정착 판정의 실질 노브는 `leg_post_margin`.
+  정착 중 플리커는 버스트당 최대 ~post_margin 연장 가능하나 실측상 연쇄 불가
+  (124s 전수: 버스트 ≤0.05s, ~20s당 1회, 0.5s-연쇄 최장 0.05s) — 연장의 하드 상한은
+  `gate_max_duration`이 보장.
 - 이미 주입된 자세 오차의 **사후 교정은 범위 밖** — 게이팅은 주입 방지만 한다.
 - 다리각 변화 후 휠-IMU extrinsic이 새 상수로 바뀌는 문제(FK 갱신)는 SW1-1836 영역.
 - 슬립(휠-IMU 각속도 불일치), 범프(수직 acc), 경사(pitch rate) 이벤트는 Phase 2/3.
