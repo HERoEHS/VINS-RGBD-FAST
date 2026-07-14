@@ -23,7 +23,7 @@ VINS 자세 오차(정지구간 IMU 중력 대조)가 0.04° → **1.6~3.4°로 
 그 시각 구간의 factor만 추가하지 않는다**(적분 일관성 유지, 구간은 IMU/비전이 받침).
 
 - **신호**: ① `/joint_states`의 `left/right_leg_joint` 실측 각도(변화율 검출)
-  ② 위치 명령 토픽(`/edie/{l,r}_leg_position_controller/command`, `Float64MultiArray`) —
+  ② 위치 명령 토픽(`/edie/{l,r}_leg_position_controller/command`, `std_msgs/Float64` — PassthroughController DataType) —
   실측보다 선행하므로 물리 반응 전에 게이트를 미리 연다.
 - **구간 마킹**: 이벤트 [시작−`leg_pre_margin`, 종료+`leg_post_margin`].
   실측 검출이 늦는 문제는 소급 마진(pre)으로 보상.
@@ -40,7 +40,7 @@ VINS 자세 오차(정지구간 IMU 중력 대조)가 0.04° → **1.6~3.4°로 
 | `src/estimator/estimator.{h,cpp}` | `inputLegState/inputLegCommand/isLegGated` + 4개 factor 지점 skip |
 | `src/estimator_nodelet.cpp` | joint_states(BEST_EFFORT)·명령(RELIABLE) 구독 → estimator 전달 |
 | `src/utility/parameters.{h,cpp}` | config 파라미터 (기본 전부 off) |
-| `test/test_leg_event_detector.cpp` | 계약 테스트 6건 |
+| `test/test_leg_event_detector.cpp` | 계약 테스트 7건(LSB 플리커 회귀 포함) |
 
 ## 설정 (`vio_edie.yaml`)
 
@@ -61,7 +61,7 @@ leg_cmd_topic_r: "/edie/r_leg_position_controller/command"
 
 ## 검증
 
-1. **gtest**: `test_leg_event_detector` — 무동작/마진 마킹/명령 선행/상한 강제해제/정리 6건.
+1. **gtest**: `test_leg_event_detector` — 무동작/마진 마킹/명령 선행/무의미 명령/상한 강제해제·재무장/LSB 플리커 면역/정리 7건.
 2. **재생 A/B (성공 판정)**: `odom_fix_check` bag, `use_event_gating` 0 vs 1, 3-run:
    - 40~46s 구간 `[EVENT-GATE]` 발동 확인
    - 전역 tilt 4.32±0.50° → 챔피언 분포(2.19±0.97°) 회복
@@ -71,9 +71,12 @@ leg_cmd_topic_r: "/edie/r_leg_position_controller/command"
 
 ## 한계 / 후속 (Phase 2+)
 
-- **`leg_rate_min`의 실제 의미(07-14 실측)**: 다리 엔코더는 1-LSB(0.017rad) 양자화라 100Hz
-  순간 변화율이 '0 또는 ≥1.7rad/s'의 이진 신호다(스윙 중에도 0.05~1.0rad/s 샘플 0개).
-  따라서 rate_min은 (0, 1.7) 구간에서 불감이며, 정착 판정의 실질 노브는 `leg_post_margin`.
+- **`leg_rate_min`의 실제 의미(07-14 실측)**: 다리 엔코더는 1-LSB(0.017rad) 양자화라
+  순간 변화율이 '0 또는 스파이크(1-LSB/dt)'뿐이다(스윙 중에도 0.05~1.0rad/s 샘플 0개).
+  스파이크 최저값은 0.87rad/s(실측 dt 중앙값 10ms·최대 20ms) → rate_min은 (0, 0.87)에서
+  불감이며, 정착 판정의 실질 노브는 `leg_post_margin`. 스윙 중 스파이크 간격은 중앙값
+  30ms·최대 50ms(실측) → post_margin 0.5s의 조기 닫힘 여지는 10배 여유로 없음.
+  ※녹화 갭 bag에선 dt가 커져 경계가 더 내려가나 갭 구간은 휠 데이터도 없어 무의미.
   정착 중 플리커는 버스트당 최대 ~post_margin 연장 가능하나 실측상 연쇄 불가
   (124s 전수: 버스트 ≤0.05s, ~20s당 1회, 0.5s-연쇄 최장 0.05s) — 연장의 하드 상한은
   `gate_max_duration`이 보장.
