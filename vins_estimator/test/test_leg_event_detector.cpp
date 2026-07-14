@@ -55,29 +55,54 @@ TEST(LegEventDetector, MotionMarksIntervalWithMargins)
     EXPECT_FALSE(d.overlaps(2.2, 2.5));  // 마진 밖(뒤)
 }
 
-// ③ 명령이 실측보다 선행: 명령 수신 즉시 게이트 개시(물리 반응 전 구간도 커버)
+// ③ 명령이 실측보다 선행: '목표 변경' 수신 즉시 게이트 개시(물리 반응 전 구간도 커버)
 TEST(LegEventDetector, CommandOpensGateBeforeMotion)
 {
     LegEventDetector d;
     d.setParams({});
     feedStill(d, 0.0, 1.0, 0.0);
-    d.onCommand(1.0, 0.3, /*left=*/true);  // 목표 0.3 vs 현재 0.0 → 즉시 개시
+    d.onCommand(0.5, 0.0, /*left=*/true);  // 첫 수신 = 기준 설정(트리거 없음)
+    d.onCommand(1.0, 0.3, /*left=*/true);  // 목표 0.0→0.3 변경 → 즉시 개시
     feedStill(d, 1.0, 3.0, 0.0);           // 실측은 계속 정지(반응 지연 가정)
     EXPECT_EQ(d.activationCount(), 1);
     EXPECT_TRUE(d.overlaps(0.8, 0.9));     // 1.0 - pre(0.3) = 0.7부터 커버
     EXPECT_FALSE(d.overlaps(0.3, 0.6));
 }
 
-// ③-b 목표가 현재와 같은(또는 임계 미만 차이) 명령은 게이트를 열지 않음
+// ③-b 목표 변경이 없거나 임계 미만인 명령은 게이트를 열지 않음
 TEST(LegEventDetector, NoopCommandIgnored)
 {
     LegEventDetector d;
     d.setParams({});
     feedStill(d, 0.0, 1.0, 0.3);
-    d.onCommand(1.0, 0.3, true);     // 이미 그 위치
-    d.onCommand(1.0, 0.305, false);  // 임계(0.02) 미만 차이
+    d.onCommand(0.9, 0.3, true);     // 기준 설정
+    d.onCommand(1.0, 0.3, true);     // 동일 목표 반복 → 무시
+    d.onCommand(0.9, 0.3, false);    // R 기준 설정
+    d.onCommand(1.0, 0.305, false);  // 변경량 0.005 ≤ 임계(0.02) → 무시
     feedStill(d, 1.0, 2.0, 0.3);
     EXPECT_EQ(d.activationCount(), 0);
+}
+
+// ③-c 지속 추종 오차 + 반복 명령 스트림 면역 — 07-14 edie_gate_verify bag 실증 회귀:
+//    다리가 목표(0.0)에 2°(0.0349rad) 어긋난 채 정착 + 동일 목표가 13.5Hz로 계속 옴.
+//    구버전(|목표-실측| 비교)은 이를 매번 새 이벤트로 오인 → 150s 중 45% 과게이팅.
+TEST(LegEventDetector, PersistentOffsetCommandStreamIgnored)
+{
+    LegEventDetector d;
+    d.setParams({});
+    double next_cmd = 0.0;
+    for (double t = 0.0; t < 10.0; t += 0.01)
+    {
+        d.onMeasurement(t, 0.0349, 0.0349);  // 실측: 2° 스탠드오프에 정착
+        if (t >= next_cmd)
+        {
+            d.onCommand(t, 0.0, true);        // 목표 0.0 반복 스트림
+            d.onCommand(t, 0.0, false);
+            next_cmd += 0.074;                // ~13.5Hz
+        }
+    }
+    EXPECT_EQ(d.activationCount(), 0);
+    EXPECT_FALSE(d.overlaps(0.0, 10.0));
 }
 
 // ④ 연속 동작이 상한(2s)을 넘으면 강제 종료 — 휠 앵커 상실 발산 방지.

@@ -37,7 +37,7 @@ public:
     {
         double pos_min      = 0.03;  // [rad] 정착 기준점 대비 변위 시작 임계 (엔코더 LSB 0.017의 ~2배)
         double rate_min     = 0.05;  // [rad/s] '아직 움직임' 판정(종료용). 최저 스파이크(1-LSB/최대dt≈0.87)보다 낮으면 충분(17배 여유)
-        double cmd_pos_min  = 0.02;  // [rad] 명령-실측 차 시작 임계(선행 트리거)
+        double cmd_pos_min  = 0.02;  // [rad] 명령 '목표 변경량' 시작 임계(선행 트리거) — 직전 목표 대비
         double pre_margin   = 0.3;   // [s] 시작 소급 마진(변위 임계 도달 지연 보상)
         double post_margin  = 0.5;   // [s] 종료 후 유지 마진(정착 진동 흡수)
         double max_duration = 2.0;   // [s] 연속 게이팅 상한 — 휠 앵커 상실 발산 방지
@@ -115,19 +115,29 @@ public:
         prune(t);
     }
 
-    // 다리 위치 '명령' 입력 — 목표가 현재 실측과 다르면 실측 반응 전에 게이트 개시
+    // 다리 위치 '명령' 입력 — 목표값이 '직전 목표 대비' 변경됐을 때만 선행 개시.
+    // ★07-14 edie_gate_verify bag 실증 수정: 명령은 13.6Hz 연속 스트림이고 다리는
+    //   목표에 2°(0.0349rad) 어긋난 채 정착할 수 있다(기계적 스탠드오프). 이전 구현
+    //   (|목표-실측| 비교)은 이 지속 오차를 매 메시지 '새 이벤트'로 오인해 무한 재점화
+    //   (150s 중 45% 과게이팅 실측). '목표 변경'만이 "새 명령이 떨어졌다"의 올바른 신호.
     void onCommand(double t, double target, bool left)
     {
-        if (!has_prev_ || active_ || cooldown_)
+        double     &prev_cmd = left ? prev_cmd_l_ : prev_cmd_r_;
+        bool       &has_cmd  = left ? has_cmd_l_ : has_cmd_r_;
+        const bool  first    = !has_cmd;
+        const double before  = prev_cmd;
+        prev_cmd = target;
+        has_cmd  = true;
+        if (first)
+            return;  // 첫 수신은 기준만 설정
+        if (std::fabs(target - before) <= p_.cmd_pos_min)
+            return;  // 목표 변경 없음(반복 스트림) → 무시
+        if (active_ || cooldown_)
             return;
-        const double cur = left ? prev_l_ : prev_r_;
-        if (std::fabs(target - cur) > p_.cmd_pos_min)
-        {
-            active_ = true;
-            open_t_ = t;
-            last_move_t_ = t;
-            ++activations_;
-        }
+        active_ = true;
+        open_t_ = t;
+        last_move_t_ = t;
+        ++activations_;
     }
 
     // [t0, t1] 구간이 게이팅 구간(마진 포함)과 겹치는가 — factor skip 판정용
@@ -155,6 +165,8 @@ private:
 
     Params p_;
     bool   has_prev_ = false, active_ = false, cooldown_ = false, force_closed_ = false;
+    bool   has_cmd_l_ = false, has_cmd_r_ = false;       // 명령 기준값 수신 여부
+    double prev_cmd_l_ = 0.0, prev_cmd_r_ = 0.0;         // 직전 명령 목표(변경 감지 기준)
     double prev_t_ = 0.0, prev_l_ = 0.0, prev_r_ = 0.0;
     double ref_l_ = 0.0, ref_r_ = 0.0;      // 정착 기준점(변위 시작 판정의 원점)
     double last_rate_move_t_ = 0.0;         // 마지막으로 순간 변화율이 임계를 넘은 시각
