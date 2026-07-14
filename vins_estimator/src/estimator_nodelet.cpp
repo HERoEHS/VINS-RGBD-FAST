@@ -23,6 +23,8 @@
 #include <std_msgs/msg/header.hpp>
 #include <geometry_msgs/msg/point32.hpp>
 #include <nav_msgs/msg/odometry.hpp>  // 휠 오도메트리 구독 (SW1-1829)
+#include <sensor_msgs/msg/joint_state.hpp>       // 다리 실측 각도 구독 (이벤트 게이팅, SW1-1837)
+#include <std_msgs/msg/float64.hpp>              // 다리 위치 명령 구독 (이벤트 게이팅, SW1-1837)
 
 class EstimatorNode : public rclcpp::Node
 {
@@ -59,6 +61,23 @@ public:
                 WHEEL_TOPIC, sensor_qos,
                 std::bind(&EstimatorNode::wheel_callback, this, std::placeholders::_1));
 
+        // [SW1-1837] 다리 이벤트 게이팅 입력 — 실측(joint_states) + 위치 명령(선행 트리거)
+        if (USE_EVENT_GATING && GATE_LEG)
+        {
+            sub_joint_states = create_subscription<sensor_msgs::msg::JointState>(
+                LEG_STATE_TOPIC, sensor_qos,
+                std::bind(&EstimatorNode::joint_states_callback, this, std::placeholders::_1));
+            // 명령은 저빈도 이산 이벤트라 유실되면 안 됨 → RELIABLE(기본 QoS, depth 10)
+            sub_leg_cmd_l = create_subscription<std_msgs::msg::Float64>(
+                LEG_CMD_TOPIC_L, rclcpp::QoS(10),
+                [this](std_msgs::msg::Float64::ConstSharedPtr m)
+                { leg_cmd_callback(m, /*left=*/true); });
+            sub_leg_cmd_r = create_subscription<std_msgs::msg::Float64>(
+                LEG_CMD_TOPIC_R, rclcpp::QoS(10),
+                [this](std_msgs::msg::Float64::ConstSharedPtr m)
+                { leg_cmd_callback(m, /*left=*/false); });
+        }
+
         sub_relo_points = create_subscription<sensor_msgs::msg::PointCloud>(
             "/pose_graph/match_points", 10,
             std::bind(&EstimatorNode::relocalization_callback, this, std::placeholders::_1));
@@ -89,6 +108,9 @@ private:
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr           sub_imu;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr         sub_wheel;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr     sub_joint_states;  // [SW1-1837]
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr  sub_leg_cmd_l;     // [SW1-1837]
+    rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr  sub_leg_cmd_r;     // [SW1-1837]
     rclcpp::Subscription<sensor_msgs::msg::PointCloud>::SharedPtr     sub_relo_points;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr          sub_image;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr          sub_depth;
@@ -151,6 +173,31 @@ private:
                             wheel_msg->twist.twist.angular.y,
                             wheel_msg->twist.twist.angular.z);
         estimator.inputWheel(last_wheel_t, vel, gyr);
+    }
+
+    // [SW1-1837] 다리 실측 각도 콜백 — 관절명으로 다리 두 개만 추출해 이벤트 detector에 전달.
+    //   관절명은 EDIE URDF 고정값(left/right_leg_joint).
+    void joint_states_callback(const sensor_msgs::msg::JointState::ConstSharedPtr &msg)
+    {
+        if (!msg) return;
+        double t = rclcpp::Time(msg->header.stamp).seconds();
+        double th_l = 0.0, th_r = 0.0;
+        bool   has_l = false, has_r = false;
+        for (size_t i = 0; i < msg->name.size() && i < msg->position.size(); i++)
+        {
+            if (msg->name[i] == "left_leg_joint")       { th_l = msg->position[i]; has_l = true; }
+            else if (msg->name[i] == "right_leg_joint") { th_r = msg->position[i]; has_r = true; }
+        }
+        if (has_l && has_r)
+            estimator.inputLegState(t, th_l, th_r);
+    }
+
+    // [SW1-1837] 다리 위치 명령 콜백 — PassthroughController의 DataType=std_msgs/Float64(스칼라).
+    //   stamp가 없는 메시지라 노드 시각 사용 (use_sim_time:=true면 bag 재생 시각과 일치).
+    void leg_cmd_callback(const std_msgs::msg::Float64::ConstSharedPtr &msg, bool left)
+    {
+        if (!msg) return;
+        estimator.inputLegCommand(this->get_clock()->now().seconds(), msg->data, left);
     }
 
     void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr &color_msg)

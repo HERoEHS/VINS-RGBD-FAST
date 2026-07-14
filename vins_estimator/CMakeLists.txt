@@ -120,6 +120,9 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_zero_velocity_factor ${CERES_LIBRARIES})
 
+  # [SW1-1837] LegEventDetector(순수 STL 헤더-only) — 이벤트 게이팅 구간 마킹 단위검증
+  ament_add_gtest(test_leg_event_detector test/test_leg_event_detector.cpp)
+
   # AccBiasPriorFactor도 헤더-only(ceres+Eigen)라 vins_lib 링크 없이 단독 검증 가능
   ament_add_gtest(test_acc_bias_prior_factor test/test_acc_bias_prior_factor.cpp)
   target_include_directories(test_acc_bias_prior_factor PRIVATE

@@ -32,6 +32,13 @@ double NHC_Y_WEIGHT, NHC_Z_WEIGHT;
 int    USE_WHEEL_VEL_GATE;
 double WHEEL_VEL_MAX, WHEEL_GYR_MAX;
 
+// ===== [SW1-1837] 이벤트 게이팅 (Phase 1: 다리각) =====
+int         USE_EVENT_GATING;
+int         GATE_LEG;
+double      LEG_POS_MIN, LEG_RATE_MIN, LEG_CMD_POS_MIN;
+double      LEG_PRE_MARGIN, LEG_POST_MARGIN, GATE_MAX_DURATION;
+std::string LEG_STATE_TOPIC, LEG_CMD_TOPIC_L, LEG_CMD_TOPIC_R;
+
 // ===== Wheel odometry tight-coupling (SW1-1829) =====
 int             USE_WHEEL;
 std::string     WHEEL_TOPIC;
@@ -383,6 +390,30 @@ void readParameters(rclcpp::Node* node)
         WHEEL_GYR_MAX = fsSettings["wheel_gyr_max"].empty() ? 4.0 : (double)fsSettings["wheel_gyr_max"];
         RCLCPP_INFO(node->get_logger(), "USE_WHEEL_VEL_GATE: 1, vel_max=%.2f m/s gyr_max=%.2f rad/s",
                     WHEEL_VEL_MAX, WHEEL_GYR_MAX);
+    }
+
+    // ===== [SW1-1837] 이벤트 게이팅 (Phase 1: 다리각) =====
+    // 키 없으면 0 → 비활성(기존 동작 유지). 근거·설계는 doc/EVENT_GATING.md 참조.
+    USE_EVENT_GATING = fsSettings["use_event_gating"].empty()
+                           ? 0 : (int)fsSettings["use_event_gating"];
+    if (USE_EVENT_GATING)
+    {
+        GATE_LEG          = fsSettings["gate_leg"].empty() ? 1 : (int)fsSettings["gate_leg"];
+        LEG_POS_MIN       = fsSettings["leg_pos_min"].empty() ? 0.03 : (double)fsSettings["leg_pos_min"];
+        LEG_RATE_MIN      = fsSettings["leg_rate_min"].empty() ? 0.05 : (double)fsSettings["leg_rate_min"];
+        LEG_CMD_POS_MIN   = fsSettings["leg_cmd_pos_min"].empty() ? 0.02 : (double)fsSettings["leg_cmd_pos_min"];
+        LEG_PRE_MARGIN    = fsSettings["leg_pre_margin"].empty() ? 0.3 : (double)fsSettings["leg_pre_margin"];
+        LEG_POST_MARGIN   = fsSettings["leg_post_margin"].empty() ? 0.5 : (double)fsSettings["leg_post_margin"];
+        GATE_MAX_DURATION = fsSettings["gate_max_duration"].empty() ? 2.0 : (double)fsSettings["gate_max_duration"];
+        if (fsSettings["leg_state_topic"].empty()) LEG_STATE_TOPIC = "/joint_states";
+        else fsSettings["leg_state_topic"] >> LEG_STATE_TOPIC;
+        if (fsSettings["leg_cmd_topic_l"].empty()) LEG_CMD_TOPIC_L = "/edie/l_leg_position_controller/command";
+        else fsSettings["leg_cmd_topic_l"] >> LEG_CMD_TOPIC_L;
+        if (fsSettings["leg_cmd_topic_r"].empty()) LEG_CMD_TOPIC_R = "/edie/r_leg_position_controller/command";
+        else fsSettings["leg_cmd_topic_r"] >> LEG_CMD_TOPIC_R;
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_EVENT_GATING: 1 (gate_leg=%d, rate>%.3f rad/s, margin -%.1f/+%.1f s, cap %.1f s)",
+                    GATE_LEG, LEG_RATE_MIN, LEG_PRE_MARGIN, LEG_POST_MARGIN, GATE_MAX_DURATION);
     }
 
     fsSettings.release();

@@ -38,6 +38,20 @@ void Estimator::setParameter()
     sw       = SW;
     td_wheel = TD_WHEEL;
 
+    // ===== [SW1-1837] 이벤트 게이팅 detector 파라미터 배선 (config → detector) =====
+    if (USE_EVENT_GATING)
+    {
+        LegEventDetector::Params lp;
+        lp.pos_min      = LEG_POS_MIN;
+        lp.rate_min     = LEG_RATE_MIN;
+        lp.cmd_pos_min  = LEG_CMD_POS_MIN;
+        lp.pre_margin   = LEG_PRE_MARGIN;
+        lp.post_margin  = LEG_POST_MARGIN;
+        lp.max_duration = GATE_MAX_DURATION;
+        std::lock_guard<std::mutex> lk(m_leg_gate);
+        leg_gate.setParams(lp);
+    }
+
     featureTracker.readIntrinsicParameter(CAM_NAMES);
     if (FISHEYE)
     {
@@ -1439,6 +1453,9 @@ void Estimator::optimization()
             problem.AddParameterBlock(para_plane_Z[0], 1);
             for (int i = 0; i <= frame_count; i++)
             {
+                // [SW1-1837] 다리 이벤트 중엔 몸체 pitch가 실제로 변함 → 수평/고도 강제가 오차 주입 → skip
+                if (isLegGated(Headers[i], Headers[i]))
+                    continue;
                 ceres::CostFunction *plane_factor =
                     PlaneFactor::Create(PITCH_N_INV, ROLL_N_INV, ZPW_N_INV);
                 problem.AddResidualBlock(plane_factor, NULL, para_Pose[i],
@@ -1522,6 +1539,18 @@ void Estimator::optimization()
                     continue;  // 글리치 구간 휠 factor skip
             }
 
+            // [SW1-1837] 다리 이벤트 게이팅: 다리가 움직인 구간은 휠이 몸체 운동을 못 봄(v=w=0 주장)
+            //   → 틀린 앵커가 자세로 전가(07-13 실측: 자세 오차 1.6~3.4° 주입) → 그 구간 factor skip.
+            //   발동 확인용 INFO는 1s 스로틀(A/B 검증 시 육안 확인, 평시 이벤트 없으면 무출력).
+            if (isLegGated(Headers[i], Headers[j]))
+            {
+                static rclcpp::Clock gate_clk;
+                RCLCPP_INFO_THROTTLE(rclcpp::get_logger("vins_event_gate"), gate_clk, 1000,
+                                     "[EVENT-GATE] leg event: wheel factor skip (seg %.3f~%.3f)",
+                                     Headers[i], Headers[j]);
+                continue;
+            }
+
             WheelFactor *wheel_factor = new WheelFactor(pre_integrations_wheel[j]);
             // 블록: pose_i, pose_j, T_io(extrinsic), sx, sy, sw, td_wheel
             problem.AddResidualBlock(wheel_factor, NULL, para_Pose[i], para_Pose[j],
@@ -1542,6 +1571,9 @@ void Estimator::optimization()
         for (int i = 1; i <= frame_count; i++)
         {
             if (!pre_integrations_wheel[i] || pre_integrations_wheel[i]->sum_dt < 1e-3)
+                continue;
+            // [SW1-1837] 다리 이벤트 중엔 '휠 정지'가 몸체 정지를 의미하지 않음 → ZUPT 오적용 방지
+            if (isLegGated(Headers[i - 1], Headers[i]))
                 continue;
             double dt    = pre_integrations_wheel[i]->sum_dt;
             double v_avg = pre_integrations_wheel[i]->delta_p.norm() / dt;  // 평균 선속도 [m/s]
@@ -1587,6 +1619,9 @@ void Estimator::optimization()
     {
         for (int i = 0; i <= frame_count; i++)
         {
+            // [SW1-1837] 다리 이벤트 중엔 몸체가 실제로 수직 운동(들어올림) → vz=0 강제가 오차 주입 → skip
+            if (isLegGated(Headers[i], Headers[i]))
+                continue;
             VerticalVelocityFactor *vz_factor = new VerticalVelocityFactor(VERTICAL_VEL_WEIGHT);
             problem.AddResidualBlock(vz_factor, NULL, para_SpeedBias[i]);
         }
@@ -2230,6 +2265,29 @@ void Estimator::inputWheel(double t, const Vector3d &linearVelocity,
     wheelGyrBuf.push(make_pair(t, angularVelocity));
     m_wheel.unlock();
     // Step1: fast-predict/퍼블리시 생략 (VINS 출력은 vision+IMU 기반 그대로 유지)
+}
+
+// [SW1-1837] 다리 실측 각도 입력 (joint_states) — 이벤트 게이팅 detector에 전달
+void Estimator::inputLegState(double t, double theta_l, double theta_r)
+{
+    std::lock_guard<std::mutex> lk(m_leg_gate);
+    leg_gate.onMeasurement(t, theta_l, theta_r);
+}
+
+// [SW1-1837] 다리 위치 명령 입력 — 실측 반응 전에 게이트를 선행 개시
+void Estimator::inputLegCommand(double t, double target, bool left)
+{
+    std::lock_guard<std::mutex> lk(m_leg_gate);
+    leg_gate.onCommand(t, target, left);
+}
+
+// [SW1-1837] [t0,t1]이 다리 이벤트 구간(마진 포함)과 겹치는가 — optimization()의 factor skip 판정
+bool Estimator::isLegGated(double t0, double t1)
+{
+    if (!USE_EVENT_GATING || !GATE_LEG)
+        return false;
+    std::lock_guard<std::mutex> lk(m_leg_gate);
+    return leg_gate.overlaps(t0, t1);
 }
 
 void Estimator::updateLatestStates()

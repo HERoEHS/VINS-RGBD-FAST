@@ -20,6 +20,7 @@
 
 #include "../factor/imu_factor.h"
 #include "../factor/wheel_factor.h"
+#include "../utility/leg_event_detector.h"
 #include "../factor/marginalization_factor.h"
 #include "../factor/pose_local_parameterization.h"
 #include "../factor/projection_factor.h"
@@ -111,6 +112,11 @@ public:
     bool WheelAvailable(double t);
     bool getWheelInterval(double t0, double t1,
                           std::vector<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> &wheel_vector);
+
+    // ===== [SW1-1837] 이벤트 게이팅 (Phase 1: 다리각) =====
+    void inputLegState(double t, double theta_l, double theta_r);  // joint_states 실측
+    void inputLegCommand(double t, double target, bool left);      // 위치 명령(선행 트리거)
+    bool isLegGated(double t0, double t1);                         // factor skip 판정
 
     enum SolverFlag
     {
@@ -237,6 +243,11 @@ public:
     queue<pair<double, Eigen::Vector3d>>  wheelVelBuf;
     queue<pair<double, Eigen::Vector3d>>  wheelGyrBuf;
     double                                prevTime_wheel = -1, curTime_wheel{};
+
+    // ===== [SW1-1837] 다리 이벤트 구간 마킹 (이벤트 게이팅) =====
+    // 콜백 스레드(입력)와 process 스레드(optimization 판정)가 함께 접근 → mutex 필수
+    std::mutex       m_leg_gate;
+    LegEventDetector leg_gate;
 
     // [SW1-1837] ★잠복 버그 수정: Eigen 기본 생성자는 메모리를 초기화하지 않는데,
     //   latest_Bg는 VIO 초기화 완료 전에도 predictMotion()의 gyro bias로 읽힌다(estimator.cpp:2359).

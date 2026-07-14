@@ -260,3 +260,28 @@ nhc_z_weight: 300.0  # 바디 수직(vz) 잔차 가중 — ⚠️ 평지 tilt �
 use_wheel_vel_gate: 1
 wheel_vel_max: 0.6   # 선속도 |v| 상한 [m/s] (실측 포화 0.5 + 여유), 초과 구간 factor skip
 wheel_gyr_max: 3.3   # 각속도 |w| 상한 [rad/s] (실측 포화 3.0 + 여유), 초과 구간 factor skip
+
+# ================================================================
+# [SW1-1837] 이벤트 게이팅 (Phase 1: 다리각) — 상세는 doc/EVENT_GATING.md
+#   ★근거(07-13 실측, odom_fix_check 3-run): 다리 인출입(t=40~45s, 0.33rad 스윙) 순간
+#     VINS 자세 오차 0.04°→1.6~3.4° 일괄 주입 후 유지 → 궤적 tilt 4.3° 원인 확정.
+#     (대회전 1375°는 무해, 바닥 경사 ≤0.6° 무죄 — IMU 중력 대조로 판별)
+#   다리가 움직이는 동안 휠(v=w=0 주장)·plane(수평 강제)·vert(vz=0 강제)·ZUPT가 전부
+#   틀린 제약 → 이벤트 구간 [시작-pre, 종료+post]의 해당 factor를 skip(적분은 유지).
+#   신호 = joint_states 실측(변화율) + 위치 명령(선행 트리거, 실측 지연 보상).
+#   안전장치 = 연속 게이팅 상한(gate_max_duration) — 휠 앵커 상실 발산(07-01 실측 70m) 방지.
+#   발동 확인: `--ros-args --log-level vins_event_gate:=info` (기본 INFO, 1s 스로틀)
+# ================================================================
+use_event_gating: 0   # 마스터 (0=기존 동작 그대로. A/B 검증 후 기본값 결정)
+gate_leg: 1           # 다리각 이벤트 (마스터 on일 때)
+leg_pos_min: 0.03     # [rad] 정착 기준점 대비 변위 시작 임계 — 다리 엔코더 1-LSB(0.017rad)
+                      #   플리커가 순간 변화율론 1.7rad/s로 보여 오발동(07-13 A/B 1차 실측 6건)
+                      #   → 변위 기반 + 2 LSB 임계로 면역. 실제 스윙(0.33rad)은 확실히 초과.
+leg_rate_min: 0.05    # [rad/s] 진행 중 '아직 움직임' 판정 임계 (종료·정착용)
+leg_cmd_pos_min: 0.02 # [rad] 명령-실측 차 시작 임계
+leg_pre_margin: 0.3   # [s] 시작 소급 마진
+leg_post_margin: 0.5  # [s] 종료 후 유지 마진 (정착 진동 흡수)
+gate_max_duration: 2.0  # [s] 연속 게이팅 상한
+leg_state_topic: "/joint_states"
+leg_cmd_topic_l: "/edie/l_leg_position_controller/command"
+leg_cmd_topic_r: "/edie/r_leg_position_controller/command"

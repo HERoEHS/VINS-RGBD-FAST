@@ -123,6 +123,21 @@ extern int    USE_WHEEL_VEL_GATE;  // wheel 속도 outlier 게이팅 사용 여�
 extern double WHEEL_VEL_MAX;       // 선속도 |v| 상한 [m/s], 초과 샘플 드롭
 extern double WHEEL_GYR_MAX;       // 각속도 |w| 상한 [rad/s], 초과 샘플 드롭
 
+// ===== [SW1-1837] 이벤트 게이팅 (Phase 1: 다리각) =====
+// 다리 인출입 중엔 휠(v=w=0 주장)·plane(수평 강제)·vert(vz=0 강제)가 전부 틀린 제약이 됨
+// (07-13 실측: 다리 스윙 순간 자세 오차 1.6~3.4° 주입) → 이벤트 시각 구간의 factor를 skip.
+extern int         USE_EVENT_GATING;   // 마스터 토글 (0=기존 동작 유지)
+extern int         GATE_LEG;           // 다리각 이벤트 게이팅 사용 여부
+extern double      LEG_POS_MIN;        // [rad] 정착 기준점 대비 변위 시작 임계(엔코더 LSB 플리커 면역)
+extern double      LEG_RATE_MIN;       // [rad/s] 진행 중 '아직 움직임' 판정 임계(종료·정착용)
+extern double      LEG_CMD_POS_MIN;    // [rad] 명령-실측 차 시작 임계(선행 트리거)
+extern double      LEG_PRE_MARGIN;     // [s] 시작 소급 마진
+extern double      LEG_POST_MARGIN;    // [s] 종료 후 유지 마진
+extern double      GATE_MAX_DURATION;  // [s] 연속 게이팅 상한(휠 앵커 상실 발산 방지)
+extern std::string LEG_STATE_TOPIC;    // 다리 실측 각도 토픽 (joint_states)
+extern std::string LEG_CMD_TOPIC_L;    // 왼다리 위치 명령 토픽
+extern std::string LEG_CMD_TOPIC_R;    // 오른다리 위치 명령 토픽
+
 void readParameters(rclcpp::Node* node);
 
 enum SIZE_PARAMETERIZATION
