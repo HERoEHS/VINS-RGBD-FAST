@@ -238,11 +238,15 @@ public:
     queue<pair<double, Eigen::Vector3d>>  wheelGyrBuf;
     double                                prevTime_wheel = -1, curTime_wheel{};
 
+    // [SW1-1837] ★잠복 버그 수정: Eigen 기본 생성자는 메모리를 초기화하지 않는데,
+    //   latest_Bg는 VIO 초기화 완료 전에도 predictMotion()의 gyro bias로 읽힌다(estimator.cpp:2359).
+    //   힙 쓰레기가 NaN 패턴이면 회전 예측 전체가 NaN → 특징 추적 전멸 → 초기화 영구 불가.
+    //   (객체 레이아웃이 바뀌자 발현 — 07-13/14 재생 동결 사건의 근본 원인. 명시 초기화로 차단)
     double             latest_time{};
-    Eigen::Vector3d    latest_P;
-    Eigen::Quaterniond latest_Q;
-    Eigen::Vector3d    latest_V;
-    Eigen::Vector3d    latest_Ba;
-    Eigen::Vector3d    latest_Bg;
+    Eigen::Vector3d    latest_P  = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond latest_Q  = Eigen::Quaterniond::Identity();
+    Eigen::Vector3d    latest_V  = Eigen::Vector3d::Zero();
+    Eigen::Vector3d    latest_Ba = Eigen::Vector3d::Zero();
+    Eigen::Vector3d    latest_Bg = Eigen::Vector3d::Zero();
     bool               initFirstPoseFlag{};
 };
