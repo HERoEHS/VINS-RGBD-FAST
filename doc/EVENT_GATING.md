@@ -28,6 +28,8 @@ VINS 자세 오차(정지구간 IMU 중력 대조)가 0.04° → **1.6~3.4°로 
 - **구간 마킹**: 이벤트 [시작−`leg_pre_margin`, 종료+`leg_post_margin`].
   실측 검출이 늦는 문제는 소급 마진(pre)으로 보상.
 - **게이팅 대상**: WheelFactor(구간), PlaneFactor(프레임), VerticalVelocityFactor(프레임), ZUPT(구간).
+  **4개 전부 제외가 정답임을 A/B로 확인(07-16)** — 휠만 제외하는 부분 구성은 xy 이득이 소멸해 기각
+  (xy 이득의 주 출처가 plane/vert 제외이기 때문. 아래 검증 ③).
 - **안전장치**: 연속 게이팅 상한 `gate_max_duration`(기본 2s) — 휠 factor는 필수 스케일
   앵커라(끄면 발산, 07-01 실측 |pos| 70m) 무한정 뺄 수 없다. 상한 초과 시 강제 해제하고,
   정지 샘플을 관측하기 전엔 재점화하지 않는다.
@@ -40,7 +42,7 @@ VINS 자세 오차(정지구간 IMU 중력 대조)가 0.04° → **1.6~3.4°로 
 | `src/estimator/estimator.{h,cpp}` | `inputLegState/inputLegCommand/isLegGated` + 4개 factor 지점 skip |
 | `src/estimator_nodelet.cpp` | joint_states(BEST_EFFORT)·명령(RELIABLE) 구독 → estimator 전달 |
 | `src/utility/parameters.{h,cpp}` | config 파라미터 (기본 전부 off) |
-| `test/test_leg_event_detector.cpp` | 계약 테스트 7건(LSB 플리커 회귀 포함) |
+| `test/test_leg_event_detector.cpp` | 계약 테스트 8건(LSB 플리커·명령 스트림 회귀 포함) |
 
 ## 설정 (`vio_edie.yaml`)
 
@@ -61,13 +63,29 @@ leg_cmd_topic_r: "/edie/r_leg_position_controller/command"
 
 ## 검증
 
-1. **gtest**: `test_leg_event_detector` — 무동작/마진 마킹/명령 선행/무의미 명령/상한 강제해제·재무장/LSB 플리커 면역/정리 7건.
-2. **재생 A/B (성공 판정)**: `odom_fix_check` bag, `use_event_gating` 0 vs 1, 3-run:
-   - 40~46s 구간 `[EVENT-GATE]` 발동 확인
-   - 전역 tilt 4.32±0.50° → 챔피언 분포(2.19±0.97°) 회복
-   - xy-APE(0.091±0.016) 무손해, z범위(223±7mm) 악화 없음
+1. **gtest**: `test_leg_event_detector` — 무동작/마진 마킹/명령 선행/무의미 명령/지속 오차 명령 스트림 면역/상한 강제해제·재무장/LSB 플리커 면역/정리 8건.
+2. **재생 A/B ① (07-14, `odom_fix_check` bag — 정지 중 이벤트, 0 vs 1 각 3-run)**:
+   - 39.4~41.1s 발동(진짜 이벤트만, 오발동 0)
+   - 전역 tilt 5.42±0.34° → **2.87±0.11°(−47%, 챔피언 2.19±0.97° 분포권 진입)**
+     ※기준선이 4.32→5.42로 바뀐 것은 latest_* 미초기화 수정(`c830e42`)의 수렴 경로 변화 —
+     tilt 비교는 같은 빌드 내 A/B만 유효
+   - 비용: xy-APE 0.100±0.004 → 0.111±0.017(+11% 추세, 분포 겹침), z범위 253±17→284±23mm(경계)
    - 평가: `scripts/eval/plane_metrics.py` + 자세 오차 직접 측정(IMU 중력 대조)
-3. **회귀**: 다리 이벤트 없는 구간에서 발동 0회, 지표 불변.
+3. **재생 A/B ② (07-16, `edie_gate_verify_v4` bag — 주행 중 이벤트 9건·클러스터 5개, AprilTag GT 228포즈, 각 3-run)**:
+
+   | 지표 | 게이팅 끔 | 켬 · 4개 전부 제외(기본 구현) | 켬 · 휠만 제외(변형, 기각) |
+   |---|---|---|---|
+   | xy-APE [m] | 0.2054±0.0049 | **0.1896±0.0050 (−7.7%, 분포 완전 분리)** | 0.2115±0.0127 |
+   | z-APE [m] | 0.0216±0.0021 | 0.0267±0.0019 (+24% = +5mm) | 0.0222±0.0020 |
+
+   - **부분 제외(휠만) 기각**: xy 이득의 주 출처는 **plane/vert 제외** — 이벤트 중 몸체가
+     실제로 기우는데 수평(plane)·vz=0(vert) 강제가 자세→xy 오차로 전가되던 것을 해제한 효과.
+     휠만 빼면 속도 앵커만 잃고 틀린 수평 강제가 남아 이득 0(분산은 2.5배).
+   - z-APE +5mm는 제외 구간(전체 시간의 13%) 동안 z 제약이 함께 빠지는 구조적 비용 —
+     xy 이득(−16mm 절대)이 우세해 수용.
+   - ※이 bag은 다리로 몸체가 실제 수직 운동하므로 GT무관 평면지표(tilt·z범위)의 평지 전제가
+     깨짐 — 판정은 GT 기반 xy/z-APE만 사용.
+4. **회귀**: 다리 이벤트 없는 구간에서 발동 0회, 지표 불변. 발동은 3-run 결정론(동일 클러스터·동일 건수) 재현.
 
 ## 한계 / 후속 (Phase 2+)
 
@@ -83,6 +101,12 @@ leg_cmd_topic_r: "/edie/r_leg_position_controller/command"
   정착 중 플리커는 버스트당 최대 ~post_margin 연장 가능하나 실측상 연쇄 불가
   (124s 전수: 버스트 ≤0.05s, ~20s당 1회, 0.5s-연쇄 최장 0.05s) — 연장의 하드 상한은
   `gate_max_duration`이 보장.
+- **z-APE +5mm 비용(07-16 실측)**: 제외 구간 동안 plane/vert의 z 제약도 함께 빠지는 구조적
+  비용. 부분 제외(휠만)로는 해소 불가(xy 이득까지 소멸해 기각) — 필요해지면 이벤트 중
+  z-전용 보강(예: 이벤트 직전 고도 prior)이 후속 후보.
+- **cap 2s의 다중 스윙 한계(07-16 실측)**: 실제 다리 안무는 클러스터당 다중 스윙(~5-7s)이
+  가능해 cap이 첫 스윙만 덮고 후속 스윙은 cooldown으로 미게이팅(v4에서 강제종료 3/5).
+  cap 5s는 성능상 기각(07-14) — 성능 데이터 축적 후 재판단.
 - 이미 주입된 자세 오차의 **사후 교정은 범위 밖** — 게이팅은 주입 방지만 한다.
 - 다리각 변화 후 휠-IMU extrinsic이 새 상수로 바뀌는 문제(FK 갱신)는 SW1-1836 영역.
 - 슬립(휠-IMU 각속도 불일치), 범프(수직 acc), 경사(pitch rate) 이벤트는 Phase 2/3.
