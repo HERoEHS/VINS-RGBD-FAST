@@ -268,21 +268,26 @@ wheel_gyr_max: 3.3   # 각속도 |w| 상한 [rad/s] (실측 포화 3.0 + 여유)
 #     (대회전 1375°는 무해, 바닥 경사 ≤0.6° 무죄 — IMU 중력 대조로 판별)
 #   다리가 움직이는 동안 휠(v=w=0 주장)·plane(수평 강제)·vert(vz=0 강제)·ZUPT가 전부
 #   틀린 제약 → 이벤트 구간 [시작-pre, 종료+post]의 해당 factor를 skip(적분은 유지).
-#   신호 = joint_states 실측(변화율) + 위치 명령(선행 트리거, 실측 지연 보상).
+#   신호 = joint_states 실측(변위) + 위치 명령의 목표 변경(선행 트리거, 실측 지연 보상).
 #   안전장치 = 연속 게이팅 상한(gate_max_duration) — 휠 앵커 상실 발산(07-01 실측 70m) 방지.
 #   발동 확인: `--ros-args --log-level vins_event_gate:=info` (기본 INFO, 1s 스로틀)
 # ================================================================
-use_event_gating: 0   # 마스터 (0=기존 동작 그대로. A/B 검증 후 기본값 결정)
+use_event_gating: 1   # 마스터 — A/B 검증 완료로 기본 활성(07-16). 근거: ①정지 중 이벤트 bag
+                      #   (odom_fix_check 3+3run) tilt 5.42→2.87°(−47%) ②주행 중 이벤트 bag 2개
+                      #   (v4/v5, 코스·안무 상이) xy-APE −7.7%/−15.6% 재현, 비용 z-APE +5mm 일관
+                      #   ③유령 발동 0·이벤트 없으면 동작 무영향. 상세는 doc/EVENT_GATING.md 검증 절.
 gate_leg: 1           # 다리각 이벤트 (마스터 on일 때)
 
 ## (1-1) 이벤트 시작 판정: 실측 vs 실측(과거). 
-## 비교 대상: /joint_state의 left/rigt_leg_joint 실측 각도.
+## 비교 대상: /joint_state의 left/right_leg_joint 실측 각도.
 leg_pos_min: 0.03     # [rad] 정착 기준점 대비 변위 시작 임계 — 다리 엔코더 1-LSB(0.017rad)
                       #   플리커가 순간 변화율론 1.7rad/s로 보여 오발동(07-13 A/B 1차 실측 6건)
                       #   → 변위 기반 + 2 LSB 임계로 면역. 실제 스윙(0.33rad)은 확실히 초과.
-## (1-2) 이벤트 시작 판정: 실측 vs 명령.
-## 비교 대상: /joint_state의 left/right_leg_joint 실측 각도 vs /edie/l_leg_position_controller/command, /edie/r_leg_position_controller/command 명령 각도.
-leg_cmd_pos_min: 0.02 # [rad] 명령-실측 차 시작 임계
+## (1-2) 이벤트 시작 판정: 명령 목표 변경 감지 (직전 목표 vs 새 목표).
+## 비교 대상: /edie/{l,r}_leg_position_controller/command의 새 목표 vs 같은 토픽의 직전 목표.
+##   ※실측과는 비교하지 않는다 — 이전 구현(|목표-실측| 비교)은 기계적 스탠드오프(~2° 지속 오차)를 
+##                           매 메시지 새 이벤트로 오인해 45% 과게이팅(07-14 실측) → '목표 변경 감지'로 교체(b140ee8).
+leg_cmd_pos_min: 0.02 # [rad] 목표 '변경량' 시작 임계 — 직전 목표 대비
 
 leg_pre_margin: 0.3   # [s] 시작 소급 마진
 ## (2) 이벤트 종료 판정: 마지막 움직임 후 이 시간 동안 조용하면 이벤트 종료.
@@ -293,7 +298,12 @@ leg_rate_min: 0.05    # [rad/s] 종료(정착) 판정용. 다리각은 펌웨어
                       #   → (0, 0.87)에선 값이 불감 = 현재는 잠자는 파라미터(연속값 입력 대비용).
                       #   정착의 실질 노브는 leg_post_margin
 
-gate_max_duration: 2.0  # [s] 연속 게이팅 상한
+gate_max_duration: 2.0  # [s] 연속 게이팅 상한. 알려진 한계: 다중 스윙 안무(~5-7s)는 첫
+                        #   스윙만 커버(v2 시뮬 강제종료 5/6). cap 5s는 07-14 A/B에서 기각 —
+                        #   단 그 판정 지표(tilt 분산)는 '정지 중 이벤트' bag(odom_fix_check,
+                        #   평지 전제 근사 유지)에서만 유효. 주행 중 이벤트 bag(v4+)은 다리
+                        #   실 z모션으로 평면지표 전제가 깨져 재평가 시 GT APE로만 판정할 것
+                        #   (doc/EVENT_GATING.md 검증③ 참조)
 leg_state_topic: "/joint_states"
 leg_cmd_topic_l: "/edie/l_leg_position_controller/command"
 leg_cmd_topic_r: "/edie/r_leg_position_controller/command"
