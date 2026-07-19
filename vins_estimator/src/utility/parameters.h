@@ -100,6 +100,12 @@ extern double ZUPT_VEL_THRESH;   // 정지 판정: 평균 wheel 선속도 임계
 extern double ZUPT_GYR_THRESH;   // 정지 판정: 평균 wheel 각속도 임계 [rad/s]
 extern double ZUPT_WEIGHT;       // zero-velocity 잔차 가중치 (클수록 강하게 0)
 
+// ===== 정지 시 중력 재정렬 (SW1-1837, gravity realignment at standstill) =====
+extern int    USE_GRAVITY_ALIGN;          // 정지 프레임 acc 평균으로 잔여 roll/pitch 사후 교정 (0=미사용)
+extern double GRAVITY_ALIGN_WEIGHT;       // 잔차 가중치 = 1/σ_angle [1/rad]
+extern double GRAVITY_ALIGN_VEL_THRESH;   // 정지 판정: 평균 wheel 선속도 임계 [m/s] (ZUPT와 별도 — use_zupt:0이어도 동작)
+extern double GRAVITY_ALIGN_GYR_THRESH;   // 정지 판정: 평균 wheel 각속도 임계 [rad/s]
+
 // ===== Accelerometer-bias prior (SW1-1836) =====
 extern int    USE_ACC_BIAS_PRIOR;   // acc bias를 target(0)으로 당기는 prior 사용 여부 (0=미사용)
 extern double ACC_BIAS_PRIOR_W_XY;  // 수평(ax,ay) prior 가중치 (클수록 강하게 0)

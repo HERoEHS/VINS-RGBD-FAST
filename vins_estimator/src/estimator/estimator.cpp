@@ -5,6 +5,7 @@
 #include "../factor/vertical_velocity_factor.h"
 #include "../factor/plane_factor.h"
 #include "../factor/body_nhc_factor.h"
+#include "../factor/gravity_align_factor.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -1595,6 +1596,62 @@ void Estimator::optimization()
         }
         // 이번 최적화에서 정지 제약이 걸린 프레임 수 요약
         RCLCPP_DEBUG(zupt_logger, "[ZUPT] applied %d / %d frames", zupt_cnt, frame_count);
+    }
+
+    /*******[SW1-1837] 정지 시 중력 재정렬: 정지 프레임 acc 평균(≈중력 방향)으로 잔여 roll/pitch 교정*******/
+    //   이벤트 게이팅(예방)이 못 막은 잔여 자세 주입의 사후 교정(감쇠≠차단, doc/EVENT_GATING.md 판정 절).
+    //   정지 중 acc는 중력만 감지 = 절대 roll/pitch 관측. 부팅 imu_offsets 교정으로 Ba≈0 전제,
+    //   잔여 Ba는 현재 추정치를 '상수'로 차감(bias를 파라미터로 안 넣는 이유는 factor 헤더 참조).
+    //   정지 판정 = 휠(ZUPT와 동일식, 전용 임계 — use_zupt:0이어도 동작) AND IMU 자체 검증
+    //   (자이로 평균·acc 흔들림) AND 다리 이벤트 게이팅 구간 제외(휠 정지 ≠ 몸체 정지).
+    if (USE_GRAVITY_ALIGN)
+    {
+        // IMU 자체 정지 검증 임계 — 자이로: 회전 부재, acc 표준편차: 진동/운동 부재.
+        //   acc 상한은 28~29Hz 구조 공진의 정지 시 진폭을 흡수하도록 여유(실측 기반 재조정 여지).
+        constexpr double kGaGyrQuiet  = 0.05;  // [rad/s] Bg 차감 후 자이로 평균 노름 상한
+        constexpr double kGaAccStdMax = 0.5;   // [m/s^2] acc 편차 RMS 상한
+        int ga_cnt = 0;
+        for (int i = 1; i <= frame_count; i++)
+        {
+            if (!pre_integrations_wheel[i] || pre_integrations_wheel[i]->sum_dt < 1e-3)
+                continue;
+            if (!pre_integrations[i] || pre_integrations[i]->acc_buf.size() < 5)
+                continue;
+            // 다리 이벤트 중 '휠 정지'는 몸체 정지가 아님 → 재정렬 금지
+            if (isLegGated(Headers[i - 1], Headers[i]))
+                continue;
+            const double ga_dt    = pre_integrations_wheel[i]->sum_dt;
+            const double ga_v_avg = pre_integrations_wheel[i]->delta_p.norm() / ga_dt;
+            const double ga_w_avg = 2.0 * std::acos(std::min(1.0, std::fabs(
+                                        pre_integrations_wheel[i]->delta_q.w()))) / ga_dt;
+            if (ga_v_avg >= GRAVITY_ALIGN_VEL_THRESH || ga_w_avg >= GRAVITY_ALIGN_GYR_THRESH)
+                continue;
+            // IMU 창 통계 (프레임 i 구간의 acc/gyr 원시 샘플)
+            const auto &ga_accs = pre_integrations[i]->acc_buf;
+            const auto &ga_gyrs = pre_integrations[i]->gyr_buf;
+            Eigen::Vector3d acc_mean = Eigen::Vector3d::Zero();
+            Eigen::Vector3d gyr_mean = Eigen::Vector3d::Zero();
+            for (const auto &a : ga_accs) acc_mean += a;
+            for (const auto &g : ga_gyrs) gyr_mean += g;
+            acc_mean /= static_cast<double>(ga_accs.size());
+            gyr_mean /= static_cast<double>(ga_gyrs.size());
+            double acc_var = 0.0;
+            for (const auto &a : ga_accs) acc_var += (a - acc_mean).squaredNorm();
+            const double acc_std = std::sqrt(acc_var / static_cast<double>(ga_accs.size()));
+            if ((gyr_mean - Bgs[i]).norm() > kGaGyrQuiet || acc_std > kGaAccStdMax)
+                continue;
+            // 실측 중력(위) 방향 = acc 평균 − 현재 Ba 추정(상수 취급, 매 최적화마다 최신값으로 갱신됨)
+            const Eigen::Vector3d g_body = (acc_mean - Bas[i]).normalized();
+            problem.AddResidualBlock(GravityAlignFactor::Create(g_body, GRAVITY_ALIGN_WEIGHT),
+                                     NULL, para_Pose[i]);
+            ga_cnt++;
+        }
+        if (ga_cnt > 0)
+        {
+            static rclcpp::Clock ga_clk;
+            RCLCPP_INFO_THROTTLE(rclcpp::get_logger("vins_gravity_align"), ga_clk, 1000,
+                                 "[GRAV-ALIGN] applied %d / %d frames", ga_cnt, frame_count);
+        }
     }
 
     /*******[SW1-1836] Accelerometer-bias prior: 수평 acc bias 과대추정 억제 → z drift 완화*******/

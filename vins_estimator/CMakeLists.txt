@@ -154,6 +154,14 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
   target_link_libraries(test_body_nhc_factor ${CERES_LIBRARIES})
+
+  # GravityAlignFactor(AutoDiff, ceres+Eigen 헤더-only) 단독 검증
+  ament_add_gtest(test_gravity_align_factor test/test_gravity_align_factor.cpp)
+  target_include_directories(test_gravity_align_factor PRIVATE
+    ${CERES_INCLUDE_DIRS}
+    ${EIGEN3_INCLUDE_DIR}
+  )
+  target_link_libraries(test_gravity_align_factor ${CERES_LIBRARIES})
 endif()
 
 ament_package()

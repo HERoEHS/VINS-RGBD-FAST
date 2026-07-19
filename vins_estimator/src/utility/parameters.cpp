@@ -12,6 +12,10 @@ double VEL_N_wheel, GYR_N_wheel;
 int    USE_ZUPT;
 double ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT;
 
+// ===== 정지 시 중력 재정렬 (SW1-1837) =====
+int    USE_GRAVITY_ALIGN;
+double GRAVITY_ALIGN_WEIGHT, GRAVITY_ALIGN_VEL_THRESH, GRAVITY_ALIGN_GYR_THRESH;
+
 // ===== Accelerometer-bias prior (SW1-1836) =====
 int    USE_ACC_BIAS_PRIOR;
 double ACC_BIAS_PRIOR_W_XY, ACC_BIAS_PRIOR_W_Z;
@@ -331,6 +335,19 @@ void readParameters(rclcpp::Node* node)
         ZUPT_WEIGHT     = fsSettings["zupt_weight"].empty() ? 100.0 : (double)fsSettings["zupt_weight"];
         RCLCPP_INFO(node->get_logger(), "USE_ZUPT: 1, vel_th=%.3f gyr_th=%.3f weight=%.1f",
                     ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT);
+    }
+
+    // ===== 정지 시 중력 재정렬 (SW1-1837) =====
+    // use_gravity_align 키 없으면 0 → 비활성(기존 동작 유지). 정지 프레임 acc 평균(≈중력 방향)으로
+    // 이벤트 게이팅이 못 막은 잔여 roll/pitch 오차를 사후 교정. 임계는 ZUPT와 별도(use_zupt:0이어도 동작).
+    USE_GRAVITY_ALIGN = fsSettings["use_gravity_align"].empty() ? 0 : (int)fsSettings["use_gravity_align"];
+    if (USE_GRAVITY_ALIGN)
+    {
+        GRAVITY_ALIGN_WEIGHT     = fsSettings["gravity_align_weight"].empty() ? 200.0 : (double)fsSettings["gravity_align_weight"];
+        GRAVITY_ALIGN_VEL_THRESH = fsSettings["gravity_align_vel_thresh"].empty() ? 0.02 : (double)fsSettings["gravity_align_vel_thresh"];
+        GRAVITY_ALIGN_GYR_THRESH = fsSettings["gravity_align_gyr_thresh"].empty() ? 0.02 : (double)fsSettings["gravity_align_gyr_thresh"];
+        RCLCPP_INFO(node->get_logger(), "USE_GRAVITY_ALIGN: 1, weight=%.1f vel_th=%.3f gyr_th=%.3f",
+                    GRAVITY_ALIGN_WEIGHT, GRAVITY_ALIGN_VEL_THRESH, GRAVITY_ALIGN_GYR_THRESH);
     }
 
     // ===== Accelerometer-bias prior (SW1-1836) =====
