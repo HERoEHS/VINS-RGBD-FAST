@@ -32,7 +32,7 @@ def generate_launch_description():
             'vins_folder', default_value=vins_root_default,
             description="VINS-RGBD-FAST 루트 경로 (끝에 '/' 포함)"),
         DeclareLaunchArgument(
-            'log_level', default_value='debug',
+            'log_level', default_value='info', #'debug',
             description='vins_estimator RCLCPP 로그 레벨 (debug/info/warn/error)'),
         DeclareLaunchArgument(
             'use_sim_time', default_value='false',
