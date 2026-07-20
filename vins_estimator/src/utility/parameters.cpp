@@ -15,6 +15,7 @@ double ZUPT_VEL_THRESH, ZUPT_GYR_THRESH, ZUPT_WEIGHT;
 // ===== 정지 시 중력 재정렬 (SW1-1837) =====
 int    USE_GRAVITY_ALIGN;
 double GRAVITY_ALIGN_WEIGHT, GRAVITY_ALIGN_VEL_THRESH, GRAVITY_ALIGN_GYR_THRESH;
+double GRAVITY_ALIGN_MIN_ANGLE, GRAVITY_ALIGN_MAX_ANGLE, GRAVITY_ALIGN_COOLDOWN;
 
 // ===== Accelerometer-bias prior (SW1-1836) =====
 int    USE_ACC_BIAS_PRIOR;
@@ -346,8 +347,18 @@ void readParameters(rclcpp::Node* node)
         GRAVITY_ALIGN_WEIGHT     = fsSettings["gravity_align_weight"].empty() ? 200.0 : (double)fsSettings["gravity_align_weight"];
         GRAVITY_ALIGN_VEL_THRESH = fsSettings["gravity_align_vel_thresh"].empty() ? 0.02 : (double)fsSettings["gravity_align_vel_thresh"];
         GRAVITY_ALIGN_GYR_THRESH = fsSettings["gravity_align_gyr_thresh"].empty() ? 0.02 : (double)fsSettings["gravity_align_gyr_thresh"];
-        RCLCPP_INFO(node->get_logger(), "USE_GRAVITY_ALIGN: 1, weight=%.1f vel_th=%.3f gyr_th=%.3f",
-                    GRAVITY_ALIGN_WEIGHT, GRAVITY_ALIGN_VEL_THRESH, GRAVITY_ALIGN_GYR_THRESH);
+        // 모드 2(창 전체 보정) 전용 — config는 도(°) 단위, 내부는 rad
+        GRAVITY_ALIGN_MIN_ANGLE = (fsSettings["gravity_align_min_angle"].empty() ? 0.5
+                                       : (double)fsSettings["gravity_align_min_angle"]) * M_PI / 180.0;
+        GRAVITY_ALIGN_MAX_ANGLE = (fsSettings["gravity_align_max_angle"].empty() ? 3.0
+                                       : (double)fsSettings["gravity_align_max_angle"]) * M_PI / 180.0;
+        GRAVITY_ALIGN_COOLDOWN  = fsSettings["gravity_align_cooldown"].empty() ? 10.0
+                                       : (double)fsSettings["gravity_align_cooldown"];
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_GRAVITY_ALIGN: %d, weight=%.1f vel_th=%.3f gyr_th=%.3f min=%.1fdeg max=%.1fdeg cooldown=%.1fs",
+                    USE_GRAVITY_ALIGN, GRAVITY_ALIGN_WEIGHT, GRAVITY_ALIGN_VEL_THRESH,
+                    GRAVITY_ALIGN_GYR_THRESH, GRAVITY_ALIGN_MIN_ANGLE * 180.0 / M_PI,
+                    GRAVITY_ALIGN_MAX_ANGLE * 180.0 / M_PI, GRAVITY_ALIGN_COOLDOWN);
     }
 
     // ===== Accelerometer-bias prior (SW1-1836) =====

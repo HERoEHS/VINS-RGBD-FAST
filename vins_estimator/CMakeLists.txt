@@ -162,6 +162,12 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
   target_link_libraries(test_gravity_align_factor ${CERES_LIBRARIES})
+
+  # 중력 재정렬 v2(창 전체 자세 보정) 핵심 수학 — Eigen 헤더-only 단독 검증
+  ament_add_gtest(test_gravity_window_realign test/test_gravity_window_realign.cpp)
+  target_include_directories(test_gravity_window_realign PRIVATE
+    ${EIGEN3_INCLUDE_DIR}
+  )
 endif()
 
 ament_package()

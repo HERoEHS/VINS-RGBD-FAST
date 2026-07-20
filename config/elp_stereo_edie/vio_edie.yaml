@@ -185,10 +185,21 @@ zupt_weight: 100.0      # zero-velocity 잔차 가중치 (클수록 강하게 0)
 #   다리 이벤트 게이팅 구간 제외(휠 정지 ≠ 몸체 정지) + IMU 자체 정지 재검증(자이로·acc 흔들림).
 #   부팅 imu_offsets(드라이버 bias·장착기울기 교정)이 측정 신뢰의 전제. 발동 로그: [GRAV-ALIGN]
 # ================================================================
-use_gravity_align: 0        # A/B 검증 후 기본값 결정
-gravity_align_weight: 200.0 # 1/σ_angle [1/rad] — 정지 acc 평균의 방향 노이즈 σ≈0.005rad(0.3°) 가정
+#   모드: 0=끔 / 1=soft factor(w200·w1000 A/B 기각 — 실험 기록용 봉인) / 2=창 전체 자세 보정(재설계)
+#       / 3=창 보정+Ba 동시 재설정
+#   모드 2 = 정지 확정 시 1회, 창 전체(Ps·Rs·Vs)+marg prior 선형화점을 ΔR로 강체 회전 —
+#   상대 기하·재투영 잔차 불변이라 모드 1의 'xy 전가' 경로를 원리적으로 차단.
+#   단 표적이 (acc−Ba)라 Ba가 흡수한 자세 오차를 못 봄(odom_fix_check A/B: 긴 정지 raw 오차
+#   ~3°가 <0.5°로 보여 미발동) → 모드 3 = raw acc 표적 + Ba를 새 자세와 정합하게 재설정
+#   (marg prior Ba 선형화점 동반 이동 + preintegration 재전파). A/B 검증 후 기본값 결정.
+use_gravity_align: 0
+gravity_align_weight: 200.0 # (모드 1 전용) 1/σ_angle [1/rad] — 정지 acc 평균의 방향 노이즈 σ≈0.005rad(0.3°) 가정
 gravity_align_vel_thresh: 0.02  # [m/s] 정지판정: 휠 평균 선속도 임계 (zupt와 동일 기준, 전용 키)
 gravity_align_gyr_thresh: 0.02  # [rad/s] 정지판정: 휠 평균 각속도 임계
+gravity_align_min_angle: 1.0    # [deg] (모드 2/3) 발동 임계 — 이 미만 오차는 보정 안함. 0.5는 모드 3 A/B서
+                                #   말기 소각 연쇄 발동을 유발(xy 국소 churn 의심)해 1.0으로 상향 튜닝 중
+gravity_align_max_angle: 3.0    # [deg] (모드 2/3) 1회 보정 상한 — marg prior 소각 근사 유효 범위, 초과분은 다음 정지에서
+gravity_align_cooldown: 10.0    # [s]   (모드 2/3) 발동 간 최소 간격 — 짧은 정지 연쇄(7건/30s 실측)의 churn 방지
 
 # ================================================================
 # Accelerometer-bias prior (SW1-1836)

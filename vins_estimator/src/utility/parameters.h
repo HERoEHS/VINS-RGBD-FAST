@@ -105,6 +105,9 @@ extern int    USE_GRAVITY_ALIGN;          // 정지 프레임 acc 평균으로 �
 extern double GRAVITY_ALIGN_WEIGHT;       // 잔차 가중치 = 1/σ_angle [1/rad]
 extern double GRAVITY_ALIGN_VEL_THRESH;   // 정지 판정: 평균 wheel 선속도 임계 [m/s] (ZUPT와 별도 — use_zupt:0이어도 동작)
 extern double GRAVITY_ALIGN_GYR_THRESH;   // 정지 판정: 평균 wheel 각속도 임계 [rad/s]
+extern double GRAVITY_ALIGN_MIN_ANGLE;    // [rad] 모드 2/3: 발동 임계 — 이 미만 오차는 보정 안함
+extern double GRAVITY_ALIGN_MAX_ANGLE;    // [rad] 모드 2/3: 1회 보정 상한 — marg prior 소각 근사 유효 범위
+extern double GRAVITY_ALIGN_COOLDOWN;     // [s]   모드 2/3: 발동 간 최소 간격 — 연쇄 발동 churn 방지
 
 // ===== Accelerometer-bias prior (SW1-1836) =====
 extern int    USE_ACC_BIAS_PRIOR;   // acc bias를 target(0)으로 당기는 prior 사용 여부 (0=미사용)

@@ -118,6 +118,9 @@ public:
     void inputLegCommand(double t, double target, bool left);      // 위치 명령(선행 트리거)
     bool isLegGated(double t0, double t1);                         // factor skip 판정
 
+    // ===== [SW1-1837] 정지 시 중력 재정렬 v2: 창 전체 자세 보정 (use_gravity_align: 2) =====
+    void gravityRealignWindow();  // optimization() 직후 호출 — 정지 확정 시 1회 ΔR 일괄 보정
+
     enum SolverFlag
     {
         INITIAL,
@@ -150,6 +153,11 @@ public:
     Matrix3d back_R0, last_R, last_R0;
     Vector3d back_P0, last_P, last_P0;
     double Headers[(WINDOW_SIZE + 1)];
+
+    // [SW1-1837] 중력 재정렬 v2 상태 — 명시 초기화 필수(latest_Bg 미초기화 사고의 교훈)
+    bool     grav_realign_done{false};                         // 정지당 1회 발동 래치
+    Vector3d ba_at_realign{Vector3d::Zero()};                  // 보정 시점 Ba (관문 ④: 재수렴 관찰용)
+    double   grav_realign_last_t{-1.0e18};                     // 마지막 발동 시각 (쿨다운 판정용)
 
     IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)]{};
     Vector3d         acc_0, gyr_0;

@@ -6,6 +6,7 @@
 #include "../factor/plane_factor.h"
 #include "../factor/body_nhc_factor.h"
 #include "../factor/gravity_align_factor.h"
+#include "../utility/gravity_window_realign.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -154,6 +155,11 @@ void Estimator::clearState()
 
     failure_occur       = false;
     relocalization_info = false;
+
+    // [SW1-1837] 중력 재정렬 v2 래치 리셋 (failure reboot 시 이전 정지 상태 이월 방지)
+    grav_realign_done   = false;
+    ba_at_realign       = Vector3d::Zero();
+    grav_realign_last_t = -1.0e18;
 
     drift_correct_r = Matrix3d::Identity();
     drift_correct_t = Vector3d::Zero();
@@ -455,6 +461,11 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
 
         f_manager.triangulateWithDepth(Ps, tic, ric);
         optimization();
+        // [SW1-1837] 정지 시 중력 재정렬 v2 — 최적화·marg 완료 직후가 유일하게 안전한 삽입점:
+        //   여기서 창 상태와 marg prior 선형화점을 같은 ΔR로 돌려야 이후의
+        //   slideWindow(상대 pose만 사용)·updateLatestStates(보정된 상태 재독)가 자동 정합된다.
+        if (USE_GRAVITY_ALIGN >= 2)  // 2=창 회전만 / 3=창 회전+Ba 동시 재설정
+            gravityRealignWindow();
         ROS_DEBUG("solver costs: %fms", t_solve.toc());
 
         set<int> removeIndex;
@@ -1065,6 +1076,146 @@ void Estimator::solveOdometry()
     }
 }
 
+// [SW1-1837] 정지 시 중력 재정렬 v2 — 창 전체 자세 보정 (use_gravity_align: 2)
+//   soft factor(모드 1)의 실패 원인(최적화 안 줄다리기 → 자세 못 돌리고 xy 전가)을 구조로 회피:
+//   최적화 '밖'에서 정지 확정 시 1회, 창 전체와 marg prior 선형화점을 같은 ΔR로 강체 회전.
+//   원리·소각 근사 한계는 utility/gravity_window_realign.h 헤더 주석 참조.
+void Estimator::gravityRealignWindow()
+{
+    // --- 정지 확정 = 최신 2프레임 모두 3중 판정(휠 정지 AND IMU 정온 AND 게이팅 제외) 통과 ---
+    //   2프레임(~0.2s)이면 IMU 수십 샘플 → 중력 방향 측정에 충분(w1000 probe 발견 A: 짧은 정지 커버)
+    constexpr double kGyrQuiet  = 0.05;  // [rad/s] Bg 차감 후 자이로 평균 노름 상한
+    constexpr double kAccStdMax = 0.5;   // [m/s^2] acc 편차 RMS 상한 (28~29Hz 구조 공진 흡수 여유)
+    Vector3d acc_sum   = Vector3d::Zero();
+    size_t   acc_n     = 0;
+    bool     confirmed = true;
+    for (int i = frame_count - 1; i <= frame_count; i++)
+    {
+        if (i < 1 || !pre_integrations_wheel[i] || pre_integrations_wheel[i]->sum_dt < 1e-3 ||
+            !pre_integrations[i] || pre_integrations[i]->acc_buf.size() < 5 ||
+            isLegGated(Headers[i - 1], Headers[i]))  // 다리 이벤트 중 '휠 정지'는 몸체 정지 아님
+        {
+            confirmed = false;
+            break;
+        }
+        const double ga_dt    = pre_integrations_wheel[i]->sum_dt;
+        const double ga_v_avg = pre_integrations_wheel[i]->delta_p.norm() / ga_dt;
+        const double ga_w_avg = 2.0 * std::acos(std::min(1.0, std::fabs(
+                                    pre_integrations_wheel[i]->delta_q.w()))) / ga_dt;
+        if (ga_v_avg >= GRAVITY_ALIGN_VEL_THRESH || ga_w_avg >= GRAVITY_ALIGN_GYR_THRESH)
+        {
+            confirmed = false;
+            break;
+        }
+        const auto &accs = pre_integrations[i]->acc_buf;
+        const auto &gyrs = pre_integrations[i]->gyr_buf;
+        Vector3d a_mean = Vector3d::Zero(), g_mean = Vector3d::Zero();
+        for (const auto &a : accs) a_mean += a;
+        for (const auto &g : gyrs) g_mean += g;
+        a_mean /= static_cast<double>(accs.size());
+        g_mean /= static_cast<double>(gyrs.size());
+        double a_var = 0.0;
+        for (const auto &a : accs) a_var += (a - a_mean).squaredNorm();
+        if ((g_mean - Bgs[i]).norm() > kGyrQuiet ||
+            std::sqrt(a_var / static_cast<double>(accs.size())) > kAccStdMax)
+        {
+            confirmed = false;
+            break;
+        }
+        acc_sum += a_mean * static_cast<double>(accs.size());
+        acc_n   += accs.size();
+    }
+
+    if (!confirmed)
+    {
+        // 움직임 재개 → 래치 해제 + Ba 이동량 보고(검증 관문 ④: 보정이 Ba로 전가됐는지 관찰)
+        if (grav_realign_done)
+        {
+            RCLCPP_INFO(rclcpp::get_logger("vins_gravity_realign"),
+                        "[GRAV-REALIGN] release t=%.3f dBa=%.4f",
+                        Headers[frame_count], (Bas[frame_count] - ba_at_realign).norm());
+            grav_realign_done = false;
+        }
+        return;
+    }
+    if (grav_realign_done)  // 정지당 1회 — soft처럼 상시 인력을 걸지 않는다(스냅·복원력 회피)
+        return;
+
+    // 실측 '위' 방향 — 모드 2: acc 평균 − 추정 Ba (자기일관 표적).
+    //   모드 3: raw acc 평균 — 모드 2 A/B 실증: (acc−Ba) 표적은 Ba가 흡수한 자세 오차
+    //   (긴 정지 raw 기준 ~3°)를 <0.5°로 보아 보정을 못 건다 → raw를 표적으로 삼고
+    //   아래에서 Ba를 새 자세와 정합하게 재설정한다(근거는 gravity_window_realign.h 주석).
+    const Vector3d acc_mean = acc_sum / static_cast<double>(acc_n);
+    const Vector3d u_meas   = (USE_GRAVITY_ALIGN == 3) ? acc_mean : acc_mean - Bas[frame_count];
+    double         angle  = 0.0;
+    const Matrix3d dR     = gravity_realign::computeDeltaR(u_meas, Rs[frame_count],
+                                                           GRAVITY_ALIGN_MAX_ANGLE, &angle);
+    if (angle < GRAVITY_ALIGN_MIN_ANGLE)
+        return;  // 이미 정렬 — 미발동(래치도 안 걸어 장기 정지 중 드리프트 재평가 허용)
+    if (Headers[frame_count] - grav_realign_last_t < GRAVITY_ALIGN_COOLDOWN)
+        return;  // 쿨다운 — 짧은 정지 연쇄(모드 3 A/B: 7건/30s)가 만든 xy 국소 churn 방지
+
+    // --- 창 전체 강체 회전: pivot=현재 위치(정지 중) → 현재 위치 불변, 과거 궤적만 기울임 ---
+    const Vector3d pivot = Ps[frame_count];
+    for (int i = 0; i <= WINDOW_SIZE; i++)
+    {
+        Ps[i] = pivot + dR * (Ps[i] - pivot);
+        Rs[i] = dR * Rs[i];
+        Vs[i] = dR * Vs[i];
+    }
+
+    // --- (모드 3) Ba 동시 재설정: 새 자세와 정합하는 값으로 균일 이동 ---
+    //   안 하면 IMU 잔차가 '옛 Ba' 기준으로 보정을 되돌리는 힘을 만든다(관문 ④의 복원력).
+    //   균일 이동이라 인접 프레임 bias 랜덤워크 잔차는 불변. 이동량이 J_ba 선형 범위를
+    //   넘을 수 있어 창 내 preintegration을 재전파(초기화 경로와 동일 관용구)로 정확화.
+    Vector3d d_ba = Vector3d::Zero();
+    if (USE_GRAVITY_ALIGN == 3)
+    {
+        d_ba = gravity_realign::computeConsistentBa(acc_mean, Rs[frame_count], G.z()) -
+               Bas[frame_count];
+        for (int i = 0; i <= WINDOW_SIZE; i++)
+            Bas[i] += d_ba;
+        for (int i = 1; i <= WINDOW_SIZE; i++)
+            if (pre_integrations[i])
+                pre_integrations[i]->repropagate(Bas[i], Bgs[i]);
+    }
+
+    // --- marg prior 선형화점도 같은 변환 — 생략하면 다음 solve가 보정을 되돌린다(리스크의 핵심) ---
+    //   keep_block_data[k]와 parameter_blocks[k]는 같은 루프에서 채워져 순서 정렬 보장
+    //   (marginalization_factor.cpp getParameterBlocks). size 7이 pose/extrinsic 공용이라
+    //   크기가 아닌 '주소 동일성'으로 블록을 판별. 야코비안은 소각 근사로 미회전(헤더 참조).
+    if (last_marginalization_info)
+    {
+        for (size_t k = 0; k < last_marginalization_parameter_blocks.size(); k++)
+        {
+            double *addr = last_marginalization_parameter_blocks[k];
+            double *data = last_marginalization_info->keep_block_data[k];
+            for (int j = 0; j <= WINDOW_SIZE; j++)
+            {
+                if (addr == para_Pose[j])
+                {
+                    gravity_realign::rotatePoseBlock(data, dR, pivot);
+                    break;
+                }
+                if (addr == para_SpeedBias[j])
+                {
+                    gravity_realign::rotateSpeedBiasBlock(data, dR, d_ba);
+                    break;
+                }
+            }
+        }
+    }
+
+    grav_realign_done   = true;
+    ba_at_realign       = Bas[frame_count];
+    grav_realign_last_t = Headers[frame_count];
+    RCLCPP_INFO(rclcpp::get_logger("vins_gravity_realign"),
+                "[GRAV-REALIGN] apply t=%.3f err=%.2fdeg cap=%.1fdeg |dBa|=%.4f Ba=[%.4f %.4f %.4f]",
+                Headers[frame_count], angle * 180.0 / M_PI,
+                GRAVITY_ALIGN_MAX_ANGLE * 180.0 / M_PI, d_ba.norm(),
+                Bas[frame_count].x(), Bas[frame_count].y(), Bas[frame_count].z());
+}
+
 void Estimator::vector2double()
 {
     for (int i = 0; i <= WINDOW_SIZE; i++)
@@ -1604,7 +1755,7 @@ void Estimator::optimization()
     //   잔여 Ba는 현재 추정치를 '상수'로 차감(bias를 파라미터로 안 넣는 이유는 factor 헤더 참조).
     //   정지 판정 = 휠(ZUPT와 동일식, 전용 임계 — use_zupt:0이어도 동작) AND IMU 자체 검증
     //   (자이로 평균·acc 흔들림) AND 다리 이벤트 게이팅 구간 제외(휠 정지 ≠ 몸체 정지).
-    if (USE_GRAVITY_ALIGN)
+    if (USE_GRAVITY_ALIGN == 1)  // 모드 1 = soft factor (w200/w1000 A/B 기각 — 실험 기록용 봉인)
     {
         // IMU 자체 정지 검증 임계 — 자이로: 회전 부재, acc 표준편차: 진동/운동 부재.
         //   acc 상한은 28~29Hz 구조 공진의 정지 시 진폭을 흡수하도록 여유(실측 기반 재조정 여지).
