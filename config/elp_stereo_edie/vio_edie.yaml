@@ -166,6 +166,12 @@ estimate_extrinsic_wheel: 0    # Step1=0 고정. Step2에서 1(온라인 추정)
 estimate_intrinsic_wheel: 0    # Step1=0 고정. Step2에서 1
 estimate_td_wheel: 0           # Step1=0 고정. Step2에서 1
 
+# 휠 회전 잔차 주변화 (SW1-1837 yaw 처방): 1이면 휠 factor를 위치 3x3 제약만으로 재구성.
+#   근거: 휠 twist +65ms 지연(컨트롤러 rolling mean)이 회전 전이 구간서 몸체 yaw 오염
+#   (v7 A/B: 회전 잔차 제거 시 yaw 드리프트 −45%·run 재현성 회복). 회전은 gyro가 우월.
+#   컨트롤러 65ms 근본 수정 후 재평가 대상.
+wheel_rot_marginalize: 0
+
 # ================================================================
 # Zero-velocity Update (ZUPT, SW1-1837) — 정지 시 속도 0 제약 → z drift 완화
 #   평지 주행서 VINS가 수평 acc bias를 오추정 → pitch bias → z drift 누적.
@@ -330,3 +336,15 @@ gate_max_duration: 2.0  # [s] 연속 게이팅 상한. 알려진 한계: 다중 
 leg_state_topic: "/joint_states"
 leg_cmd_topic_l: "/edie/l_leg_position_controller/command"
 leg_cmd_topic_r: "/edie/r_leg_position_controller/command"
+
+# ================================================================
+# 고속 회전 비전 게이팅 (SW1-1837, yaw 드리프트 처방)
+#   GT 확정(v5/v7): gyro 단독 yaw −0.11%로 거의 완벽한데 VINS 융합 −2%(−20°) — 고속
+#   스핀서 특징추적 실패로 비전 재투영 factor가 회전을 under-count해 좋은 gyro yaw 오염.
+#   사용자 EKF 실측(비전 없는 gyro+휠 융합이 yaw 양호)이 독립 확증. 처방 = 고속 회전
+#   프레임의 재투영 factor를 최적화·marg에서 skip → 그 구간 IMU preint(gyro)에 위임.
+# ================================================================
+use_yaw_gating: 1          # 마스터 토글 (0=기존 동작 유지, A/B 검증 후 기본값 결정)
+yaw_gate_gyr_thresh: 0.6   # [rad/s] 프레임 평균 |ω−Bg| 이 값 초과 시 비전 관측 skip
+                           #   0.6 rad/s ≈ 34°/s. 보수적 시작값 — A/B로 튜닝(v5 실측 발산은
+                           #   30~60°/s 대역서 최악, 60°/s+는 오히려 양호했음)

@@ -82,7 +82,21 @@ class WheelFactor : public ceres::SizedCostFunction<6, 7, 7, 7, 1, 1, 1, 1>
 
         Eigen::Matrix<double, 6, 1> raw_residual = residual;
 
-        Eigen::Matrix<double, 6, 6> sqrt_info = Eigen::LLT<Eigen::Matrix<double, 6, 6>>(pre_integration->covariance.inverse()).matrixL().transpose();
+        // [SW1-1837] WHEEL_ROT_MARGINALIZE=1이면 회전 잔차(행 3~5)를 주변화하고 위치 3x3만 남긴다.
+        //   근거: 휠 twist +65ms 지연이 회전 전이 구간서 틀린 delta_q를 만들어 몸체 yaw 오염
+        //   (v7 A/B: 제거 시 드리프트 −45%·결정론 회복). 회전은 gyro가 우월(GT −0.11% vs 휠 +2.7%).
+        //   행만 0으로 두면 LLT 상삼각의 위치-회전 상관항이 남으므로 위치 블록 공분산만으로 재구성.
+        Eigen::Matrix<double, 6, 6> sqrt_info;
+        if (WHEEL_ROT_MARGINALIZE)
+        {
+            sqrt_info.setZero();
+            const Eigen::Matrix3d info_pp = pre_integration->covariance.topLeftCorner<3, 3>().inverse();
+            sqrt_info.topLeftCorner<3, 3>() = Eigen::LLT<Eigen::Matrix3d>(info_pp).matrixL().transpose();
+        }
+        else
+        {
+            sqrt_info = Eigen::LLT<Eigen::Matrix<double, 6, 6>>(pre_integration->covariance.inverse()).matrixL().transpose();
+        }
 //        sqrt_info.setIdentity();
 //        std::cout<<"sqrt_info :\n"<<sqrt_info<<std::endl;
         residual = sqrt_info * residual;

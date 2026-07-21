@@ -44,6 +44,13 @@ double      LEG_POS_MIN, LEG_RATE_MIN, LEG_CMD_POS_MIN;
 double      LEG_PRE_MARGIN, LEG_POST_MARGIN, GATE_MAX_DURATION;
 std::string LEG_STATE_TOPIC, LEG_CMD_TOPIC_L, LEG_CMD_TOPIC_R;
 
+// ===== 고속 회전 비전 게이팅 (SW1-1837, yaw 처방) =====
+int    USE_YAW_GATING;
+double YAW_GATE_GYR_THRESH;
+
+// ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
+int    WHEEL_ROT_MARGINALIZE;
+
 // ===== Wheel odometry tight-coupling (SW1-1829) =====
 int             USE_WHEEL;
 std::string     WHEEL_TOPIC;
@@ -443,6 +450,24 @@ void readParameters(rclcpp::Node* node)
                     "USE_EVENT_GATING: 1 (gate_leg=%d, rate>%.3f rad/s, margin -%.1f/+%.1f s, cap %.1f s)",
                     GATE_LEG, LEG_RATE_MIN, LEG_PRE_MARGIN, LEG_POST_MARGIN, GATE_MAX_DURATION);
     }
+
+    // ===== 고속 회전 비전 게이팅 (SW1-1837) =====
+    USE_YAW_GATING = fsSettings["use_yaw_gating"].empty() ? 0 : (int)fsSettings["use_yaw_gating"];
+    if (USE_YAW_GATING)
+    {
+        YAW_GATE_GYR_THRESH = fsSettings["yaw_gate_gyr_thresh"].empty()
+                                  ? 0.6 : (double)fsSettings["yaw_gate_gyr_thresh"];
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_YAW_GATING: 1 (프레임 평균 |w-Bg| > %.3f rad/s (%.0f deg/s) 시 비전 관측 skip)",
+                    YAW_GATE_GYR_THRESH, YAW_GATE_GYR_THRESH * 180.0 / M_PI);
+    }
+
+    // ===== 휠 회전 잔차 주변화 (SW1-1837) =====
+    WHEEL_ROT_MARGINALIZE = fsSettings["wheel_rot_marginalize"].empty()
+                                ? 0 : (int)fsSettings["wheel_rot_marginalize"];
+    if (WHEEL_ROT_MARGINALIZE)
+        RCLCPP_INFO(node->get_logger(),
+                    "WHEEL_ROT_MARGINALIZE: 1 (휠 factor 회전 잔차 주변화, 위치 3x3만 제약)");
 
     fsSettings.release();
 }

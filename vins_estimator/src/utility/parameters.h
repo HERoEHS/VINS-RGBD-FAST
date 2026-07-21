@@ -147,6 +147,18 @@ extern std::string LEG_STATE_TOPIC;    // 다리 실측 각도 토픽 (joint_sta
 extern std::string LEG_CMD_TOPIC_L;    // 왼다리 위치 명령 토픽
 extern std::string LEG_CMD_TOPIC_R;    // 오른다리 위치 명령 토픽
 
+// ===== 고속 회전 비전 게이팅 (SW1-1837, yaw 드리프트 처방) =====
+//   GT 확정: gyro yaw −0.11%로 거의 완벽, VINS 융합 −2%(비전이 고속 스핀서 오염).
+//   고속 회전 프레임의 재투영 factor를 skip → 그 구간 gyro(IMU preint)에 위임.
+extern int    USE_YAW_GATING;        // 마스터 토글 (0=기존 동작 유지)
+extern double YAW_GATE_GYR_THRESH;   // [rad/s] 프레임 평균 |ω−Bg| 이 값 초과 시 비전 관측 skip
+
+// ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 드리프트 처방) =====
+//   휠 twist는 +65ms 지연(diff_drive_controller rolling mean)으로 회전 전이 구간서
+//   틀린 delta_q를 만들어 몸체 yaw를 오염(v7 A/B: 잔차 제거 시 드리프트 −45%·결정론 회복).
+//   1이면 휠 factor를 위치 3x3 제약만으로 재구성(회전은 gyro가 우월: GT −0.11% vs 휠 +2.7%).
+extern int    WHEEL_ROT_MARGINALIZE; // 0=기존 6자유도 유지, 1=회전 잔차 주변화
+
 void readParameters(rclcpp::Node* node);
 
 enum SIZE_PARAMETERIZATION

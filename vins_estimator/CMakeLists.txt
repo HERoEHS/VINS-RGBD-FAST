@@ -168,6 +168,12 @@ if(BUILD_TESTING)
   target_include_directories(test_gravity_window_realign PRIVATE
     ${EIGEN3_INCLUDE_DIR}
   )
+
+  # 고속 회전 비전 게이팅 판정 로직 — Eigen 헤더-only 단독 검증
+  ament_add_gtest(test_yaw_gating test/test_yaw_gating.cpp)
+  target_include_directories(test_yaw_gating PRIVATE
+    ${EIGEN3_INCLUDE_DIR}
+  )
 endif()
 
 ament_package()

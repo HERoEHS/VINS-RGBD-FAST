@@ -7,6 +7,7 @@
 #include "../factor/body_nhc_factor.h"
 #include "../factor/gravity_align_factor.h"
 #include "../utility/gravity_window_realign.h"
+#include "../utility/yaw_gating.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -1864,6 +1865,15 @@ void Estimator::optimization()
     //重投影残差相关，此时使用了Huber损失核函数
     int f_m_cnt       = 0;
     int feature_index = -1;
+    // [SW1-1837] 프레임별 고속 회전 플래그 사전계산 — 관측마다 재계산 방지.
+    //   게이트는 끝점(imu_j)만 검사한다. 앵커(imu_i)까지 확장하는 변형은 A/B로 기각됨:
+    //   v7 yaw엔 무효과였고 v5에서 z범위를 2배 이상 악화시켰다(게이트량 2배의 비용만 확인).
+    bool fast_rot[WINDOW_SIZE + 1] = {false};
+    if (USE_YAW_GATING)
+        for (int fi = 0; fi <= frame_count; fi++)
+            fast_rot[fi] = yaw_gating::isFastRotation(angular_velocity_buf[fi], Bgs[fi],
+                                                      YAW_GATE_GYR_THRESH);
+
     for (auto &it_per_id : f_manager.feature)
     {
         if (it_per_id.is_dynamic)
@@ -1886,6 +1896,13 @@ void Estimator::optimization()
             imu_j++;
             if (imu_i == imu_j)
             {
+                continue;
+            }
+            // [SW1-1837] 고속 회전 프레임의 관측은 특징 추적 불신 → 재투영 factor skip.
+            //   그 구간의 상대 pose(yaw 포함)는 IMU preintegration(gyro, GT −0.11%)이 담당.
+            if (USE_YAW_GATING && fast_rot[imu_j])
+            {
+                yaw_gated_obs_++;
                 continue;
             }
             Vector3d pts_j = it_per_frame.point;  //测量值
@@ -1924,6 +1941,10 @@ void Estimator::optimization()
     }
     ROS_DEBUG("visual measurement count: %d", f_m_cnt);
     ROS_DEBUG("prepare for ceres: %f", t_prepare.toc());
+    // [SW1-1837] 고속 회전 게이팅 진단 — 이번 최적화 채택 관측 vs 누적 skip 관측
+    if (USE_YAW_GATING)
+        RCLCPP_INFO(rclcpp::get_logger("vins_yaw_gating"),
+                    "[YAW-GATE] used=%d gated_total=%ld", f_m_cnt, yaw_gated_obs_);
 
     //添加闭环检测残差，计算滑动窗口中与每一个闭环关键帧的相对位姿，这个相对位置是为后面的图优化准备
     if (relocalization_info)
@@ -2077,6 +2098,12 @@ void Estimator::optimization()
                 {
                     imu_j++;
                     if (imu_i == imu_j)
+                        continue;
+
+                    // [SW1-1837] 최적화와 동일 게이트 — marg prior도 제외해
+                    //   최적화/marg 일관성 유지(불일치 시 prior가 skip한 factor를 되살림).
+                    //   fast_rot는 위 최적화 단계서 사전계산된 배열 재사용(같은 함수 스코프).
+                    if (USE_YAW_GATING && fast_rot[imu_j])
                         continue;
 
                     Vector3d pts_j = it_per_frame.point;

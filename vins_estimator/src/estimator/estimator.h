@@ -159,6 +159,9 @@ public:
     Vector3d ba_at_realign{Vector3d::Zero()};                  // 보정 시점 Ba (관문 ④: 재수렴 관찰용)
     double   grav_realign_last_t{-1.0e18};                     // 마지막 발동 시각 (쿨다운 판정용)
 
+    // [SW1-1837] 고속 회전 비전 게이팅 — skip한 관측 수(A/B 진단 로그용)
+    long     yaw_gated_obs_{0};
+
     IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)]{};
     Vector3d         acc_0, gyr_0;
 
