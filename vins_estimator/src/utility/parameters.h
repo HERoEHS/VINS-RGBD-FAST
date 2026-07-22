@@ -156,10 +156,14 @@ extern double YAW_GATE_GYR_THRESH;   // [rad/s] 프레임 평균 |ω−Bg| 이 �
 // ===== Bg_z 잠금 (SW1-1837, yaw 드리프트 최종 처방) =====
 //   최적화기가 yaw 불일치를 Bg_z(gyro z-bias)로 도피시켜 참값의 15~40배로 과대추정하는
 //   것이 yaw 드리프트의 단일 지배 원인(인과 봉인 probe: 고정 시 v7 −24°→−2.7°).
-//   수렴 후 Bg_z를 상수 고정하되, 발동 전 |Bg_z| 검증으로 나쁜 값 고정을 방지.
-extern int    USE_BGZ_LOCK;    // 0=기존 동작 유지, 1=수렴 후 Bg_z 고정
-extern double BGZ_LOCK_DELAY;  // [s] 발동 전 수렴 대기 시간
-extern double BGZ_LOCK_MAX;    // [rad/s] 발동 시점 |Bg_z| 허용 상한(초과 시 잠금 보류)
+//   발동은 상태 기반(정지 지속 + 추정 안정 + 크기 가드) — 시간 고정 delay는 검증 bag
+//   안무 의존이라 B2C(시동 직후 조작)에 부적합했음. 조건별 근거는 bgz_lock.h 참조.
+extern int    USE_BGZ_LOCK;       // 0=기존 동작 유지, 1=상태 조건 성립 시 Bg_z 고정
+extern double BGZ_LOCK_DELAY;     // [s] 첫 최적화 후 최소 대기(1s 과도 스파이크 회피 벨트)
+extern double BGZ_LOCK_STILL_SEC; // [s] 정지 지속 요구 시간(= 안정성 판정 창 길이)
+extern double BGZ_LOCK_STAB_MAX;  // [rad/s] 창 내 Bg_z 변동폭(max-min) 허용 상한
+extern double BGZ_LOCK_FALLBACK_SEC; // [s] 정지 누적 시 중앙값 폴백 발동(요동 세션 대응, <=0=off)
+extern double BGZ_LOCK_MAX;       // [rad/s] 발동 시점 |Bg_z| 허용 상한(초과 시 잠금 보류)
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 드리프트 처방) =====
 //   휠 twist는 +65ms 지연(diff_drive_controller rolling mean)으로 회전 전이 구간서

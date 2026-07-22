@@ -128,9 +128,9 @@ void Estimator::clearState()
         }
     }
     first_imu = false, sum_of_back = 0;
-    // [SW1-1837] Bg_z 잠금 상태 초기화 — 재시작 시 새로 수렴 대기부터
-    bgz_locked_        = false;
-    bgz_lock_ref_time_ = -1.0;
+    // [SW1-1837] Bg_z 잠금 상태 초기화 — 재시작 시 새로 정지·수렴 관찰부터
+    bgz_locked_       = false;
+    bgz_lock_tracker_ = bgz_lock::Tracker{};
     sum_of_front      = 0;
     frame_count       = 0;
     solver_flag       = INITIAL;
@@ -1548,14 +1548,24 @@ void Estimator::optimization()
     // [SW1-1837] Bg_z 잠금 — 수렴 후 gyro z-bias를 상수로 고정해 'Bg_z 도피' 경로 차단.
     //   근거: 최적화기가 yaw 불일치(휠 타이밍·저품질 장면)를 Bg_z로 도피시켜 참값의
     //   15~40배로 과대추정하는 것이 yaw 드리프트의 단일 지배 원인(인과 봉인 probe:
-    //   고정 시 v7 yaw −24°→−2.7°, xy 개선, z/tilt 무비용). 발동 전 |Bg_z| 검증으로
-    //   이미 부풀어버린 값을 잠그는 사고를 방지(6월 ZUPT 과제약 사고 교훈).
+    //   고정 시 v7 yaw −24°→−2.7°, xy 개선, z/tilt 무비용).
+    //   발동은 상태 기반(정지 지속 + 추정 안정 + 크기 가드) — 시동 직후 바로 조작하는
+    //   B2C 사용에서도 init 직후의 자연 정지 꼬리(~4-6s)에 자동 발동. 조건 상세와
+    //   각 조건이 막는 사고는 bgz_lock.h 참조.
     if (USE_BGZ_LOCK && !bgz_locked_)
     {
-        if (bgz_lock_ref_time_ < 0.0)
-            bgz_lock_ref_time_ = Headers[frame_count];
-        else if (bgz_lock::shouldLock(Headers[frame_count] - bgz_lock_ref_time_,
-                                      Bgs[WINDOW_SIZE].z(), BGZ_LOCK_DELAY, BGZ_LOCK_MAX))
+        // 정지 판정: 회전(gyro, bias 보정)·병진(추정 속도) 모두 문턱 이하.
+        //   문턱 근거: 정지 시 gyro 노이즈·Vs 오차 ≪ 0.05인 반면 주행/회전은 ≥0.1 —
+        //   두 분포가 겹치지 않는 보수적 경계값.
+        constexpr double kStillGyrRadps = 0.05;  // ≈ 2.9 °/s
+        constexpr double kStillVelMps   = 0.05;
+        const bool still_now = (gyr_0 - Bgs[WINDOW_SIZE]).norm() < kStillGyrRadps &&
+                               Vs[WINDOW_SIZE].norm() < kStillVelMps;
+        const bgz_lock::Params lock_params{BGZ_LOCK_DELAY, BGZ_LOCK_STILL_SEC,
+                                           BGZ_LOCK_STAB_MAX, BGZ_LOCK_FALLBACK_SEC,
+                                           BGZ_LOCK_MAX};
+        if (bgz_lock_tracker_.update(Headers[frame_count], Bgs[WINDOW_SIZE].z(), still_now,
+                                     lock_params))
         {
             bgz_locked_ = true;
             RCLCPP_INFO(rclcpp::get_logger("vins_bgz_lock"),

@@ -50,8 +50,11 @@ double YAW_GATE_GYR_THRESH;
 
 // ===== Bg_z 잠금 (SW1-1837, yaw 최종 처방) =====
 int    USE_BGZ_LOCK;
-double BGZ_LOCK_DELAY = 10.0;
-double BGZ_LOCK_MAX   = 0.001;
+double BGZ_LOCK_DELAY     = 3.0;
+double BGZ_LOCK_STILL_SEC = 2.0;
+double BGZ_LOCK_STAB_MAX     = 2e-4;
+double BGZ_LOCK_FALLBACK_SEC = 8.0;
+double BGZ_LOCK_MAX          = 0.001;
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
@@ -472,12 +475,21 @@ void readParameters(rclcpp::Node* node)
     if (USE_BGZ_LOCK)
     {
         BGZ_LOCK_DELAY = fsSettings["bgz_lock_delay"].empty()
-                             ? 10.0 : (double)fsSettings["bgz_lock_delay"];
+                             ? 3.0 : (double)fsSettings["bgz_lock_delay"];
+        BGZ_LOCK_STILL_SEC = fsSettings["bgz_lock_still_sec"].empty()
+                                 ? 2.0 : (double)fsSettings["bgz_lock_still_sec"];
+        BGZ_LOCK_STAB_MAX = fsSettings["bgz_lock_stab_max"].empty()
+                                ? 2e-4 : (double)fsSettings["bgz_lock_stab_max"];
+        BGZ_LOCK_FALLBACK_SEC = fsSettings["bgz_lock_fallback_sec"].empty()
+                                    ? 8.0 : (double)fsSettings["bgz_lock_fallback_sec"];
         BGZ_LOCK_MAX = fsSettings["bgz_lock_max"].empty()
                            ? 0.001 : (double)fsSettings["bgz_lock_max"];
         RCLCPP_INFO(node->get_logger(),
-                    "USE_BGZ_LOCK: 1 (수렴 %.1fs 후 |Bg_z|<%.4f rad/s이면 Bg_z 상수 고정)",
-                    BGZ_LOCK_DELAY, BGZ_LOCK_MAX);
+                    "USE_BGZ_LOCK: 1 (상태 기반: 최소 %.1fs + 정지 %.1fs 지속 + 변동폭<%.1e"
+                    " (요동 세션은 정지 %.1fs 누적 시 중앙값 폴백) + |Bg_z|<%.4f rad/s이면"
+                    " Bg_z 상수 고정)",
+                    BGZ_LOCK_DELAY, BGZ_LOCK_STILL_SEC, BGZ_LOCK_STAB_MAX,
+                    BGZ_LOCK_FALLBACK_SEC, BGZ_LOCK_MAX);
     }
 
     // ===== 휠 회전 잔차 주변화 (SW1-1837) =====
