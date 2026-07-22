@@ -174,6 +174,9 @@ if(BUILD_TESTING)
   target_include_directories(test_yaw_gating PRIVATE
     ${EIGEN3_INCLUDE_DIR}
   )
+
+  # Bg_z 잠금 발동 판정 로직 — 헤더-only 단독 검증
+  ament_add_gtest(test_bgz_lock test/test_bgz_lock.cpp)
 endif()
 
 ament_package()

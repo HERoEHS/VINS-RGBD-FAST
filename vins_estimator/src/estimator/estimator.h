@@ -162,6 +162,10 @@ public:
     // [SW1-1837] 고속 회전 비전 게이팅 — skip한 관측 수(A/B 진단 로그용)
     long     yaw_gated_obs_{0};
 
+    // [SW1-1837] Bg_z 잠금 상태 — 수렴 대기 기준 시각과 발동 래치
+    bool     bgz_locked_{false};
+    double   bgz_lock_ref_time_{-1.0};
+
     IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)]{};
     Vector3d         acc_0, gyr_0;
 

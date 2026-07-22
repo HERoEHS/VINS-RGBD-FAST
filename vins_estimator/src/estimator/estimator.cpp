@@ -8,6 +8,7 @@
 #include "../factor/gravity_align_factor.h"
 #include "../utility/gravity_window_realign.h"
 #include "../utility/yaw_gating.h"
+#include "../utility/bgz_lock.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
 #include <iterator>
@@ -127,6 +128,9 @@ void Estimator::clearState()
         }
     }
     first_imu = false, sum_of_back = 0;
+    // [SW1-1837] Bg_z 잠금 상태 초기화 — 재시작 시 새로 수렴 대기부터
+    bgz_locked_        = false;
+    bgz_lock_ref_time_ = -1.0;
     sum_of_front      = 0;
     frame_count       = 0;
     solver_flag       = INITIAL;
@@ -1541,13 +1545,41 @@ void Estimator::optimization()
     //添加ceres参数块
     //因为ceres用的是double数组，所以在下面用vector2double做类型装换
     // Ps、Rs转变成para_Pose，Vs、Bas、Bgs转变成para_SpeedBias
+    // [SW1-1837] Bg_z 잠금 — 수렴 후 gyro z-bias를 상수로 고정해 'Bg_z 도피' 경로 차단.
+    //   근거: 최적화기가 yaw 불일치(휠 타이밍·저품질 장면)를 Bg_z로 도피시켜 참값의
+    //   15~40배로 과대추정하는 것이 yaw 드리프트의 단일 지배 원인(인과 봉인 probe:
+    //   고정 시 v7 yaw −24°→−2.7°, xy 개선, z/tilt 무비용). 발동 전 |Bg_z| 검증으로
+    //   이미 부풀어버린 값을 잠그는 사고를 방지(6월 ZUPT 과제약 사고 교훈).
+    if (USE_BGZ_LOCK && !bgz_locked_)
+    {
+        if (bgz_lock_ref_time_ < 0.0)
+            bgz_lock_ref_time_ = Headers[frame_count];
+        else if (bgz_lock::shouldLock(Headers[frame_count] - bgz_lock_ref_time_,
+                                      Bgs[WINDOW_SIZE].z(), BGZ_LOCK_DELAY, BGZ_LOCK_MAX))
+        {
+            bgz_locked_ = true;
+            RCLCPP_INFO(rclcpp::get_logger("vins_bgz_lock"),
+                        "[BGZ-LOCK] engaged t=%.3f bgz=%.6f rad/s", Headers[frame_count],
+                        Bgs[WINDOW_SIZE].z());
+        }
+    }
     for (int i = 0; i < frame_count + 1; i++)
     {
         ceres::LocalParameterization *local_parameterization = new PoseLocalParameterization();
         problem.AddParameterBlock(para_Pose[i], SIZE_POSE, local_parameterization);
         if (USE_IMU)
-            problem.AddParameterBlock(para_SpeedBias[i],
-                                      SIZE_SPEEDBIAS);  // v、Ba、Bg参数
+        {
+            if (bgz_locked_)
+            {
+                // para_SpeedBias 레이아웃 [V(0-2), Ba(3-5), Bg(6-8)] — Bg_z=인덱스 8만 고정
+                ceres::SubsetParameterization *sb_lock =
+                    new ceres::SubsetParameterization(SIZE_SPEEDBIAS, {8});
+                problem.AddParameterBlock(para_SpeedBias[i], SIZE_SPEEDBIAS, sb_lock);
+            }
+            else
+                problem.AddParameterBlock(para_SpeedBias[i],
+                                          SIZE_SPEEDBIAS);  // v、Ba、Bg参数
+        }
     }
     if (!USE_IMU)
     {
@@ -1945,6 +1977,14 @@ void Estimator::optimization()
     if (USE_YAW_GATING)
         RCLCPP_INFO(rclcpp::get_logger("vins_yaw_gating"),
                     "[YAW-GATE] used=%d gated_total=%ld", f_m_cnt, yaw_gated_obs_);
+
+    // [SW1-1837] Bg 시계열 진단 로그 — Bg_z 인플레 검증/포렌식용, 환경변수로만 활성(기본 off)
+    static const bool bg_log = (std::getenv("VINS_BG_LOG") != nullptr);
+    if (bg_log)
+        RCLCPP_INFO(rclcpp::get_logger("vins_bg_probe"),
+                    "[BG] t=%.3f bgx=%.6f bgy=%.6f bgz=%.6f",
+                    Headers[WINDOW_SIZE], Bgs[WINDOW_SIZE].x(), Bgs[WINDOW_SIZE].y(),
+                    Bgs[WINDOW_SIZE].z());
 
     //添加闭环检测残差，计算滑动窗口中与每一个闭环关键帧的相对位姿，这个相对位置是为后面的图优化准备
     if (relocalization_info)

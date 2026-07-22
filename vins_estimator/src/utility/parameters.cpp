@@ -48,6 +48,11 @@ std::string LEG_STATE_TOPIC, LEG_CMD_TOPIC_L, LEG_CMD_TOPIC_R;
 int    USE_YAW_GATING;
 double YAW_GATE_GYR_THRESH;
 
+// ===== Bg_z 잠금 (SW1-1837, yaw 최종 처방) =====
+int    USE_BGZ_LOCK;
+double BGZ_LOCK_DELAY = 10.0;
+double BGZ_LOCK_MAX   = 0.001;
+
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
 
@@ -460,6 +465,19 @@ void readParameters(rclcpp::Node* node)
         RCLCPP_INFO(node->get_logger(),
                     "USE_YAW_GATING: 1 (프레임 평균 |w-Bg| > %.3f rad/s (%.0f deg/s) 시 비전 관측 skip)",
                     YAW_GATE_GYR_THRESH, YAW_GATE_GYR_THRESH * 180.0 / M_PI);
+    }
+
+    // ===== Bg_z 잠금 (SW1-1837) =====
+    USE_BGZ_LOCK = fsSettings["use_bgz_lock"].empty() ? 0 : (int)fsSettings["use_bgz_lock"];
+    if (USE_BGZ_LOCK)
+    {
+        BGZ_LOCK_DELAY = fsSettings["bgz_lock_delay"].empty()
+                             ? 10.0 : (double)fsSettings["bgz_lock_delay"];
+        BGZ_LOCK_MAX = fsSettings["bgz_lock_max"].empty()
+                           ? 0.001 : (double)fsSettings["bgz_lock_max"];
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_BGZ_LOCK: 1 (수렴 %.1fs 후 |Bg_z|<%.4f rad/s이면 Bg_z 상수 고정)",
+                    BGZ_LOCK_DELAY, BGZ_LOCK_MAX);
     }
 
     // ===== 휠 회전 잔차 주변화 (SW1-1837) =====
