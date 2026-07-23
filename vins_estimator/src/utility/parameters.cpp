@@ -58,7 +58,8 @@ double BGZ_LOCK_MAX          = 0.001;
 double BGZ_RELOCK_DELTA      = 5e-4;
 
 // ===== 고주기 body TF (SW1-1837) =====
-int PUB_HF_BODY_TF = 0;
+int    PUB_HF_BODY_TF = 0;
+double HF_BODY_TF_TAU = 0.05;
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
@@ -503,9 +504,12 @@ void readParameters(rclcpp::Node* node)
         fsSettings["publish_hf_body_tf"].empty() ? 0 : (int)fsSettings["publish_hf_body_tf"];
     if (PUB_HF_BODY_TF)
     {
+        HF_BODY_TF_TAU = fsSettings["hf_body_tf_tau"].empty()
+                             ? 0.05 : (double)fsSettings["hf_body_tf_tau"];
         RCLCPP_INFO(node->get_logger(),
                     "PUB_HF_BODY_TF: 1 (map->body TF를 IMU 전파 자세로 100Hz 송출, "
-                    "저주기 송출 중단)");
+                    "저주기 송출 중단, 스무딩 tau=%.3fs)",
+                    HF_BODY_TF_TAU);
     }
 
     // ===== 휠 회전 잔차 주변화 (SW1-1837) =====

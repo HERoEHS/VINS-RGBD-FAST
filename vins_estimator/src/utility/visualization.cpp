@@ -114,13 +114,13 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
             //   주행 시 증가 = 지연 창 300~500ms 동안의 데드레코닝 오차). 시정수 50ms
             //   저역 필터로 10~15Hz 스냅을 ~4~5배 감쇠, 추가 지연 ~50ms는 대체한
             //   저주기 지연(300~500ms) 대비 무시 가능. imu_propagate 토픽은 원본 유지.
-            constexpr double kHfTfTau        = 0.05;  // [s] 스무딩 시정수
             constexpr double kTeleportPosM   = 0.5;   // 재초기화·점프 감지 → 즉시 추종
             static bool               hf_init = false;
             static Eigen::Vector3d    hf_P;
             static Eigen::Quaterniond hf_Q;
             const double dt_tf = (last_tf_t < 0.0 || t < last_tf_t) ? 0.01 : (t - last_tf_t);
-            if (!hf_init || t < last_tf_t || (P - hf_P).norm() > kTeleportPosM)
+            if (!hf_init || t < last_tf_t || HF_BODY_TF_TAU <= 0.0 ||
+                (P - hf_P).norm() > kTeleportPosM)
             {
                 hf_init = true;
                 hf_P    = P;
@@ -128,7 +128,7 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
             }
             else
             {
-                const double alpha = 1.0 - std::exp(-dt_tf / kHfTfTau);
+                const double alpha = 1.0 - std::exp(-dt_tf / HF_BODY_TF_TAU);
                 hf_P += alpha * (P - hf_P);
                 hf_Q = hf_Q.slerp(alpha, Q).normalized();
             }

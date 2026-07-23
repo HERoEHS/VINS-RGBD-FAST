@@ -174,6 +174,8 @@ extern double BGZ_RELOCK_DELTA;   // [rad/s] 재잠금 문턱: |정지 실측 �
 //   소비(nav/도킹)에 부적합. 1이면 IMU 전파 자세(imu_propagate와 동일)를 100Hz 스로틀로
 //   map→body TF 송출하고 저주기 송출은 중단(이중 소스 널뛰기 방지).
 extern int PUB_HF_BODY_TF;        // 0=기존(최적화 후 저주기), 1=IMU 전파 고주기 TF
+extern double HF_BODY_TF_TAU;     // [s] 고주기 TF 발행단 스무딩 시정수(예측-보정 스냅 떨림
+                                  //   감쇠). 클수록 부드럽지만 반응 지연 증가. <=0=스무딩 끔
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 드리프트 처방) =====
 //   휠 twist는 +65ms 지연(diff_drive_controller rolling mean)으로 회전 전이 구간서
