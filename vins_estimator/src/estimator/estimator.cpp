@@ -2033,8 +2033,11 @@ void Estimator::optimization()
     }
     ROS_DEBUG("visual measurement count: %d", f_m_cnt);
     ROS_DEBUG("prepare for ceres: %f", t_prepare.toc());
-    // [SW1-1837] 고속 회전 게이팅 진단 — 이번 최적화 채택 관측 vs 누적 skip 관측
-    if (USE_YAW_GATING)
+    // [SW1-1837] 고속 회전 게이팅 진단 — 이번 최적화 채택 관측 vs 누적 skip 관측.
+    //   A/B 분석용이라 환경변수로만 활성(기본 off, BG 로그와 동일 방식): 최적화마다
+    //   찍혀 운영 콘솔을 덮고 [BGZ-LOCK] 같은 중요 로그를 가린다.
+    static const bool yaw_gate_log = (std::getenv("VINS_YAW_GATE_LOG") != nullptr);
+    if (USE_YAW_GATING && yaw_gate_log)
         RCLCPP_INFO(rclcpp::get_logger("vins_yaw_gating"),
                     "[YAW-GATE] used=%d gated_total=%ld", f_m_cnt, yaw_gated_obs_);
 
