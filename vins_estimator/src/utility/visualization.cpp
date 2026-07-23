@@ -1,4 +1,5 @@
 #include "visualization.h"
+#include <cmath>
 #include "parameters.h"
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -108,17 +109,40 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
         static double last_tf_t = -1.0;
         if (t - last_tf_t >= 0.01 || t < last_tf_t)  // 100Hz 스로틀 (역행 시 리셋)
         {
+            // 발행단 스무딩 — 예측(IMU 100Hz)이 매 최적화 완료(~10-15Hz)마다 보정값으로
+            //   스냅하는 왕복이 실기에서 가시적 떨림으로 나타남(정지 시 = 최적화 지터,
+            //   주행 시 증가 = 지연 창 300~500ms 동안의 데드레코닝 오차). 시정수 50ms
+            //   저역 필터로 10~15Hz 스냅을 ~4~5배 감쇠, 추가 지연 ~50ms는 대체한
+            //   저주기 지연(300~500ms) 대비 무시 가능. imu_propagate 토픽은 원본 유지.
+            constexpr double kHfTfTau        = 0.05;  // [s] 스무딩 시정수
+            constexpr double kTeleportPosM   = 0.5;   // 재초기화·점프 감지 → 즉시 추종
+            static bool               hf_init = false;
+            static Eigen::Vector3d    hf_P;
+            static Eigen::Quaterniond hf_Q;
+            const double dt_tf = (last_tf_t < 0.0 || t < last_tf_t) ? 0.01 : (t - last_tf_t);
+            if (!hf_init || t < last_tf_t || (P - hf_P).norm() > kTeleportPosM)
+            {
+                hf_init = true;
+                hf_P    = P;
+                hf_Q    = Q;
+            }
+            else
+            {
+                const double alpha = 1.0 - std::exp(-dt_tf / kHfTfTau);
+                hf_P += alpha * (P - hf_P);
+                hf_Q = hf_Q.slerp(alpha, Q).normalized();
+            }
             last_tf_t = t;
             geometry_msgs::msg::TransformStamped ts;
             ts.header                  = odometry.header;
             ts.child_frame_id          = "body";
-            ts.transform.translation.x = P.x();
-            ts.transform.translation.y = P.y();
-            ts.transform.translation.z = P.z();
-            ts.transform.rotation.x    = Q.x();
-            ts.transform.rotation.y    = Q.y();
-            ts.transform.rotation.z    = Q.z();
-            ts.transform.rotation.w    = Q.w();
+            ts.transform.translation.x = hf_P.x();
+            ts.transform.translation.y = hf_P.y();
+            ts.transform.translation.z = hf_P.z();
+            ts.transform.rotation.x    = hf_Q.x();
+            ts.transform.rotation.y    = hf_Q.y();
+            ts.transform.rotation.z    = hf_Q.z();
+            ts.transform.rotation.w    = hf_Q.w();
             g_br->sendTransform(ts);
         }
     }
