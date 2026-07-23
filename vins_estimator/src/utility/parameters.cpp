@@ -55,6 +55,10 @@ double BGZ_LOCK_STILL_SEC = 2.0;
 double BGZ_LOCK_STAB_MAX     = 2e-4;
 double BGZ_LOCK_FALLBACK_SEC = 8.0;
 double BGZ_LOCK_MAX          = 0.001;
+double BGZ_RELOCK_DELTA      = 5e-4;
+
+// ===== 고주기 body TF (SW1-1837) =====
+int PUB_HF_BODY_TF = 0;
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
@@ -484,12 +488,24 @@ void readParameters(rclcpp::Node* node)
                                     ? 8.0 : (double)fsSettings["bgz_lock_fallback_sec"];
         BGZ_LOCK_MAX = fsSettings["bgz_lock_max"].empty()
                            ? 0.001 : (double)fsSettings["bgz_lock_max"];
+        BGZ_RELOCK_DELTA = fsSettings["bgz_relock_delta"].empty()
+                               ? 5e-4 : (double)fsSettings["bgz_relock_delta"];
         RCLCPP_INFO(node->get_logger(),
                     "USE_BGZ_LOCK: 1 (상태 기반: 최소 %.1fs + 정지 %.1fs 지속 + 변동폭<%.1e"
-                    " (요동 세션은 정지 %.1fs 누적 시 중앙값 폴백) + |Bg_z|<%.4f rad/s이면"
-                    " Bg_z 상수 고정)",
+                    " (요동 세션은 정지 %.1fs 누적 시 중앙값 폴백) + |추정-정지실측|<%.4f"
+                    " rad/s이면 Bg_z 고정, 실측 괴리>%.1e 시 재잠금)",
                     BGZ_LOCK_DELAY, BGZ_LOCK_STILL_SEC, BGZ_LOCK_STAB_MAX,
-                    BGZ_LOCK_FALLBACK_SEC, BGZ_LOCK_MAX);
+                    BGZ_LOCK_FALLBACK_SEC, BGZ_LOCK_MAX, BGZ_RELOCK_DELTA);
+    }
+
+    // ===== 고주기 body TF (SW1-1837) =====
+    PUB_HF_BODY_TF =
+        fsSettings["publish_hf_body_tf"].empty() ? 0 : (int)fsSettings["publish_hf_body_tf"];
+    if (PUB_HF_BODY_TF)
+    {
+        RCLCPP_INFO(node->get_logger(),
+                    "PUB_HF_BODY_TF: 1 (map->body TF를 IMU 전파 자세로 100Hz 송출, "
+                    "저주기 송출 중단)");
     }
 
     // ===== 휠 회전 잔차 주변화 (SW1-1837) =====

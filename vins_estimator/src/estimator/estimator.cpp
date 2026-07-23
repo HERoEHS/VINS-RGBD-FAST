@@ -129,8 +129,12 @@ void Estimator::clearState()
     }
     first_imu = false, sum_of_back = 0;
     // [SW1-1837] Bg_z 잠금 상태 초기화 — 재시작 시 새로 정지·수렴 관찰부터
-    bgz_locked_       = false;
-    bgz_lock_tracker_ = bgz_lock::Tracker{};
+    bgz_locked_        = false;
+    bgz_lock_tracker_  = bgz_lock::Tracker{};
+    bgz_rest_          = bgz_lock::RestBias{};
+    bgz_rest_t_        = 0.0;
+    bgz_locked_val_    = 0.0;
+    bgz_last_relock_t_ = -1.0e18;
     sum_of_front      = 0;
     frame_count       = 0;
     solver_flag       = INITIAL;
@@ -214,6 +218,24 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
     }
     acc_0 = linear_acceleration;
     gyr_0 = angular_velocity;
+
+    // [SW1-1837] Bg_z 잠금용 정지 실측 공급 — 반드시 IMU 주기(~380Hz)로.
+    //   프레임 주기(~13Hz) 표본은 2s 창에 ~26개뿐이라 중앙값 표준오차 ~1.2e-3
+    //   → 재잠금 문턱(5e-4)보다 커서 오발동·잠금값 오염(1차 회귀 실측 실패).
+    //   IMU 주기면 ~760개 → ~2e-4로 문턱의 2.5σ 밖. 시간축은 dt 누적 의사시간
+    //   (창 스팬 판정에만 쓰여 절대시각 불필요).
+    if (USE_BGZ_LOCK && solver_flag == SolverFlag::NON_LINEAR)
+    {
+        bgz_rest_t_ += dt;
+        // 정지 판정 3중: gyro(bias 보정)·추정 속도·휠 twist. 휠 조건이 준정지
+        //   (느린 잔여 회전, gyro 문턱 통과) 오인을 구조적으로 차단한다.
+        const bool still_now =
+            (angular_velocity - Bgs[frame_count]).norm() < bgz_lock::kStillGyrRadps &&
+            Vs[frame_count].norm() < bgz_lock::kStillVelMps &&
+            last_wheel_speed_.load() < bgz_lock::kStillWheelMax;
+        // 보관 창은 재잠금 창(10s) 기준 — 초기 잠금은 ready/median(2s)로 접미 판독
+        bgz_rest_.update(bgz_rest_t_, angular_velocity.z(), still_now, bgz_lock::kRelockWinSec);
+    }
 }
 
 // 휠 오도메트리 preintegration (processIMU 미러, SW1-1829)
@@ -1552,25 +1574,53 @@ void Estimator::optimization()
     //   발동은 상태 기반(정지 지속 + 추정 안정 + 크기 가드) — 시동 직후 바로 조작하는
     //   B2C 사용에서도 init 직후의 자연 정지 꼬리(~4-6s)에 자동 발동. 조건 상세와
     //   각 조건이 막는 사고는 bgz_lock.h 참조.
-    if (USE_BGZ_LOCK && !bgz_locked_)
+    if (USE_BGZ_LOCK)
     {
         // 정지 판정: 회전(gyro, bias 보정)·병진(추정 속도) 모두 문턱 이하.
-        //   문턱 근거: 정지 시 gyro 노이즈·Vs 오차 ≪ 0.05인 반면 주행/회전은 ≥0.1 —
-        //   두 분포가 겹치지 않는 보수적 경계값.
-        constexpr double kStillGyrRadps = 0.05;  // ≈ 2.9 °/s
-        constexpr double kStillVelMps   = 0.05;
-        const bool still_now = (gyr_0 - Bgs[WINDOW_SIZE]).norm() < kStillGyrRadps &&
-                               Vs[WINDOW_SIZE].norm() < kStillVelMps;
-        const bgz_lock::Params lock_params{BGZ_LOCK_DELAY, BGZ_LOCK_STILL_SEC,
-                                           BGZ_LOCK_STAB_MAX, BGZ_LOCK_FALLBACK_SEC,
-                                           BGZ_LOCK_MAX};
-        if (bgz_lock_tracker_.update(Headers[frame_count], Bgs[WINDOW_SIZE].z(), still_now,
-                                     lock_params))
+        //   실측 표본은 processIMU가 IMU 주기(~380Hz)로 공급(주기 근거는 그쪽 주석).
+        const double now      = Headers[frame_count];
+        const bool still_now  = (gyr_0 - Bgs[WINDOW_SIZE]).norm() < bgz_lock::kStillGyrRadps &&
+                               Vs[WINDOW_SIZE].norm() < bgz_lock::kStillVelMps;
+        const bgz_lock::Params lock_params{BGZ_LOCK_DELAY,        BGZ_LOCK_STILL_SEC,
+                                           BGZ_LOCK_STAB_MAX,     BGZ_LOCK_FALLBACK_SEC,
+                                           BGZ_LOCK_MAX,          BGZ_RELOCK_DELTA};
+        const bool   rest_ready  = bgz_rest_.ready(BGZ_LOCK_STILL_SEC);
+        const double rest_median = rest_ready ? bgz_rest_.median(BGZ_LOCK_STILL_SEC) : 0.0;
+
+        if (!bgz_locked_)
         {
-            bgz_locked_ = true;
+            if (bgz_lock_tracker_.update(now, Bgs[WINDOW_SIZE].z(), still_now, rest_ready,
+                                         rest_median, lock_params))
+            {
+                bgz_locked_     = true;
+                bgz_locked_val_ = Bgs[WINDOW_SIZE].z();
+                RCLCPP_INFO(rclcpp::get_logger("vins_bgz_lock"),
+                            "[BGZ-LOCK] engaged t=%.3f bgz=%.6f rad/s (rest=%.6f)", now,
+                            bgz_locked_val_, rest_median);
+            }
+        }
+        // 재잠금은 "연속 정지 10s + 10s 창 중앙값"으로만 — 온도 표류는 분 단위 현상.
+        //   주행 중 준정지(1~2s)는 ready(10s)가 구조적으로 배제(회귀 오발동 처방).
+        else if (still_now && bgz_rest_.ready(bgz_lock::kRelockWinSec) &&
+                 bgz_lock::shouldRelock(bgz_rest_.median(bgz_lock::kRelockWinSec),
+                                        bgz_locked_val_, now, bgz_last_relock_t_,
+                                        lock_params))
+        {
+            // 재잠금(온도 표류 추종): 잠긴 값이 10s 정지 실측과 유의미하게 벌어짐 →
+            //   실측값을 주입하고 그 값으로 재고정. Bg_z 한 축의 ~1e-3급 변화는
+            //   preintegration 1차 bias 보정(dq_dbg) 범위라 상태 수술 위험 없음.
+            //   vector2double가 이미 실행됐으므로 para 쪽도 함께 갱신한다.
+            const double relock_val = bgz_rest_.median(bgz_lock::kRelockWinSec);
+            for (int i = 0; i <= frame_count; i++)
+            {
+                Bgs[i].z()           = relock_val;
+                para_SpeedBias[i][8] = relock_val;
+            }
             RCLCPP_INFO(rclcpp::get_logger("vins_bgz_lock"),
-                        "[BGZ-LOCK] engaged t=%.3f bgz=%.6f rad/s", Headers[frame_count],
-                        Bgs[WINDOW_SIZE].z());
+                        "[BGZ-RELOCK] t=%.3f %.6f -> %.6f rad/s (drift %.6f)", now,
+                        bgz_locked_val_, relock_val, relock_val - bgz_locked_val_);
+            bgz_locked_val_    = relock_val;
+            bgz_last_relock_t_ = now;
         }
     }
     for (int i = 0; i < frame_count + 1; i++)
@@ -2549,6 +2599,9 @@ void Estimator::inputWheel(double t, const Vector3d &linearVelocity,
     wheelVelBuf.push(make_pair(t, linearVelocity));
     wheelGyrBuf.push(make_pair(t, angularVelocity));
     m_wheel.unlock();
+    // [SW1-1837] Bg_z 잠금 정지 판별자 — 엔코더가 돌면 '준정지'(느린 잔여 회전)도
+    //   정지가 아님을 직접 알 수 있음(gyro 문턱만으로는 구분 불가, 회귀 실측).
+    last_wheel_speed_.store(std::max(linearVelocity.norm(), angularVelocity.norm()));
     // Step1: fast-predict/퍼블리시 생략 (VINS 출력은 vision+IMU 기반 그대로 유지)
 }
 

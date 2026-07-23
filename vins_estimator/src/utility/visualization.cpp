@@ -96,6 +96,32 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
     pose.header = odometry.header;
     pose.pose   = odometry.pose.pose;
     pub_imu_pose->publish(pose);
+
+    // [SW1-1837] 고주기 body TF — 최적화 후 발행(저주기, 100~500ms 지연)만으로는
+    //   실시간 소비(rviz TF 비교·nav/도킹)에 부적합해서, IMU 전파 자세를 TF로도 송출.
+    //   ON 시 pubTF의 저주기 map→body는 중단(같은 프레임 이중 송출 = 널뛰기 방지).
+    //   382Hz는 과잉이라 100Hz로 스로틀. 매 최적화 완료 시 예측이 보정값으로
+    //   재기저되며 mm·0.0x° 미세 점프가 있는 것은 정상(속도는 TF 미분 말고
+    //   imu_propagate twist 사용 권장).
+    if (PUB_HF_BODY_TF && g_br)
+    {
+        static double last_tf_t = -1.0;
+        if (t - last_tf_t >= 0.01 || t < last_tf_t)  // 100Hz 스로틀 (역행 시 리셋)
+        {
+            last_tf_t = t;
+            geometry_msgs::msg::TransformStamped ts;
+            ts.header                  = odometry.header;
+            ts.child_frame_id          = "body";
+            ts.transform.translation.x = P.x();
+            ts.transform.translation.y = P.y();
+            ts.transform.translation.z = P.z();
+            ts.transform.rotation.x    = Q.x();
+            ts.transform.rotation.y    = Q.y();
+            ts.transform.rotation.z    = Q.z();
+            ts.transform.rotation.w    = Q.w();
+            g_br->sendTransform(ts);
+        }
+    }
 }
 
 void printStatistics(const Estimator &estimator, double t)
@@ -361,7 +387,11 @@ void pubTF(const Estimator &estimator, const std_msgs::msg::Header &header)
     ts.transform.rotation.y = correct_q.y();
     ts.transform.rotation.z = correct_q.z();
     ts.transform.rotation.w = correct_q.w();
-    g_br->sendTransform(ts);
+    // [SW1-1837] 고주기 body TF 사용 시 저주기 송출 중단 — 같은 프레임을 두 소스가
+    //   쏘면 rviz/소비자에서 최적화값(과거)과 예측값(현재) 사이를 널뛰기함.
+    //   body→camera(아래)는 extrinsic이라 저주기로 충분, 그대로 유지.
+    if (!PUB_HF_BODY_TF)
+        g_br->sendTransform(ts);
 
     Quaterniond ric_q(estimator.ric[0]);
     ts.header.frame_id = "body";

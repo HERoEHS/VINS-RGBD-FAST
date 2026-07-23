@@ -163,7 +163,17 @@ extern double BGZ_LOCK_DELAY;     // [s] 첫 최적화 후 최소 대기(1s 과�
 extern double BGZ_LOCK_STILL_SEC; // [s] 정지 지속 요구 시간(= 안정성 판정 창 길이)
 extern double BGZ_LOCK_STAB_MAX;  // [rad/s] 창 내 Bg_z 변동폭(max-min) 허용 상한
 extern double BGZ_LOCK_FALLBACK_SEC; // [s] 정지 누적 시 중앙값 폴백 발동(요동 세션 대응, <=0=off)
-extern double BGZ_LOCK_MAX;       // [rad/s] 발동 시점 |Bg_z| 허용 상한(초과 시 잠금 보류)
+extern double BGZ_LOCK_MAX;       // [rad/s] |추정 − 정지 실측| 허용 상한(괴리 시 잠금 보류)
+                                  //   구 절대 크기 가드에서 변경 — warm 참 bias(온도 표류)와
+                                  //   인플레는 크기로 구분 불가, 정지 실측과의 거리로만 구분됨
+extern double BGZ_RELOCK_DELTA;   // [rad/s] 재잠금 문턱: |정지 실측 − 잠금값| 초과 시
+                                  //   온도 표류 추종 갱신 (<=0=재잠금 off)
+
+// ===== 고주기 body TF (SW1-1837) =====
+//   기본 body TF는 윈도 최적화 후 발행이라 실기 100~500ms 지연 — rviz TF 비교·실시간
+//   소비(nav/도킹)에 부적합. 1이면 IMU 전파 자세(imu_propagate와 동일)를 100Hz 스로틀로
+//   map→body TF 송출하고 저주기 송출은 중단(이중 소스 널뛰기 방지).
+extern int PUB_HF_BODY_TF;        // 0=기존(최적화 후 저주기), 1=IMU 전파 고주기 TF
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 드리프트 처방) =====
 //   휠 twist는 +65ms 지연(diff_drive_controller rolling mean)으로 회전 전이 구간서

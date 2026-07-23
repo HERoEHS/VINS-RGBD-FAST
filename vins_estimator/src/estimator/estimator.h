@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <thread>
 
@@ -163,9 +164,15 @@ public:
     // [SW1-1837] 고속 회전 비전 게이팅 — skip한 관측 수(A/B 진단 로그용)
     long     yaw_gated_obs_{0};
 
-    // [SW1-1837] Bg_z 잠금 상태 — 상태 기반 발동 추적기와 발동 래치
-    bool              bgz_locked_{false};
-    bgz_lock::Tracker bgz_lock_tracker_;
+    // [SW1-1837] Bg_z 잠금 상태 — 상태 기반 발동 추적기·정지 실측·재잠금(온도 표류 추종)
+    bool               bgz_locked_{false};
+    bgz_lock::Tracker  bgz_lock_tracker_;
+    bgz_lock::RestBias bgz_rest_;                // 정지 중 원시 gyro z 중앙값(직접 물리 관측)
+    double             bgz_rest_t_{0.0};         // 실측 표본용 dt 누적 의사시간(processIMU)
+    std::atomic<double> last_wheel_speed_{0.0};  // 최근 휠 twist 크기 — 준정지(느린 잔여
+                                                 // 회전) 오인 방지용 정지 판별자(inputWheel 갱신)
+    double             bgz_locked_val_{0.0};     // 현재 잠긴 값 (재잠금 괴리 판정 기준)
+    double             bgz_last_relock_t_{-1.0e18};  // 마지막 재잠금 시각 (쿨다운)
 
     IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)]{};
     Vector3d         acc_0, gyr_0;
