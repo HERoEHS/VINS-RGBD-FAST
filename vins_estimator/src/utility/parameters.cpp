@@ -56,6 +56,8 @@ double BGZ_LOCK_STAB_MAX     = 2e-4;
 double BGZ_LOCK_FALLBACK_SEC = 8.0;
 double BGZ_LOCK_MAX          = 0.001;
 double BGZ_RELOCK_DELTA      = 5e-4;
+double BGZ_RELOCK_WIN_SEC    = 10.0;
+double BGZ_RELOCK_COOLDOWN   = 10.0;
 
 // ===== 고주기 body TF (SW1-1837) =====
 int    PUB_HF_BODY_TF = 0;
@@ -491,6 +493,10 @@ void readParameters(rclcpp::Node* node)
                            ? 0.001 : (double)fsSettings["bgz_lock_max"];
         BGZ_RELOCK_DELTA = fsSettings["bgz_relock_delta"].empty()
                                ? 5e-4 : (double)fsSettings["bgz_relock_delta"];
+        BGZ_RELOCK_WIN_SEC = fsSettings["bgz_relock_win_sec"].empty()
+                                 ? 10.0 : (double)fsSettings["bgz_relock_win_sec"];
+        BGZ_RELOCK_COOLDOWN = fsSettings["bgz_relock_cooldown"].empty()
+                                  ? 10.0 : (double)fsSettings["bgz_relock_cooldown"];
         RCLCPP_INFO(node->get_logger(),
                     "USE_BGZ_LOCK: 1 (상태 기반: 최소 %.1fs + 정지 %.1fs 지속 + 변동폭<%.1e"
                     " (요동 세션은 정지 %.1fs 누적 시 중앙값 폴백) + |추정-정지실측|<%.4f"

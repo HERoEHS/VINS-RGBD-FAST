@@ -234,7 +234,7 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
             Vs[frame_count].norm() < bgz_lock::kStillVelMps &&
             last_wheel_speed_.load() < bgz_lock::kStillWheelMax;
         // 보관 창은 재잠금 창(10s) 기준 — 초기 잠금은 ready/median(2s)로 접미 판독
-        bgz_rest_.update(bgz_rest_t_, angular_velocity.z(), still_now, bgz_lock::kRelockWinSec);
+        bgz_rest_.update(bgz_rest_t_, angular_velocity.z(), still_now, BGZ_RELOCK_WIN_SEC);
     }
 }
 
@@ -1583,7 +1583,8 @@ void Estimator::optimization()
                                Vs[WINDOW_SIZE].norm() < bgz_lock::kStillVelMps;
         const bgz_lock::Params lock_params{BGZ_LOCK_DELAY,        BGZ_LOCK_STILL_SEC,
                                            BGZ_LOCK_STAB_MAX,     BGZ_LOCK_FALLBACK_SEC,
-                                           BGZ_LOCK_MAX,          BGZ_RELOCK_DELTA};
+                                           BGZ_LOCK_MAX,          BGZ_RELOCK_DELTA,
+                                           BGZ_RELOCK_WIN_SEC,    BGZ_RELOCK_COOLDOWN};
         const bool   rest_ready  = bgz_rest_.ready(BGZ_LOCK_STILL_SEC);
         const double rest_median = rest_ready ? bgz_rest_.median(BGZ_LOCK_STILL_SEC) : 0.0;
 
@@ -1601,8 +1602,8 @@ void Estimator::optimization()
         }
         // 재잠금은 "연속 정지 10s + 10s 창 중앙값"으로만 — 온도 표류는 분 단위 현상.
         //   주행 중 준정지(1~2s)는 ready(10s)가 구조적으로 배제(회귀 오발동 처방).
-        else if (still_now && bgz_rest_.ready(bgz_lock::kRelockWinSec) &&
-                 bgz_lock::shouldRelock(bgz_rest_.median(bgz_lock::kRelockWinSec),
+        else if (still_now && bgz_rest_.ready(BGZ_RELOCK_WIN_SEC) &&
+                 bgz_lock::shouldRelock(bgz_rest_.median(BGZ_RELOCK_WIN_SEC),
                                         bgz_locked_val_, now, bgz_last_relock_t_,
                                         lock_params))
         {
@@ -1610,7 +1611,7 @@ void Estimator::optimization()
             //   실측값을 주입하고 그 값으로 재고정. Bg_z 한 축의 ~1e-3급 변화는
             //   preintegration 1차 bias 보정(dq_dbg) 범위라 상태 수술 위험 없음.
             //   vector2double가 이미 실행됐으므로 para 쪽도 함께 갱신한다.
-            const double relock_val = bgz_rest_.median(bgz_lock::kRelockWinSec);
+            const double relock_val = bgz_rest_.median(BGZ_RELOCK_WIN_SEC);
             for (int i = 0; i <= frame_count; i++)
             {
                 Bgs[i].z()           = relock_val;

@@ -9,7 +9,7 @@ namespace
 // 정지 2s + 변동폭 2e-4, 폴백 8s, 실측 거리 가드 1e-3, 재잠금 문턱 5e-4
 bgz_lock::Params baseParams()
 {
-    return bgz_lock::Params{3.0, 2.0, 2e-4, 8.0, 1e-3, 5e-4};
+    return bgz_lock::Params{3.0, 2.0, 2e-4, 8.0, 1e-3, 5e-4, 10.0, 10.0};
 }
 
 // t0부터 dur초 동안 10Hz로 일정 조건을 흘려 넣고 발동 여부(마지막 반환값) 반환.
@@ -128,7 +128,7 @@ TEST(BgzLock, RefusesPhysicallyImplausibleRest)
 // max<=0이면 항상 거부(기능 사실상 비활성, 안전 기본값 방향).
 TEST(BgzLock, DisabledByNonPositiveMax)
 {
-    bgz_lock::Params p{3.0, 2.0, 2e-4, 8.0, 0.0, 5e-4};
+    bgz_lock::Params p{3.0, 2.0, 2e-4, 8.0, 0.0, 5e-4, 10.0, 10.0};
     bgz_lock::Tracker tr;
     EXPECT_FALSE(feed(tr, p, 0.0, 30.0, 0.0, true, 0.0));
     p.max_radps = -1.0;
@@ -167,14 +167,15 @@ TEST(RestBias, MotionResets)
 // 오염 재잠금(회귀 실측: v7 6회/run, 값 -0.65e-3 오염)을 구조적으로 배제.
 TEST(RestBias, RelockWindowRequiresLongStillness)
 {
+    constexpr double kWin = 10.0;  // 재잠금 창(파라미터 BGZ_RELOCK_WIN_SEC 기본값)
     bgz_lock::RestBias rb;
     for (double t = 0.0; t < 3.0; t += 0.05)
-        rb.update(t, 1e-3, true, bgz_lock::kRelockWinSec);
-    EXPECT_TRUE(rb.ready(2.0));                          // 초기 잠금 창은 충족
-    EXPECT_FALSE(rb.ready(bgz_lock::kRelockWinSec));     // 재잠금 창은 미충족
+        rb.update(t, 1e-3, true, kWin);
+    EXPECT_TRUE(rb.ready(2.0));            // 초기 잠금 창은 충족
+    EXPECT_FALSE(rb.ready(kWin));          // 재잠금 창은 미충족
     for (double t = 3.0; t < 11.0; t += 0.05)
-        rb.update(t, 1e-3, true, bgz_lock::kRelockWinSec);
-    EXPECT_TRUE(rb.ready(bgz_lock::kRelockWinSec));      // 연속 정지 10s 후 충족
+        rb.update(t, 1e-3, true, kWin);
+    EXPECT_TRUE(rb.ready(kWin));           // 연속 정지 10s 후 충족
 }
 
 // ───────── 재잠금(shouldRelock) ─────────

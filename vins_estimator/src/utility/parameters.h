@@ -168,6 +168,9 @@ extern double BGZ_LOCK_MAX;       // [rad/s] |추정 − 정지 실측| 허용 �
                                   //   인플레는 크기로 구분 불가, 정지 실측과의 거리로만 구분됨
 extern double BGZ_RELOCK_DELTA;   // [rad/s] 재잠금 문턱: |정지 실측 − 잠금값| 초과 시
                                   //   온도 표류 추종 갱신 (<=0=재잠금 off)
+extern double BGZ_RELOCK_WIN_SEC; // [s] 재잠금 판정용 연속 정지 창(=중앙값 창). 실기
+                                  //   온도 표류 관찰로 튜닝 대상(cold bag 미검증)
+extern double BGZ_RELOCK_COOLDOWN;// [s] 재잠금 최소 간격 — 잦은 갱신 방지
 
 // ===== 고주기 body TF (SW1-1837) =====
 //   기본 body TF는 윈도 최적화 후 발행이라 실기 100~500ms 지연 — rviz TF 비교·실시간

@@ -45,6 +45,8 @@ struct Params
     double fallback_sec;    // 정지 누적이 이 시간을 넘으면 중앙값 폴백 발동 허용
     double max_radps;       // |추정 − 정지 실측| 허용 상한 (<=0이면 항상 거부 = 비활성)
     double relock_delta;    // 재잠금 발동 문턱: |실측 − 잠금값| 초과 시 갱신 (<=0=재잠금 off)
+    double relock_win_sec;  // 재잠금 판정용 연속 정지 창 길이 [s] (표류는 분 단위 현상)
+    double relock_cooldown_sec;  // 재잠금 최소 간격 [s] — 잦은 갱신 방지
 };
 
 // 폴백에서 "중앙값 근방 프레임" 판정 허용 오차 (bgz_lock 설계 문서 참조)
@@ -60,14 +62,13 @@ constexpr double kStillVelMps   = 0.05;
 //   스파이크 ≤0.015(허용해야 함 — 0.01로 잡았더니 정지 리셋 반복으로 v5 잠금
 //   미발동 회귀 실측). 0.05 = 노이즈의 3배 여유 + 준정지와 명확 분리.
 constexpr double kStillWheelMax = 0.05;  // [m/s | rad/s]
-// 재잠금 관찰 창 — 온도 표류는 분 단위 현상이라 "연속 정지 10s + 10s 중앙값"으로
-// 한정(초기 잠금 창 2s와 별도). 주행 중 준정지(1~2s)를 구조적으로 배제하고
-// 저주파 요동(v5 ±0.35e-3 실측)도 평균화.
-constexpr double kRelockWinSec = 10.0;
+// 재잠금 관찰 창·쿨다운은 Params(relock_win_sec / relock_cooldown_sec)로 노출 —
+//   온도 표류는 분 단위 현상이라 "연속 정지 win_sec + win_sec 중앙값"으로 한정(초기
+//   잠금 창 still_sec과 별도). 주행 중 준정지(1~2s)를 구조적으로 배제하고 저주파
+//   요동(v5 ±0.35e-3 실측)도 평균화. ⚠️기본 10s는 cold bag서 재잠금 미발동이라
+//   실측 검증 전 — 실기 온도 표류 관찰로 튜닝 필요(그래서 yaml 노출).
 // 실측 중앙값의 물리 상한 — 이 이상이면 센서 이상/미정지 의심, 발동·재잠금 모두 보류
 constexpr double kRestPhysMaxRadps = 0.02;
-// 재잠금 최소 간격 [s] — 표류는 분 단위 현상, 잦은 갱신 방지
-constexpr double kRelockCooldownSec = 10.0;
 
 // 정지 중 원시 gyro z 중앙값 추적 — bias의 직접 물리 관측(최적화기·marg 무관).
 // 현재 정지 구간 한정(움직이면 리셋), 창 길이 win_sec 유지.
@@ -198,7 +199,7 @@ inline bool shouldRelock(double rest_median, double locked_val, double t, double
         return false;
     if (std::fabs(rest_median) > kRestPhysMaxRadps)
         return false;
-    if (t - last_relock_t < kRelockCooldownSec)
+    if (t - last_relock_t < p.relock_cooldown_sec)
         return false;
     return std::fabs(rest_median - locked_val) > p.relock_delta;
 }
