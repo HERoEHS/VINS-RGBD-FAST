@@ -166,11 +166,12 @@ estimate_extrinsic_wheel: 0    # Step1=0 고정. Step2에서 1(온라인 추정)
 estimate_intrinsic_wheel: 0    # Step1=0 고정. Step2에서 1
 estimate_td_wheel: 0           # Step1=0 고정. Step2에서 1
 
-# 휠 회전 잔차 주변화 (SW1-1837 yaw 처방): 1이면 휠 factor를 위치 3x3 제약만으로 재구성.
-#   근거: 휠 twist +65ms 지연(컨트롤러 rolling mean)이 회전 전이 구간서 몸체 yaw 오염
-#   (v7 A/B: 회전 잔차 제거 시 yaw 드리프트 −45%·run 재현성 회복). 회전은 gyro가 우월.
-#   컨트롤러 65ms 근본 수정 후 재평가 대상.
-wheel_rot_marginalize: 1
+# 휠 회전 잔차 주변화 (SW1-1837): 1이면 휠 factor를 위치 3x3 제약만으로 재구성.
+#   역사: 휠 twist +65ms 지연(컨트롤러 rolling mean)이 회전 전이 구간서 몸체 yaw를
+#   오염하던 시절의 우회 처방(v7 A/B: yaw 드리프트 −45%). 컨트롤러 스탬프 보상
+#   (edie_control a8c9a10, compensate_velocity_stamp_delay) 배포 후 v10 A/B(3+3run)서
+#   0↔1 전 지표 무차이 실측 → 역할 종료, 기본 0. 보상 미적용 구형 배포에서만 1 고려.
+wheel_rot_marginalize: 0
 
 # ================================================================
 # Zero-velocity Update (ZUPT, SW1-1837) — 정지 시 속도 0 제약 → z drift 완화
