@@ -153,6 +153,14 @@ extern std::string LEG_CMD_TOPIC_R;    // 오른다리 위치 명령 토픽
 extern int    USE_YAW_GATING;        // 마스터 토글 (0=기존 동작 유지)
 extern double YAW_GATE_GYR_THRESH;   // [rad/s] 프레임 평균 |ω−Bg| 이 값 초과 시 비전 관측 skip
 
+// ===== 스핀 중 accel 신뢰 강등 (SW1-1837, 전방 활주 처방) =====
+//   스핀 중 원심가속 ω²r(레버 0.1056m)이 중력 기울기 1~2°로 오해돼 회전 비례 전방
+//   활주(닫힌루프 잔여 오차 지배)를 만든다(v10 포렌식 07-26). 고속 회전 샘플의 acc
+//   노이즈만 인플레 → 자세는 gyro, 위치는 휠에 위임. 근거·수치는 spin_acc_deweight.h.
+extern int    USE_SPIN_ACC_DEWEIGHT;         // 마스터 토글 (0=기존 동작 유지)
+extern double SPIN_ACC_DEWEIGHT_GYR_THRESH;  // [rad/s] 샘플 |ω−Bg| 초과 시 발동
+extern double SPIN_ACC_DEWEIGHT_FACTOR;      // acc 노이즈 σ 배율 (>1)
+
 // ===== Bg_z 잠금 (SW1-1837, yaw 드리프트 최종 처방) =====
 //   최적화기가 yaw 불일치를 Bg_z(gyro z-bias)로 도피시켜 참값의 15~40배로 과대추정하는
 //   것이 yaw 드리프트의 단일 지배 원인(인과 봉인 probe: 고정 시 v7 −24°→−2.7°).

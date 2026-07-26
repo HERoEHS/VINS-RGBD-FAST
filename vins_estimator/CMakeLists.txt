@@ -177,6 +177,9 @@ if(BUILD_TESTING)
 
   # Bg_z 잠금 발동 판정 로직 — 헤더-only 단독 검증
   ament_add_gtest(test_bgz_lock test/test_bgz_lock.cpp)
+
+  # 스핀 중 accel 신뢰 강등 판정 로직 — 헤더-only 단독 검증
+  ament_add_gtest(test_spin_acc_deweight test/test_spin_acc_deweight.cpp)
 endif()
 
 ament_package()

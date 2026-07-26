@@ -48,6 +48,11 @@ std::string LEG_STATE_TOPIC, LEG_CMD_TOPIC_L, LEG_CMD_TOPIC_R;
 int    USE_YAW_GATING;
 double YAW_GATE_GYR_THRESH;
 
+// ===== 스핀 중 accel 신뢰 강등 (SW1-1837, 전방 활주 처방) =====
+int    USE_SPIN_ACC_DEWEIGHT;
+double SPIN_ACC_DEWEIGHT_GYR_THRESH = 0.6;
+double SPIN_ACC_DEWEIGHT_FACTOR     = 10.0;
+
 // ===== Bg_z 잠금 (SW1-1837, yaw 최종 처방) =====
 int    USE_BGZ_LOCK;
 double BGZ_LOCK_DELAY     = 3.0;
@@ -475,6 +480,21 @@ void readParameters(rclcpp::Node* node)
         RCLCPP_INFO(node->get_logger(),
                     "USE_YAW_GATING: 1 (프레임 평균 |w-Bg| > %.3f rad/s (%.0f deg/s) 시 비전 관측 skip)",
                     YAW_GATE_GYR_THRESH, YAW_GATE_GYR_THRESH * 180.0 / M_PI);
+    }
+
+    // ===== 스핀 중 accel 신뢰 강등 (SW1-1837) =====
+    USE_SPIN_ACC_DEWEIGHT = fsSettings["use_spin_acc_deweight"].empty()
+                                ? 0 : (int)fsSettings["use_spin_acc_deweight"];
+    if (USE_SPIN_ACC_DEWEIGHT)
+    {
+        SPIN_ACC_DEWEIGHT_GYR_THRESH = fsSettings["spin_acc_deweight_gyr_thresh"].empty()
+                                           ? 0.6 : (double)fsSettings["spin_acc_deweight_gyr_thresh"];
+        SPIN_ACC_DEWEIGHT_FACTOR = fsSettings["spin_acc_deweight_factor"].empty()
+                                       ? 10.0 : (double)fsSettings["spin_acc_deweight_factor"];
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_SPIN_ACC_DEWEIGHT: 1 (샘플 |w-Bg| > %.3f rad/s (%.0f deg/s) 시 acc 노이즈 x%.1f)",
+                    SPIN_ACC_DEWEIGHT_GYR_THRESH,
+                    SPIN_ACC_DEWEIGHT_GYR_THRESH * 180.0 / M_PI, SPIN_ACC_DEWEIGHT_FACTOR);
     }
 
     // ===== Bg_z 잠금 (SW1-1837) =====

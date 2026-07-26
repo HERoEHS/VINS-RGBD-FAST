@@ -2,6 +2,7 @@
 
 #include "../utility/utility.h"
 #include "../utility/parameters.h"
+#include "../utility/spin_acc_deweight.h"
 
 #include <ceres/ceres.h>
 using namespace Eigen;
@@ -128,8 +129,27 @@ public:
 
             // step_jacobian = F;
             // step_V = V;
-            jacobian   = F * jacobian;
-            covariance = F * covariance * F.transpose() + V * noise * V.transpose();
+            jacobian = F * jacobian;
+            // [SW1-1837] 스핀 중 accel 신뢰 강등 — 고속 회전 샘플의 acc 노이즈 블록만
+            //   인플레(원심가속 ω²r의 '가짜 중력 기울기' 오해 차단, spin_acc_deweight.h).
+            //   un_gyr = bias 보정 각속도라 판정에 그대로 사용. repropagate도 이 경로를
+            //   지나므로 버퍼 재적분 시에도 샘플별 판정이 일관된다.
+            const double s = USE_SPIN_ACC_DEWEIGHT
+                                 ? spin_acc_deweight::accNoiseScale(
+                                       un_gyr.norm(), SPIN_ACC_DEWEIGHT_GYR_THRESH,
+                                       SPIN_ACC_DEWEIGHT_FACTOR)
+                                 : 1.0;
+            if (s > 1.0)
+            {
+                Eigen::Matrix<double, 18, 18> noise_use = noise;
+                noise_use.block<3, 3>(0, 0) *= s * s;   // acc_0 노이즈
+                noise_use.block<3, 3>(6, 6) *= s * s;   // acc_1 노이즈
+                covariance = F * covariance * F.transpose() + V * noise_use * V.transpose();
+            }
+            else
+            {
+                covariance = F * covariance * F.transpose() + V * noise * V.transpose();
+            }
         }
     }
 
