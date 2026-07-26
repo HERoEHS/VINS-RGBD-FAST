@@ -141,7 +141,12 @@ wheel_topic: "/edie/diff_drive_controller/odom"   # nav_msgs/Odometry (twist 사
 # 최적화 효과: factor 가중치 ∝ 1/σ² → σ 크면 약한 제약, σ 작으면 강한 제약
 ## 0.3은 σ 기준 17도/s 수준의 노이즈 가정 → 휠 yaw 제약이 상당히 느슨함 (IMU yaw에 우선권 양보).
 ## 0.05였다면 yaw에서 휠을 강하게 따라가게 되어, 슬립/스케일 오차가 yaw drift로 직결됐을 것.
-vel_n_wheel: 0.1      # σ = 0.1 m/s   → variance 0.01
+vel_n_wheel: 0.05     # 0.1→0.05 (07-26 용량-반응 3-bag, HANDOFF ⑮⑯): v9(혼합 주행=실기)
+                      #   닫힌루프 -57%·xy-APE -37%, 부작용 없음(v10 z범위·v8 yaw 비용 소멸).
+                      #   0.02는 이득 최대(v9 -72%)+EKF 소비 covariance 실측 σ0.022와 일치하나
+                      #   v10 z범위 +40%·v8 yaw +1° 비용 — xy 최우선 시 0.02 승격 옵션.
+                      #   ⚠️v8류(제자리 고속 스핀 연속 안무)는 강화 자체가 닫힌루프 비용
+                      #   (스핀 활주 증가→상쇄 기하 붕괴) — 이득 출처는 주행 구간 정밀화.
 gyr_n_wheel: 0.3      # σ = 0.3 rad/s → variance 0.09
 
 # 휠 intrinsic 스케일 (vel-x, vel-y, yaw). 캘리브 전 기본 1.0
