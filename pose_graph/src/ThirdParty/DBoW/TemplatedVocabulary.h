@@ -1511,7 +1511,7 @@ void TemplatedVocabulary<TDescriptor,F>::loadBin(const std::string &filename) {
   m_words.clear();
   m_nodes.clear();
   //printf("loop load bin\n");
-  std::ifstream ifStream(filename);
+  std::ifstream ifStream(filename, std::ios::binary);
   VINSLoop::Vocabulary voc;
   voc.deserialize(ifStream);
   ifStream.close();

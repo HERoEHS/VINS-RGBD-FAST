@@ -84,4 +84,8 @@ install(DIRECTORY config/
   OPTIONAL
 )
 
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../support_files/
+  DESTINATION share/${PROJECT_NAME}/support_files
+)
+
 ament_package()

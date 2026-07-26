@@ -72,11 +72,14 @@ public:
         std::string config_file;
         get_parameter("config_file", config_file);
 
+        if (config_file.empty())
+            throw std::runtime_error("The required ROS parameter 'config_file' is empty");
+
         posegraph.registerPub(this);
 
         cv::FileStorage fsSettings(config_file, cv::FileStorage::READ);
         if (!fsSettings.isOpened())
-            std::cerr << "ERROR: Wrong path to settings" << std::endl;
+            throw std::runtime_error("Cannot open pose graph config file: " + config_file);
 
         double camera_visual_size = fsSettings["visualize_camera_size"];
         cameraposevisual->setScale(camera_visual_size);
@@ -92,12 +95,12 @@ public:
             COL = fsSettings["image_width"];
 
             std::string pkg_path = ament_index_cpp::get_package_share_directory("pose_graph");
-            std::string vocabulary_file = pkg_path + "/../support_files/brief_k10L6.bin";
-            std::cout << "vocabulary_file" << vocabulary_file << std::endl;
+            std::string vocabulary_file = pkg_path + "/support_files/brief_k10L6.bin";
+            std::cout << "vocabulary_file: " << vocabulary_file << std::endl;
             posegraph.loadVocabulary(vocabulary_file);
 
-            BRIEF_PATTERN_FILE = pkg_path + "/../support_files/brief_pattern.yml";
-            std::cout << "BRIEF_PATTERN_FILE" << BRIEF_PATTERN_FILE << std::endl;
+            BRIEF_PATTERN_FILE = pkg_path + "/support_files/brief_pattern.yml";
+            std::cout << "BRIEF_PATTERN_FILE: " << BRIEF_PATTERN_FILE << std::endl;
             m_camera = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(config_file.c_str());
 
             fsSettings["image_topic"]          >> IMAGE_TOPIC;
@@ -149,7 +152,7 @@ public:
             "/vins_estimator/odometry", 100,
             std::bind(&PoseGraphNode::vio_callback, this, std::placeholders::_1));
         sub_image = create_subscription<sensor_msgs::msg::Image>(
-            IMAGE_TOPIC, 100,
+            IMAGE_TOPIC, rclcpp::QoS(100).best_effort(), //100,
             std::bind(&PoseGraphNode::image_callback, this, std::placeholders::_1));
         sub_pose = create_subscription<nav_msgs::msg::Odometry>(
             "/vins_estimator/keyframe_pose", 100,
