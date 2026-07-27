@@ -8,8 +8,11 @@ NAME=${1:?사용법: dynobs_eval.sh <bag이름>}
 BAG=~/ros2_ws/bag/$NAME
 [ -d "$BAG" ] || { echo "bag 없음: $BAG"; exit 1; }
 export ROS_DOMAIN_ID=77
+# ROS setup 스크립트는 set -u와 비호환(AMENT_TRACE_SETUP_FILES 등 미설정 변수 참조) → source 구간만 -u 해제
+set +u
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash
+set -u
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CFG=$SRC/config/elp_stereo_edie/vio_edie.yaml
 LOG=/tmp/dynobs_$NAME
