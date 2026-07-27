@@ -188,6 +188,14 @@ extern int PUB_HF_BODY_TF;        // 0=기존(최적화 후 저주기), 1=IMU �
 extern double HF_BODY_TF_TAU;     // [s] 고주기 TF 발행단 스무딩 시정수(예측-보정 스냅 떨림
                                   //   감쇠). 클수록 부드럽지만 반응 지연 증가. <=0=스무딩 끔
 
+// ===== rviz 비교용 VINS footprint TF (SW1-1837) =====
+//   body(IMU)는 축중심에서 TIO(0.1056,0,-0.0941)m 떨어져 있어 실 로봇 base_link와
+//   그냥 겹치면 항상 ~14cm 어긋나 보임(회전 시 레버암 원). 1이면 body에 정적 자식
+//   vins/base_link(=RIO/TIO)·vins/base_footprint를 붙여 bringup TF와 같은 의미의
+//   점끼리 비교 가능. base_footprint는 diff_drive가 부모(odom→)를 이미 갖고 있어
+//   이름 충돌 금지 → vins/ 네임스페이스 필수.
+extern int PUB_VINS_FOOTPRINT_TF; // 0=끔(기본), 1=vins/base_link·vins/base_footprint 정적 TF
+
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 드리프트 처방) =====
 //   휠 twist는 +65ms 지연(diff_drive_controller rolling mean)으로 회전 전이 구간서
 //   틀린 delta_q를 만들어 몸체 yaw를 오염(v7 A/B: 잔차 제거 시 드리프트 −45%·결정론 회복).

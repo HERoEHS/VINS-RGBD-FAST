@@ -2,12 +2,14 @@
 #include <cmath>
 #include "parameters.h"
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 
 using namespace Eigen;
 
 static rclcpp::Node* g_node = nullptr;
 static std::shared_ptr<tf2_ros::TransformBroadcaster> g_br;
+static std::shared_ptr<tf2_ros::StaticTransformBroadcaster> g_static_br;
 
 rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odometry, pub_latest_odometry;
 rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path;
@@ -73,6 +75,39 @@ void registerPub(rclcpp::Node* node)
     cameraposevisual.setLineWidth(0.05);
     keyframebasevisual.setScale(0.1);
     keyframebasevisual.setLineWidth(0.01);
+
+    // [SW1-1837] rviz 비교용: body(IMU)에 실 로봇과 같은 의미의 점(vins/base_link=축중심,
+    //   vins/base_footprint=바닥 투영)을 정적 자식으로 부착. map→body TF(저주기·hf 공통)를
+    //   자동으로 따라가므로 매 프레임 환산 불필요. 사용법은 vio_edie.yaml 주석 참조.
+    if (PUB_VINS_FOOTPRINT_TF)
+    {
+        g_static_br = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
+
+        geometry_msgs::msg::TransformStamped ts;
+        ts.header.stamp    = node->now();
+        ts.header.frame_id = "body";
+        ts.child_frame_id  = "vins/base_link";
+        // body→축중심 = 휠 extrinsic 그대로 (RIO는 현재 Identity지만 yaml 변경에 자동 추종)
+        const Eigen::Quaterniond q_io(RIO);
+        ts.transform.translation.x = TIO.x();
+        ts.transform.translation.y = TIO.y();
+        ts.transform.translation.z = TIO.z();
+        ts.transform.rotation.x    = q_io.x();
+        ts.transform.rotation.y    = q_io.y();
+        ts.transform.rotation.z    = q_io.z();
+        ts.transform.rotation.w    = q_io.w();
+
+        geometry_msgs::msg::TransformStamped ts_fp;
+        ts_fp.header.stamp    = ts.header.stamp;
+        ts_fp.header.frame_id = "vins/base_link";
+        ts_fp.child_frame_id  = "vins/base_footprint";
+        // URDF base_joint 역방향: base_link는 바퀴축 높이(base_z=wheel_radius 0.04)에 있음
+        constexpr double kBaseZWheelRadius = 0.04;
+        ts_fp.transform.translation.z = -kBaseZWheelRadius;
+        ts_fp.transform.rotation.w    = 1.0;
+
+        g_static_br->sendTransform(std::vector<geometry_msgs::msg::TransformStamped>{ts, ts_fp});
+    }
 }
 
 void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,

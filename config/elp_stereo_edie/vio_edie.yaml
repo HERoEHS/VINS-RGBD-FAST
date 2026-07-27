@@ -432,3 +432,21 @@ hf_body_tf_tau: 0.10         # [s] 발행단 스무딩 시정수 — 예측(100H
                           #   으로 스냅하는 왕복 떨림을 감쇠(실기 관찰: 정지 시 떨림·주행 시
                           #   증가). 클수록 부드럽지만 반응 지연 증가(0.05→감쇠 4~5배·지연
                           #   ~50ms). 떨림 잔존 시 0.08~0.10 시도. <=0이면 스무딩 끔(원본)
+
+# ================================================================
+# rviz 비교용 VINS footprint TF (SW1-1837)
+#   body(IMU)는 축중심에서 TIO(0.1056,0,-0.0941) 떨어져 있어 bringup의 base_link와
+#   그냥 겹치면 추정이 완벽해도 ~14cm 어긋나 보임(회전 시 레버암 원 궤적 = 오차 오해).
+#   1이면 body에 정적 자식 2개를 부착해 같은 의미의 점끼리 비교:
+#     body → vins/base_link      (= 휠 extrinsic RIO/TIO, 축중심·바퀴축 높이)
+#     vins/base_link → vins/base_footprint (z -0.04 = URDF base_z=wheel_radius)
+#   ※ base_footprint/base_link 원명 사용 금지 — diff_drive(odom→base_footprint)와
+#     부모 경합으로 TF 트리 파손. vins/ 네임스페이스 필수.
+#   [rviz 비교 절차]
+#     1) 로봇 정지 상태에서 VINS·컨트롤러 기동(둘 다 원점 시작 전제)
+#     2) map2odom  (alias: static_transform_publisher map→odom 항등 — 두 트리 다리)
+#     3) rviz2: Fixed Frame=map, TF에서 base_link vs vins/base_link 표시
+#   이후 벌어지는 간격 = 두 추정기의 누적 불일치(휠 odom도 GT 아님에 유의 — 심판이
+#   아니라 '언제/어디서 갈라지는지' 관찰 도구. 정지 실험에선 참값=무운동이라 즉시 판정 가능)
+# ================================================================
+publish_vins_footprint_tf: 0   # 0=끔(기본, 운영 TF 대역 불변), 1=비교용 정적 TF 부착

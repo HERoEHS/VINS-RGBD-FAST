@@ -67,6 +67,7 @@ double BGZ_RELOCK_COOLDOWN   = 10.0;
 // ===== 고주기 body TF (SW1-1837) =====
 int    PUB_HF_BODY_TF = 0;
 double HF_BODY_TF_TAU = 0.05;
+int    PUB_VINS_FOOTPRINT_TF = 0;
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
@@ -537,6 +538,14 @@ void readParameters(rclcpp::Node* node)
                     "저주기 송출 중단, 스무딩 tau=%.3fs)",
                     HF_BODY_TF_TAU);
     }
+
+    // ===== rviz 비교용 VINS footprint TF (SW1-1837) =====
+    PUB_VINS_FOOTPRINT_TF = fsSettings["publish_vins_footprint_tf"].empty()
+                                ? 0 : (int)fsSettings["publish_vins_footprint_tf"];
+    if (PUB_VINS_FOOTPRINT_TF)
+        RCLCPP_INFO(node->get_logger(),
+                    "PUB_VINS_FOOTPRINT_TF: 1 (body에 vins/base_link·vins/base_footprint "
+                    "정적 TF 부착 — rviz서 bringup TF와 비교용)");
 
     // ===== 휠 회전 잔차 주변화 (SW1-1837) =====
     WHEEL_ROT_MARGINALIZE = fsSettings["wheel_rot_marginalize"].empty()
