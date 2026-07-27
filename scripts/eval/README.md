@@ -17,6 +17,8 @@ source /opt/ros/humble/setup.bash
 | `imu_motion.py [bag] [imu_topic]` | 입력 bag의 IMU | 15초 윈도우별 회전(gyro)·병진여기(accel std) |
 | `depth_check.py [bag] [depth_topic] [n]` | 입력 bag의 depth(32FC1 m) | 거리 구간별 유효 픽셀 비율 |
 | `bias_separation.py <bag> <tum...> [--yaml]` | 입력 bag + VINS camera_pose TUM(들) | **정지 자세 오차를 p(캘리브 bias 아티팩트, QC)와 진짜 자세 드리프트로 분리** (SW1-1837) |
+| `dynobs_eval.sh <bag이름>` | 정지+동적 장애물 bag (프로토콜: `scratchpad/dynobs_protocol.md`) | 재생 3run + 무운동 기준 판정 원버튼 (SW1-1837) |
+| `dynobs_stationary_eval.py <tum...>` | 정지 녹화의 VINS camera_pose TUM(들) | 2s 버킷 \|Δyaw\|·\|Δxy\|·\|Δz\| 타임라인 + 피크/종점 + 합격/취약 판정 (참값=무운동, 노이즈 바닥 0.003m/0.04° 실측) |
 
 ### `bias_separation.py` — 지표의 성격 전환 (SW1-1837)
 
