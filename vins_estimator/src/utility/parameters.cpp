@@ -68,6 +68,14 @@ double BGZ_RELOCK_COOLDOWN   = 10.0;
 int    PUB_HF_BODY_TF = 0;
 double HF_BODY_TF_TAU = 0.05;
 int    PUB_VINS_FOOTPRINT_TF = 0;
+int    USE_STILL_MOTION_LOCK = 0;
+double STILL_LOCK_POS_W = 500.0;   // σ_p 2mm
+double STILL_LOCK_YAW_W = 573.0;   // σ_yaw 0.1°
+int    USE_GAUGE_SLIDE_GUARD = 0;
+double YAW_SLIDE_GUARD_THRESH = 3.0 * M_PI / 180.0;
+double POS_SLIDE_GUARD_THRESH = 0.05;
+double YAW_SLIDE_GUARD_STILL_THRESH = 0.1 * M_PI / 180.0;
+double POS_SLIDE_GUARD_STILL_THRESH = 0.005;
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
@@ -546,6 +554,43 @@ void readParameters(rclcpp::Node* node)
         RCLCPP_INFO(node->get_logger(),
                     "PUB_VINS_FOOTPRINT_TF: 1 (body에 vins/base_link·vins/base_footprint "
                     "정적 TF 부착 — rviz서 bringup TF와 비교용)");
+
+    // ===== 정지 상대운동 잠금 (SW1-1866) =====
+    USE_STILL_MOTION_LOCK = fsSettings["use_still_motion_lock"].empty()
+                                ? 0 : (int)fsSettings["use_still_motion_lock"];
+    if (USE_STILL_MOTION_LOCK)
+    {
+        const double sp = fsSettings["still_lock_pos_sigma_m"].empty()
+                              ? 0.002 : (double)fsSettings["still_lock_pos_sigma_m"];
+        const double sy = fsSettings["still_lock_yaw_sigma_deg"].empty()
+                              ? 0.1 : (double)fsSettings["still_lock_yaw_sigma_deg"];
+        STILL_LOCK_POS_W = 1.0 / std::max(sp, 1e-6);
+        STILL_LOCK_YAW_W = 1.0 / std::max(sy * M_PI / 180.0, 1e-9);
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_STILL_MOTION_LOCK: 1 (정지 확정 인접 프레임 상대운동 잠금 — "
+                    "σ_p=%.3fm σ_yaw=%.2f°)", sp, sy);
+    }
+
+    // ===== 게이지 슬라이드 가드 (SW1-1866) =====
+    USE_GAUGE_SLIDE_GUARD = fsSettings["use_gauge_slide_guard"].empty()
+                                ? 0 : (int)fsSettings["use_gauge_slide_guard"];
+    if (USE_GAUGE_SLIDE_GUARD)
+    {
+        const double thresh_deg = fsSettings["yaw_slide_guard_thresh_deg"].empty()
+                                      ? 3.0 : (double)fsSettings["yaw_slide_guard_thresh_deg"];
+        YAW_SLIDE_GUARD_THRESH = thresh_deg * M_PI / 180.0;
+        POS_SLIDE_GUARD_THRESH = fsSettings["pos_slide_guard_thresh_m"].empty()
+                                     ? 0.05 : (double)fsSettings["pos_slide_guard_thresh_m"];
+        const double still_deg = fsSettings["yaw_slide_guard_still_thresh_deg"].empty()
+                                     ? 0.1 : (double)fsSettings["yaw_slide_guard_still_thresh_deg"];
+        YAW_SLIDE_GUARD_STILL_THRESH = still_deg * M_PI / 180.0;
+        POS_SLIDE_GUARD_STILL_THRESH = fsSettings["pos_slide_guard_still_thresh_m"].empty()
+                                     ? 0.005 : (double)fsSettings["pos_slide_guard_still_thresh_m"];
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_GAUGE_SLIDE_GUARD: 1 (solve 간 과거 프레임 이동 문턱 — 주행 "
+                    "yaw>%.1f°/pos>%.2fm, 정지 확정 시 yaw>%.2f°/pos>%.3fm로 조임)",
+                    thresh_deg, POS_SLIDE_GUARD_THRESH, still_deg, POS_SLIDE_GUARD_STILL_THRESH);
+    }
 
     // ===== 휠 회전 잔차 주변화 (SW1-1837) =====
     WHEEL_ROT_MARGINALIZE = fsSettings["wheel_rot_marginalize"].empty()

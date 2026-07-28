@@ -196,6 +196,26 @@ extern double HF_BODY_TF_TAU;     // [s] 고주기 TF 발행단 스무딩 시정
 //   이름 충돌 금지 → vins/ 네임스페이스 필수.
 extern int PUB_VINS_FOOTPRINT_TF; // 0=끔(기본), 1=vins/base_link·vins/base_footprint 정적 TF
 
+// ===== 게이지 슬라이드 가드 (SW1-1866) =====
+//   동적 장애물(초근접+화면 점령)이 marg prior를 오염시키면 매 solve 창 전체가 게이지
+//   (불관측) 방향으로 일정량 이동하는 폭주가 발생: yaw 13~16°/solve(-90~-160°/s 연속
+//   회전) — yaw만 막으면 병진 게이지로 압력이 전이(0.26~1.5m/s 활주, A/B 실증) →
+//   yaw+병진 동시 봉쇄로 게이지 자유 방향 밀폐. 검출='같은 물리 프레임의 solve 간
+//   재추정 이동'(정상: yaw 0.0x°·위치 mm), 처치=창+marg prior 선형화점 역변환.
+//   원리 상세: yaw_slide_guard.h
+// ===== 정지 상대운동 잠금 (SW1-1866) =====
+//   정지 확정(휠+gyro 합의) 구간의 인접 프레임에 '상대 위치·yaw=0' 관측을 주입 —
+//   오염 비전이 새 프레임을 돌려 놓는 '배치 오차'(사후 가드의 사각)를 태어날 때 차단.
+extern int    USE_STILL_MOTION_LOCK;    // 0=끔, 1=정지 구간 상대운동 잠금
+extern double STILL_LOCK_POS_W;         // 위치 가중치 = 1/σ_p [1/m]
+extern double STILL_LOCK_YAW_W;         // yaw 가중치 = 1/σ_yaw [1/rad]
+
+extern int    USE_GAUGE_SLIDE_GUARD;    // 0=끔, 1=검출+역변환(yaw·병진)
+extern double YAW_SLIDE_GUARD_THRESH;   // [rad] 주행 중 solve당 yaw 이동 문턱(기본 3°)
+extern double POS_SLIDE_GUARD_THRESH;   // [m]   주행 중 solve당 위치 이동 문턱(기본 0.05)
+extern double YAW_SLIDE_GUARD_STILL_THRESH;  // [rad] 정지 확정 시 문턱(기본 0.1° — pose 고정)
+extern double POS_SLIDE_GUARD_STILL_THRESH;  // [m]   정지 확정 시 문턱(기본 0.005)
+
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 드리프트 처방) =====
 //   휠 twist는 +65ms 지연(diff_drive_controller rolling mean)으로 회전 전이 구간서
 //   틀린 delta_q를 만들어 몸체 yaw를 오염(v7 A/B: 잔차 제거 시 드리프트 −45%·결정론 회복).

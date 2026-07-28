@@ -122,6 +122,8 @@ public:
 
     // ===== [SW1-1837] 정지 시 중력 재정렬 v2: 창 전체 자세 보정 (use_gravity_align: 2) =====
     void gravityRealignWindow();  // optimization() 직후 호출 — 정지 확정 시 1회 ΔR 일괄 보정
+    void gaugeSlideGuard();       // [SW1-1866] optimization() 직후 호출 — 게이지 슬라이드
+                                  //   (동적 장애물 폭주, yaw·병진) 검출·역변환
 
     enum SolverFlag
     {
@@ -163,6 +165,14 @@ public:
 
     // [SW1-1837] 고속 회전 비전 게이팅 — skip한 관측 수(A/B 진단 로그용)
     long     yaw_gated_obs_{0};
+
+    // [SW1-1866] 게이지 슬라이드 가드 상태 — 직전 solve의 최신 프레임 스탬프/yaw/위치
+    double   yaw_guard_prev_stamp_{-1.0};
+    double   yaw_guard_prev_yaw_deg_{0.0};
+    Vector3d yaw_guard_prev_pos_{Vector3d::Zero()};
+    long     yaw_guard_trigger_cnt_{0};
+    int      yaw_guard_consec_{0};      // 연속 발동 solve 수 — 오염 지속 판정(절제 트리거)
+    double   yaw_guard_last_warn_t_{-1.0e18};
 
     // [SW1-1837] Bg_z 잠금 상태 — 상태 기반 발동 추적기·정지 실측·재잠금(온도 표류 추종)
     bool               bgz_locked_{false};

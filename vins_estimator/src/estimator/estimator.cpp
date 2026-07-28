@@ -1,13 +1,16 @@
 #include "estimator.h"
 #include "../utility/visualization.h"
 #include "../factor/zero_velocity_factor.h"
+#include "../factor/still_motion_factor.h"
 #include "../factor/acc_bias_prior_factor.h"
 #include "../factor/vertical_velocity_factor.h"
 #include "../factor/plane_factor.h"
 #include "../factor/body_nhc_factor.h"
 #include "../factor/gravity_align_factor.h"
 #include "../utility/gravity_window_realign.h"
+#include "../utility/yaw_slide_guard.h"
 #include "../utility/yaw_gating.h"
+#include <map>
 #include "../utility/bgz_lock.h"
 #include <Eigen/src/Core/Matrix.h>
 #include <algorithm>
@@ -169,6 +172,13 @@ void Estimator::clearState()
     grav_realign_done   = false;
     ba_at_realign       = Vector3d::Zero();
     grav_realign_last_t = -1.0e18;
+
+    // [SW1-1866] 게이지 슬라이드 가드 리셋 (재초기화 직후 재기저를 슬라이드로 오인 방지)
+    yaw_guard_prev_stamp_   = -1.0;
+    yaw_guard_prev_yaw_deg_ = 0.0;
+    yaw_guard_prev_pos_     = Vector3d::Zero();
+    yaw_guard_consec_       = 0;
+    yaw_guard_last_warn_t_  = -1.0e18;
 
     drift_correct_r = Matrix3d::Identity();
     drift_correct_t = Vector3d::Zero();
@@ -493,6 +503,10 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
         //   slideWindow(상대 pose만 사용)·updateLatestStates(보정된 상태 재독)가 자동 정합된다.
         if (USE_GRAVITY_ALIGN >= 2)  // 2=창 회전만 / 3=창 회전+Ba 동시 재설정
             gravityRealignWindow();
+        // [SW1-1866] 게이지 슬라이드 가드 — 같은 삽입점(최적화·marg 완료 직후) 이유 동일.
+        //   중력 재정렬 뒤 순서: 재정렬의 yaw 부작용은 2차 미소량(≤0.16°)이라 문턱(3°) 미달
+        if (USE_GAUGE_SLIDE_GUARD)
+            gaugeSlideGuard();
         ROS_DEBUG("solver costs: %fms", t_solve.toc());
 
         set<int> removeIndex;
@@ -1243,6 +1257,268 @@ void Estimator::gravityRealignWindow()
                 Bas[frame_count].x(), Bas[frame_count].y(), Bas[frame_count].z());
 }
 
+// [SW1-1866] 게이지 슬라이드 가드 — 동적 장애물 오염 폭주(정지 중 연속 가짜 회전·활주) 차단.
+//   기전·검출·처치 원리는 utility/yaw_slide_guard.h 헤더 주석 참조. 요지:
+//   - 검출: '같은 물리 프레임'의 추정이 solve 사이에 이동한 양. 정상 재선형화는 yaw
+//     0.0x°·위치 mm, 슬라이드는 yaw 13~16°·위치 0.03~0.15m(실측). 실제 운동(스핀·주행)은
+//     과거 프레임 추정을 안 움직이므로 오탐 없음(v8·v9 A/B 발동 0회). 시간 상수 없음.
+//   - 처치: 창 전체+marg prior 선형화점을 검출량만큼 역변환(역회전+역병진) —
+//     gravityRealignWindow와 동일 기계(강체 변환이라 창 내 상대 pose·재투영 잔차 불변).
+//     yaw만 막으면 압력이 병진 게이지로 전이(A/B: xy 0.26~1.5m/s 활주) → 둘 다 봉쇄해야
+//     게이지 자유 방향이 밀폐된다.
+//   - 재발동: 오염 prior가 남아 있으면 매 solve 다시 밀고 가드가 다시 되돌림(출력은
+//     문턱 내 유계). 창이 전진하며 prior가 교정된 상태 기반으로 재구축되면 자연 소멸.
+void Estimator::gaugeSlideGuard()
+{
+    const double stamp_now = Headers[frame_count];
+
+    // [SW1-1866 probe] 강체성 판별용 — 직전 solve(보정 후)의 창 내 전 프레임 yaw.
+    //   probe 전용(환경변수 게이트), 단일 estimator 전제의 함수 static.
+    static const bool                slide_multi_log = (std::getenv("VINS_SLIDE_DIST_LOG") != nullptr);
+    static std::map<double, double>  slide_multi_prev;  // stamp → yaw[deg]
+
+    // 직전 solve의 최신 프레임을 현재 창에서 스탬프로 재탐색.
+    //   MARGIN_SECOND_NEW로 그 프레임이 창에서 대체된 경우 부재 → 이번 solve는 검출
+    //   불가(기록만 갱신). 폭주는 매 solve 지속되므로 다음 keyframe solve서 즉시 잡힌다.
+    int ref = -1;
+    if (yaw_guard_prev_stamp_ > 0.0)
+        for (int i = frame_count; i >= 0; i--)
+            if (Headers[i] == yaw_guard_prev_stamp_)
+            {
+                ref = i;
+                break;
+            }
+
+    if (ref >= 0)
+    {
+        // 정지 확정 = 외부 앵커(휠 정지+gyro 정온+다리 이벤트 아님, 중력 재정렬과 동일
+        //   3중 검사). 정지면 'Δpose=0'이라는 독립 관측이 생기므로 문턱을 조여 pose를
+        //   사실상 고정 — 퇴화 장면(동적 장애물 점령)에서 문턱 이하 배회(3차 A/B: prior
+        //   절제 후 yaw +76~222° 배회, 평균 0.9°/solve)를 막는 유일한 앵커.
+        bool   still      = false;
+        int    still_fail = 0;  // 진단: 0=합격 1=전제조건 2=leg게이트 3=휠v 4=휠w 5=gyro
+        double diag_v = -1.0, diag_w = -1.0, diag_dt = -1.0;
+        if (!(frame_count >= 1 && pre_integrations_wheel[frame_count] &&
+              pre_integrations_wheel[frame_count]->sum_dt > 1e-3 &&
+              pre_integrations[frame_count] &&
+              !pre_integrations[frame_count]->gyr_buf.empty()))
+            still_fail = 1;
+        else if (isLegGated(Headers[frame_count - 1], Headers[frame_count]))
+            still_fail = 2;
+        else
+        {
+            const double dt_w  = pre_integrations_wheel[frame_count]->sum_dt;
+            const double v_avg = pre_integrations_wheel[frame_count]->delta_p.norm() / dt_w;
+            const double w_avg = 2.0 * std::acos(std::min(1.0, std::fabs(
+                                     pre_integrations_wheel[frame_count]->delta_q.w()))) / dt_w;
+            diag_v  = v_avg;
+            diag_w  = w_avg;
+            diag_dt = dt_w;
+            Vector3d g_mean = Vector3d::Zero();
+            for (const auto &g : pre_integrations[frame_count]->gyr_buf)
+                g_mean += g;
+            g_mean /= static_cast<double>(pre_integrations[frame_count]->gyr_buf.size());
+            // 가드 전용 정지 임계 — GRAVITY_ALIGN_*는 use_gravity_align:1일 때만 로드되어
+            //   0으로 남는 함정(4차 A/B서 still 항상 불합격의 범인). 물리값은 ZUPT·재정렬과
+            //   동일한 0.02 m/s / 0.02 rad/s.
+            constexpr double kStillVelMax = 0.02;
+            constexpr double kStillGyrMax = 0.02;
+            if (v_avg >= kStillVelMax)
+                still_fail = 3;
+            else if (w_avg >= kStillGyrMax)
+                still_fail = 4;
+            else if ((g_mean - Bgs[frame_count]).norm() >= 0.05)
+                still_fail = 5;
+            else
+                still = true;
+        }
+        const double yaw_thresh_deg =
+            (still ? YAW_SLIDE_GUARD_STILL_THRESH : YAW_SLIDE_GUARD_THRESH) * 180.0 / M_PI;
+        const double pos_thresh_m =
+            still ? POS_SLIDE_GUARD_STILL_THRESH : POS_SLIDE_GUARD_THRESH;
+
+        const double yaw_slide = yaw_slide_guard::wrappedDeltaDeg(
+            Utility::R2ypr(Rs[ref]).x(), yaw_guard_prev_yaw_deg_);
+        const bool rot_hit = yaw_slide_guard::isSlide(yaw_slide, yaw_thresh_deg);
+
+        // [SW1-1866] 강체성 판별 — 역변환 '전' 창 내 전 프레임의 slide 동시 측정.
+        //   강체(진짜 게이지 슬라이드)면 전 프레임 동일 이동=산포 0. 비강체(산포 큼)는
+        //   'prior가 특정 프레임 하나를 당기는 중'의 서명(온셋 실측: 1프레임만 −15.3°,
+        //   나머지 9개 제자리, 산포=슬라이드 크기). 비강체에 강체 역변환을 쓰면 죄 없는
+        //   프레임들을 돌려 +33° 온셋 과도를 '우리가' 주입했음이 8차 판별로 확정 → 분기.
+        double spread = 0.0;
+        int    n_spread = 0;
+        if (!slide_multi_prev.empty())
+        {
+            double mn = 1e9, mx = -1e9, sum = 0;
+            for (int i = 0; i <= frame_count; i++)
+            {
+                auto it = slide_multi_prev.find(Headers[i]);
+                if (it == slide_multi_prev.end())
+                    continue;
+                const double d = yaw_slide_guard::wrappedDeltaDeg(
+                    Utility::R2ypr(Rs[i]).x(), it->second);
+                mn = std::min(mn, d);
+                mx = std::max(mx, d);
+                sum += d;
+                n_spread++;
+            }
+            if (n_spread >= 2)
+            {
+                spread = mx - mn;
+                if (slide_multi_log)
+                    RCLCPP_INFO(rclcpp::get_logger("vins_gauge_guard"),
+                                "[SLIDE-MULTI] t=%.3f n=%d mean=%+.3f min=%+.3f max=%+.3f "
+                                "spread=%.3f",
+                                stamp_now, n_spread, sum / n_spread, mn, mx, spread);
+            }
+        }
+        // 강체 판정: 산포가 슬라이드 크기의 1/3 이하(+미세 바닥 0.5°)면 강체.
+        //   비율 기준 = bag 편향 시간상수 없는 상태 조건(강체성 붕괴 그 자체)
+        const bool rigid = spread <= std::max(0.3 * std::fabs(yaw_slide), 0.5);
+        // '이상+비강체' = prior의 단일 프레임 견인 확정 → 강체 역변환은 부적용(자해),
+        //   주범(prior)을 즉시 절제(연속 5회 대기 불필요 — 산포가 이미 신원을 입증)
+        const bool nonrigid_takeover =
+            !rigid && n_spread >= 2 &&
+            yaw_slide_guard::isSlide(yaw_slide, YAW_SLIDE_GUARD_THRESH * 180.0 / M_PI);
+        if (nonrigid_takeover)
+        {
+            if (last_marginalization_info)
+            {
+                delete last_marginalization_info;
+                last_marginalization_info = nullptr;
+                last_marginalization_parameter_blocks.clear();
+            }
+            yaw_guard_consec_ = 0;
+            yaw_guard_trigger_cnt_++;
+            if (stamp_now - yaw_guard_last_warn_t_ > 1.0)
+            {
+                yaw_guard_last_warn_t_ = stamp_now;
+                RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                            "[GAUGE-GUARD] t=%.3f 비강체 슬라이드(ref %+.2fdeg, 산포 %.2fdeg)"
+                            " → 역변환 생략+prior 즉시 절제", stamp_now, yaw_slide, spread);
+            }
+        }
+
+        // 회전 역변환 (pivot=현재 위치 — 현재 출력의 위치 연속성 유지)
+        //   비강체 접수 시엔 부적용(강체 가정 위반 = 죄 없는 프레임 오염)
+        const bool     do_rot = rot_hit && !nonrigid_takeover;
+        const Matrix3d dR     = do_rot ? yaw_slide_guard::counterRotation(yaw_slide)
+                                       : Matrix3d::Identity();
+        const Vector3d pivot = Ps[frame_count];
+        if (do_rot)
+            for (int i = 0; i <= WINDOW_SIZE; i++)
+            {
+                Ps[i] = pivot + dR * (Ps[i] - pivot);
+                Rs[i] = dR * Rs[i];
+                Vs[i] = dR * Vs[i];
+            }
+
+        // 병진 슬라이드는 회전 역변환 '후' 잔여로 측정 — ref 프레임을 직전 solve 위치로 복원
+        const Vector3d pos_slide = Ps[ref] - yaw_guard_prev_pos_;
+        const bool     pos_hit   = yaw_slide_guard::isPosSlide(pos_slide, pos_thresh_m) &&
+                                   !nonrigid_takeover;
+        if (pos_hit)
+            for (int i = 0; i <= WINDOW_SIZE; i++)
+                Ps[i] -= pos_slide;
+
+        // 진단: 문턱 무관 slide 분포(정상 마진 실측용, 환경변수 게이트·read-only)
+        static const bool dist_log = (std::getenv("VINS_SLIDE_DIST_LOG") != nullptr);
+        if (dist_log)
+            RCLCPP_INFO(rclcpp::get_logger("vins_gauge_guard"),
+                        "[SLIDE-DIST] t=%.3f yaw=%+.4fdeg pos=%.4fm still=%d fail=%d "
+                        "v=%.4f w=%.4f dt=%.3f",
+                        stamp_now, yaw_slide, pos_slide.norm(), still ? 1 : 0, still_fail,
+                        diag_v, diag_w, diag_dt);
+
+        // '진짜 이상' 판정은 주행 문턱 기준 — 정지 전면 고정(pin)의 미세 카운터(mm·0.0x°)가
+        //   절제/경고를 오발시키지 않도록 분리(5차 A/B: 정지 pin 없인 문턱만큼 새고,
+        //   pin의 매 solve 발동이 consec에 잡히면 정상 정차서 prior 절제 사고)
+        const bool anomaly =
+            !nonrigid_takeover &&
+            (yaw_slide_guard::isSlide(yaw_slide, YAW_SLIDE_GUARD_THRESH * 180.0 / M_PI) ||
+             yaw_slide_guard::isPosSlide(pos_slide, POS_SLIDE_GUARD_THRESH));
+
+        if (do_rot || pos_hit)
+        {
+            // marg prior 선형화점도 동일 변환 — 생략하면 다음 solve가 역변환을 되돌린다
+            //   (gravityRealignWindow와 동일 관용구·동일 근거)
+            if (last_marginalization_info)
+            {
+                for (size_t k = 0; k < last_marginalization_parameter_blocks.size(); k++)
+                {
+                    double *addr = last_marginalization_parameter_blocks[k];
+                    double *data = last_marginalization_info->keep_block_data[k];
+                    for (int j = 0; j <= WINDOW_SIZE; j++)
+                    {
+                        if (addr == para_Pose[j])
+                        {
+                            if (do_rot)
+                                gravity_realign::rotatePoseBlock(data, dR, pivot);
+                            if (pos_hit)
+                                yaw_slide_guard::translatePoseBlock(data, -pos_slide);
+                            break;
+                        }
+                        if (addr == para_SpeedBias[j])
+                        {
+                            if (do_rot)
+                                gravity_realign::rotateSpeedBiasBlock(data, dR);
+                            break;  // 병진은 속도·bias 불변
+                        }
+                    }
+                }
+            }
+            yaw_guard_trigger_cnt_++;
+            // WARN·절제 카운트는 '진짜 이상'(주행 문턱 초과)만 — pin 미세 카운터는 조용히
+            if (anomaly)
+            {
+                yaw_guard_consec_++;
+                if (stamp_now - yaw_guard_last_warn_t_ > 1.0)
+                {
+                    yaw_guard_last_warn_t_ = stamp_now;
+                    RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                                "[GAUGE-GUARD] t=%.3f yaw_slide=%+.2fdeg pos_slide=%.3fm "
+                                "역변환 적용 (누적 %ld회)",
+                                stamp_now, yaw_slide, pos_slide.norm(), yaw_guard_trigger_cnt_);
+                }
+
+                // 에스컬레이션: 연속 5 solve 이상 발동 = 일회성 교란이 아니라 '오염된
+                //   prior의 지속 압력'으로 확정(정상 주행은 이상 발동 0회 — v8·v9 실측)
+                //   → 오염원인 marg prior를 절제. 역변환만으로는 문턱 이하 누설이 남아
+                //   활주가 계속되기 때문(2차 A/B: 1.4cm/solve). prior 부재는 일시적
+                //   (다음 solve 마진화가 건강한 현재 상태로 재구축).
+                constexpr int kAmputateAfterConsec = 5;
+                if (yaw_guard_consec_ >= kAmputateAfterConsec)
+                {
+                    if (last_marginalization_info)
+                    {
+                        delete last_marginalization_info;
+                        last_marginalization_info = nullptr;
+                        last_marginalization_parameter_blocks.clear();
+                    }
+                    yaw_guard_consec_ = 0;
+                    RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                                "[GAUGE-GUARD] t=%.3f 오염 지속(연속 %d solve) → marg prior "
+                                "절제(압력원 제거, 다음 solve서 재구축)",
+                                stamp_now, kAmputateAfterConsec);
+                }
+            }
+        }
+        if (!anomaly)
+            yaw_guard_consec_ = 0;  // 이상 없는 solve = 에피소드 종료
+    }
+
+    yaw_guard_prev_stamp_   = stamp_now;
+    yaw_guard_prev_yaw_deg_ = Utility::R2ypr(Rs[frame_count]).x();
+    yaw_guard_prev_pos_     = Ps[frame_count];
+
+    // [SW1-1866] 강체성 판별용 전 프레임 yaw 저장(보정 후 값 — 다음 solve 비교 기준).
+    //   비강체 접수 분기의 판정 입력이라 상시 유지(11개 R2ypr/solve — 비용 무시 가능)
+    slide_multi_prev.clear();
+    for (int i = 0; i <= frame_count; i++)
+        slide_multi_prev[Headers[i]] = Utility::R2ypr(Rs[i]).x();
+}
+
 void Estimator::vector2double()
 {
     for (int i = 0; i <= WINDOW_SIZE; i++)
@@ -1843,6 +2119,33 @@ void Estimator::optimization()
         RCLCPP_DEBUG(zupt_logger, "[ZUPT] applied %d / %d frames", zupt_cnt, frame_count);
     }
 
+    // [SW1-1866] 정지 상대운동 잠금 — 오염 비전의 '새 프레임 배치 오차' 차단.
+    //   정지 확정(휠 정지+다리 게이트 아님+gyro 정온 — 게이지 가드와 동일 3중 검사) 구간의
+    //   인접 프레임에 상대 위치·yaw=0 관측 주입. 배경·과제약 회피는 still_motion_factor.h.
+    if (USE_STILL_MOTION_LOCK && USE_WHEEL)
+    {
+        for (int i = 1; i <= frame_count; i++)
+        {
+            if (!pre_integrations_wheel[i] || pre_integrations_wheel[i]->sum_dt < 1e-3 ||
+                !pre_integrations[i] || pre_integrations[i]->gyr_buf.empty())
+                continue;
+            if (isLegGated(Headers[i - 1], Headers[i]))
+                continue;
+            const double dt_w  = pre_integrations_wheel[i]->sum_dt;
+            const double v_avg = pre_integrations_wheel[i]->delta_p.norm() / dt_w;
+            const double w_avg = 2.0 * std::acos(std::min(1.0, std::fabs(
+                                     pre_integrations_wheel[i]->delta_q.w()))) / dt_w;
+            Vector3d g_mean = Vector3d::Zero();
+            for (const auto &g : pre_integrations[i]->gyr_buf)
+                g_mean += g;
+            g_mean /= static_cast<double>(pre_integrations[i]->gyr_buf.size());
+            if (v_avg < 0.02 && w_avg < 0.02 && (g_mean - Bgs[i]).norm() < 0.05)
+                problem.AddResidualBlock(
+                    StillMotionFactor::Create(STILL_LOCK_POS_W, STILL_LOCK_YAW_W), NULL,
+                    para_Pose[i - 1], para_Pose[i]);
+        }
+    }
+
     /*******[SW1-1837] 정지 시 중력 재정렬: 정지 프레임 acc 평균(≈중력 방향)으로 잔여 roll/pitch 교정*******/
     //   이벤트 게이팅(예방)이 못 막은 잔여 자세 주입의 사후 교정(감쇠≠차단, doc/EVENT_GATING.md 판정 절).
     //   정지 중 acc는 중력만 감지 = 절대 roll/pitch 관측. 부팅 imu_offsets 교정으로 Ba≈0 전제,
@@ -2049,6 +2352,26 @@ void Estimator::optimization()
                     "[BG] t=%.3f bgx=%.6f bgy=%.6f bgz=%.6f",
                     Headers[WINDOW_SIZE], Bgs[WINDOW_SIZE].x(), Bgs[WINDOW_SIZE].y(),
                     Bgs[WINDOW_SIZE].z());
+
+    // [SW1-1866] 동적 장애물 yaw 폭주 포렌식 — 최적화별 특징점 구성(환경변수 게이트, 기본 off).
+    //   폭주 중 비전이 '무엇으로' 최적화에 참여하는지: 채택 관측 수(used), 관리 중 특징 수,
+    //   is_dynamic 낙인 수. 낙인 0 + used 다수면 방어 회피 확정, used≈0이면 게이지 무저항 확정.
+    static const bool dynobs_log = (std::getenv("VINS_DYNOBS_LOG") != nullptr);
+    if (dynobs_log)
+    {
+        int n_total = 0, n_dyn = 0, n_depth = 0;
+        for (auto &it_per_id : f_manager.feature)
+        {
+            n_total++;
+            if (it_per_id.is_dynamic)
+                n_dyn++;
+            if (it_per_id.estimated_depth > 0)
+                n_depth++;
+        }
+        RCLCPP_INFO(rclcpp::get_logger("vins_dynobs_probe"),
+                    "[DYNOBS] t=%.3f used=%d total=%d dyn=%d depth=%d",
+                    Headers[WINDOW_SIZE], f_m_cnt, n_total, n_dyn, n_depth);
+    }
 
     //添加闭环检测残差，计算滑动窗口中与每一个闭环关键帧的相对位姿，这个相对位置是为后面的图优化准备
     if (relocalization_info)
@@ -2880,6 +3203,12 @@ double Estimator::reprojectionError3D(Matrix3d &Ri, Vector3d &Pi, Matrix3d &rici
 
 void Estimator::movingConsistencyCheck(set<int> &removeIndex)
 {
+    // [SW1-1866] 동적 장애물 포렌식(환경변수 게이트, 기본 off) — 판정 오차 분포 집계.
+    //   폭주 중 오차가 10px 문턱 '아래'로 기는지(방어 회피), 전부 초과인지(전면 기각) 구분용.
+    static const bool dynobs_log = (std::getenv("VINS_DYNOBS_LOG") != nullptr);
+    int    mcc_checked = 0, mcc_flagged = 0;
+    double mcc_sum_px = 0, mcc_max_px = 0;
+
     for (auto &it_per_id : f_manager.feature)
     {
         it_per_id.used_num = it_per_id.feature_per_frame.size();
@@ -2911,7 +3240,8 @@ void Estimator::movingConsistencyCheck(set<int> &removeIndex)
         }
         if (errCnt > 0)
         {
-            if (FOCAL_LENGTH * err / errCnt > 10 || err3D / errCnt > 2.0)
+            const double err_px = FOCAL_LENGTH * err / errCnt;
+            if (err_px > 10 || err3D / errCnt > 2.0)
             {
                 removeIndex.insert(it_per_id.feature_id);
                 it_per_id.is_dynamic = true;
@@ -2920,6 +3250,20 @@ void Estimator::movingConsistencyCheck(set<int> &removeIndex)
             {
                 it_per_id.is_dynamic = false;
             }
+            if (dynobs_log)
+            {
+                mcc_checked++;
+                if (it_per_id.is_dynamic)
+                    mcc_flagged++;
+                mcc_sum_px += err_px;
+                mcc_max_px = std::max(mcc_max_px, err_px);
+            }
         }
     }
+
+    if (dynobs_log && mcc_checked > 0)
+        RCLCPP_INFO(rclcpp::get_logger("vins_dynobs_probe"),
+                    "[DYNOBS-MCC] t=%.3f checked=%d flagged=%d mean_px=%.2f max_px=%.2f",
+                    Headers[WINDOW_SIZE], mcc_checked, mcc_flagged,
+                    mcc_sum_px / mcc_checked, mcc_max_px);
 }
