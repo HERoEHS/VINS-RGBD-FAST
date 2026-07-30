@@ -75,6 +75,7 @@ int    USE_GAUGE_SLIDE_GUARD = 0;
 int    USE_STILL_CUM_GUARD = 0;
 double STILL_CUM_XY_MAX = 0.03;
 double YAW_SLIDE_GUARD_THRESH = 3.0 * M_PI / 180.0;
+int    GUARD_ESCALATION_MAX   = 3;  // 정화 없는 연속 절제 상한(0=비활성) — 조기 재초기화 판정
 double POS_SLIDE_GUARD_THRESH = 0.05;
 double YAW_SLIDE_GUARD_STILL_THRESH = 0.1 * M_PI / 180.0;
 double POS_SLIDE_GUARD_STILL_THRESH = 0.005;
@@ -592,6 +593,13 @@ void readParameters(rclcpp::Node* node)
                     "USE_GAUGE_SLIDE_GUARD: 1 (solve 간 과거 프레임 이동 문턱 — 주행 "
                     "yaw>%.1f°/pos>%.2fm, 정지 확정 시 yaw>%.2f°/pos>%.3fm로 조임)",
                     thresh_deg, POS_SLIDE_GUARD_THRESH, still_deg, POS_SLIDE_GUARD_STILL_THRESH);
+        // [07-31] 절제 에스컬레이션 — 실기 정지 폭주 2건(절제 7·15회 무효) 근거
+        GUARD_ESCALATION_MAX = fsSettings["guard_escalation_max"].empty()
+                                   ? 3 : (int)fsSettings["guard_escalation_max"];
+        if (GUARD_ESCALATION_MAX > 0)
+            RCLCPP_INFO(node->get_logger(),
+                        "GUARD_ESCALATION_MAX: %d (정화 없는 연속 prior 절제 상한 — 도달 시 "
+                        "조기 재초기화로 폭주 발행 차단)", GUARD_ESCALATION_MAX);
     }
 
     // ===== 정지 창 누적 변위 가드 (SW1-1866, 07-30) =====

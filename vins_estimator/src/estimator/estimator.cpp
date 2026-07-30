@@ -179,6 +179,8 @@ void Estimator::clearState()
     yaw_guard_prev_pos_     = Vector3d::Zero();
     yaw_guard_consec_       = 0;
     yaw_guard_last_warn_t_  = -1.0e18;
+    guard_amputate_streak_  = 0;
+    guard_escalation_fire_  = false;
     still_cum_streak_       = 0;
     still_cum_valid_        = false;
     still_cum_anchor_       = Vector3d::Zero();
@@ -1402,6 +1404,16 @@ void Estimator::gaugeSlideGuard()
                             "[GAUGE-GUARD] t=%.3f 비강체 슬라이드(ref %+.2fdeg, 산포 %.2fdeg)"
                             " → 역변환 생략+prior 즉시 절제", stamp_now, yaw_slide, spread);
             }
+            // [SW1-1866 07-31] 정화 없는 연속 절제 집계 — 절제로 못 끊는 오염 판정 입력
+            guard_amputate_streak_++;
+            if (!guard_escalation_fire_ &&
+                yaw_slide_guard::escalationReached(guard_amputate_streak_, GUARD_ESCALATION_MAX))
+            {
+                guard_escalation_fire_ = true;
+                RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                            "[GAUGE-GUARD] t=%.3f 정화 없는 연속 절제 %d회 — 절제로 못 끊는 "
+                            "오염 → 조기 재초기화 요청", stamp_now, guard_amputate_streak_);
+            }
         }
 
         // 회전 역변환 (pivot=현재 위치 — 현재 출력의 위치 연속성 유지)
@@ -1555,11 +1567,30 @@ void Estimator::gaugeSlideGuard()
                                 "[GAUGE-GUARD] t=%.3f 오염 지속(연속 %d solve) → marg prior "
                                 "절제(압력원 제거, 다음 solve서 재구축)",
                                 stamp_now, kAmputateAfterConsec);
+                    // [SW1-1866 07-31] 정화 없는 연속 절제 집계 (비강체 분기와 동일 판정)
+                    guard_amputate_streak_++;
+                    if (!guard_escalation_fire_ &&
+                        yaw_slide_guard::escalationReached(guard_amputate_streak_,
+                                                           GUARD_ESCALATION_MAX))
+                    {
+                        guard_escalation_fire_ = true;
+                        RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                                    "[GAUGE-GUARD] t=%.3f 정화 없는 연속 절제 %d회 — 절제로 "
+                                    "못 끊는 오염 → 조기 재초기화 요청",
+                                    stamp_now, guard_amputate_streak_);
+                    }
                 }
             }
         }
         if (!anomaly)
+        {
             yaw_guard_consec_ = 0;  // 이상 없는 solve = 에피소드 종료
+            // [SW1-1866 07-31] 정화 판정: 비강체 접수 solve는 anomaly 정의상 false지만
+            //   절제가 일어난 solve라 정화가 아님 — 자기 리셋으로 에스컬레이션을 못
+            //   세게 되는 자충을 막는다
+            if (!nonrigid_takeover)
+                guard_amputate_streak_ = 0;
+        }
     }
 
     yaw_guard_prev_stamp_   = stamp_now;
@@ -1838,6 +1869,15 @@ void Estimator::initPlane()
 
 bool Estimator::failureDetection()
 {
+    // [SW1-1866 07-31] 가드 에스컬레이션 — 정화 없는 연속 prior 절제 상한 도달.
+    //   절제로 못 끊는 오염의 결말은 어차피 reboot(실기 2건: 11~13m 폭주 후 big
+    //   translation)이므로, 폭주가 발행되기 전에 같은 결말을 앞당긴다.
+    if (guard_escalation_fire_)
+    {
+        ROS_INFO(" guard escalation: prior amputation x%d without recovery",
+                 GUARD_ESCALATION_MAX);
+        return true;
+    }
     if (f_manager.last_track_num < 2)
     {
         ROS_INFO(" little feature %d", f_manager.last_track_num);

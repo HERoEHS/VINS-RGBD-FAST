@@ -217,6 +217,7 @@ extern double YAW_SLIDE_GUARD_THRESH;   // [rad] 주행 중 solve당 yaw 이동 
 extern double POS_SLIDE_GUARD_THRESH;   // [m]   주행 중 solve당 위치 이동 문턱(기본 0.05)
 extern double YAW_SLIDE_GUARD_STILL_THRESH;  // [rad] 정지 확정 시 문턱(기본 0.1° — pose 고정)
 extern double POS_SLIDE_GUARD_STILL_THRESH;  // [m]   정지 확정 시 문턱(기본 0.005)
+extern int    GUARD_ESCALATION_MAX;     // 정화 없는 연속 prior 절제 상한(0=비활성) — 도달 시 조기 재초기화
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 드리프트 처방) =====
 //   휠 twist는 +65ms 지연(diff_drive_controller rolling mean)으로 회전 전이 구간서

@@ -74,4 +74,16 @@ inline Eigen::Vector3d cumClampCorrection(const Eigen::Vector3d &dev, double max
     return -dxy * ((n - max_m) / n);
 }
 
+// ── 절제 에스컬레이션 판정 (07-31, 실기 정지 폭주 2건 실증으로 추가) ──
+//   전제 붕괴 실측: prior 절제는 '다음 solve가 건강한 현재 상태로 재구축'이 전제인데,
+//   실기 2건에서 절제 7·15회 반복에도 견인이 지속·증폭(절제 직후 pos_slide
+//   0.56~0.65m/solve) — 압력원이 prior 밖(활성 잔차)에 있으면 절제는 무한 반복이고,
+//   결말은 어차피 failure detection→reboot인데 그 전에 11~13m 폭주가 발행된다.
+//   → '정화(이상 없는 solve) 없는 연속 절제 max회' 도달 시 조기 재초기화 신호를 준다.
+//   상태 조건(시간 상수 아님) — 정상 주행 절제 0회 실측(v8·v9)이라 오발 여지 낮음.
+inline bool escalationReached(int amputate_streak, int max)
+{
+    return max > 0 && amputate_streak >= max;  // max<=0 = 비활성
+}
+
 }  // namespace yaw_slide_guard

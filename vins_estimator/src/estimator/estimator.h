@@ -173,6 +173,8 @@ public:
     long     yaw_guard_trigger_cnt_{0};
     int      yaw_guard_consec_{0};      // 연속 발동 solve 수 — 오염 지속 판정(절제 트리거)
     double   yaw_guard_last_warn_t_{-1.0e18};
+    int      guard_amputate_streak_{0};      // 정화(무이상 solve) 없는 연속 절제 횟수
+    bool     guard_escalation_fire_{false};  // 연속 절제 상한 도달 → failureDetection이 조기 재초기화
 
     // [SW1-1866] 정지 창 누적 변위 가드 상태 — 앵커는 정지 연속 확인 후 래치
     int      still_cum_streak_{0};                    // 연속 정지 확정 solve 수

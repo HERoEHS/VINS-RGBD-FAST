@@ -120,6 +120,24 @@ TEST(CumClamp, PureZDeviationIgnored)
     EXPECT_NEAR(ysg::cumClampCorrection({0.0, 0.0, 2.0}, 0.03).norm(), 0.0, 1e-12);
 }
 
+// ── 절제 에스컬레이션 판정 (07-31, 실기 정지 폭주 2건 근거) ──
+TEST(Escalation, FiresAtMaxStreak)
+{
+    // 정화 없는 절제 1·2회는 계속 싸우고, 3회째 조기 재초기화 신호
+    EXPECT_FALSE(ysg::escalationReached(1, 3));
+    EXPECT_FALSE(ysg::escalationReached(2, 3));
+    EXPECT_TRUE(ysg::escalationReached(3, 3));
+    // 2차 실기(절제 15회 무효)는 진작 걸렸어야 할 케이스 — 상한 초과도 신호 유지
+    EXPECT_TRUE(ysg::escalationReached(15, 3));
+}
+
+TEST(Escalation, DisabledWhenMaxNonPositive)
+{
+    // 0/음수 = 비활성 — 어떤 누적에도 신호 없음
+    EXPECT_FALSE(ysg::escalationReached(100, 0));
+    EXPECT_FALSE(ysg::escalationReached(100, -1));
+}
+
 int main(int argc, char **argv)
 {
     testing::InitGoogleTest(&argc, argv);
