@@ -58,4 +58,20 @@ inline void translatePoseBlock(double *pose, const Eigen::Vector3d &d)
     pose[2] += d.z();
 }
 
+// ── 누적 변위 클램프 (07-30, obs_v2 실증으로 추가) ──
+//   per-solve 문턱(위 isPosSlide)은 '속도' 제한이라, 문턱 이하로 같은 방향을 지속하는
+//   압력(obs_v2 말미: 사람이 30s 서 있는 조건서 p50 2~3.5mm/solve)은 못 막는다 —
+//   '문턱=누설률'의 병진판(실측 32s에 0.32m 누적). 이 함수는 '총량' 제한:
+//   정지 창 앵커 대비 xy 이탈이 max_m를 넘으면 경계로 되돌리는 보정 벡터를 준다.
+//   근거는 분포(bag 의존)가 아니라 '휠+gyro가 창 전체에서 Δpose=0'이라는 외부 사실.
+//   초과분만 환원(경계 안쪽 대역은 치유용 자유) / z는 중력·plane 관할이라 불간섭.
+inline Eigen::Vector3d cumClampCorrection(const Eigen::Vector3d &dev, double max_m)
+{
+    const Eigen::Vector3d dxy(dev.x(), dev.y(), 0.0);
+    const double n = dxy.norm();
+    if (n <= max_m)
+        return Eigen::Vector3d::Zero();
+    return -dxy * ((n - max_m) / n);
+}
+
 }  // namespace yaw_slide_guard

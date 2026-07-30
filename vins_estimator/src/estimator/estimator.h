@@ -174,6 +174,13 @@ public:
     int      yaw_guard_consec_{0};      // 연속 발동 solve 수 — 오염 지속 판정(절제 트리거)
     double   yaw_guard_last_warn_t_{-1.0e18};
 
+    // [SW1-1866] 정지 창 누적 변위 가드 상태 — 앵커는 정지 연속 확인 후 래치
+    int      still_cum_streak_{0};                    // 연속 정지 확정 solve 수
+    bool     still_cum_valid_{false};                 // 앵커 래치 여부
+    Vector3d still_cum_anchor_{Vector3d::Zero()};     // 정지 창 기준 위치
+    long     still_cum_trigger_cnt_{0};
+    double   still_cum_last_warn_t_{-1.0e18};
+
     // [SW1-1837] Bg_z 잠금 상태 — 상태 기반 발동 추적기·정지 실측·재잠금(온도 표류 추종)
     bool               bgz_locked_{false};
     bgz_lock::Tracker  bgz_lock_tracker_;

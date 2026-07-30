@@ -72,6 +72,8 @@ int    USE_STILL_MOTION_LOCK = 0;
 double STILL_LOCK_POS_W = 500.0;   // σ_p 2mm
 double STILL_LOCK_YAW_W = 573.0;   // σ_yaw 0.1°
 int    USE_GAUGE_SLIDE_GUARD = 0;
+int    USE_STILL_CUM_GUARD = 0;
+double STILL_CUM_XY_MAX = 0.03;
 double YAW_SLIDE_GUARD_THRESH = 3.0 * M_PI / 180.0;
 double POS_SLIDE_GUARD_THRESH = 0.05;
 double YAW_SLIDE_GUARD_STILL_THRESH = 0.1 * M_PI / 180.0;
@@ -590,6 +592,21 @@ void readParameters(rclcpp::Node* node)
                     "USE_GAUGE_SLIDE_GUARD: 1 (solve 간 과거 프레임 이동 문턱 — 주행 "
                     "yaw>%.1f°/pos>%.2fm, 정지 확정 시 yaw>%.2f°/pos>%.3fm로 조임)",
                     thresh_deg, POS_SLIDE_GUARD_THRESH, still_deg, POS_SLIDE_GUARD_STILL_THRESH);
+    }
+
+    // ===== 정지 창 누적 변위 가드 (SW1-1866, 07-30) =====
+    //   per-solve 문턱은 속도 제한이라 문턱 이하 지속 압력의 총량을 못 막음(obs_v2 말미
+    //   0.32m 실증). 상한 근거는 판정 기준 0.03m(정지 중 그 이상 이동은 어떤 경우에도
+    //   거짓)이지 bag 분포가 아님.
+    USE_STILL_CUM_GUARD = fsSettings["use_still_cum_guard"].empty()
+                              ? 0 : (int)fsSettings["use_still_cum_guard"];
+    if (USE_STILL_CUM_GUARD)
+    {
+        STILL_CUM_XY_MAX = fsSettings["still_cum_xy_max_m"].empty()
+                               ? 0.03 : (double)fsSettings["still_cum_xy_max_m"];
+        RCLCPP_INFO(node->get_logger(),
+                    "USE_STILL_CUM_GUARD: 1 (정지 창 앵커 대비 누적 xy 상한 %.3fm — "
+                    "문턱 이하 지속 병진 누설의 총량 유계)", STILL_CUM_XY_MAX);
     }
 
     // ===== 휠 회전 잔차 주변화 (SW1-1837) =====

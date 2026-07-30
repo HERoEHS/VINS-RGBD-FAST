@@ -87,6 +87,39 @@ TEST(YawSlideGuard, CounterRotationPreservesRelativePose)
     EXPECT_TRUE((Ra2.transpose() * (Pb2 - Pa2) - rel_t).norm() < 1e-12);
 }
 
+// ── 누적 변위 클램프 (07-30) ──
+
+TEST(CumClamp, InsideBandNoCorrection)
+{
+    // 상한 이내(치유 자유 대역)는 보정 0
+    EXPECT_NEAR(ysg::cumClampCorrection({0.02, 0.01, 0.0}, 0.03).norm(), 0.0, 1e-12);
+    EXPECT_NEAR(ysg::cumClampCorrection({0.03, 0.0, 0.0}, 0.03).norm(), 0.0, 1e-12);  // 경계=통과
+}
+
+TEST(CumClamp, ExcessReturnsExactlyToBoundary)
+{
+    // obs_v2 실측급 이탈(0.32m) → 보정 후 정확히 경계(0.03m) 위
+    const Eigen::Vector3d dev(0.25, -0.20, 0.0);
+    const Eigen::Vector3d corr = ysg::cumClampCorrection(dev, 0.03);
+    EXPECT_NEAR((dev + corr).head<2>().norm(), 0.03, 1e-12);
+    // 보정은 이탈의 역방향(방향 보존)
+    EXPECT_LT(corr.head<2>().dot(dev.head<2>()), 0.0);
+}
+
+TEST(CumClamp, ZUntouched)
+{
+    // z는 중력·plane 관할 — xy가 초과여도 z 보정 0
+    const Eigen::Vector3d corr = ysg::cumClampCorrection({0.10, 0.0, 0.5}, 0.03);
+    EXPECT_NEAR(corr.z(), 0.0, 1e-12);
+    EXPECT_NEAR(corr.x(), -0.07, 1e-12);
+}
+
+TEST(CumClamp, PureZDeviationIgnored)
+{
+    // xy 성분이 상한 이내면 z가 아무리 커도 무보정
+    EXPECT_NEAR(ysg::cumClampCorrection({0.0, 0.0, 2.0}, 0.03).norm(), 0.0, 1e-12);
+}
+
 int main(int argc, char **argv)
 {
     testing::InitGoogleTest(&argc, argv);

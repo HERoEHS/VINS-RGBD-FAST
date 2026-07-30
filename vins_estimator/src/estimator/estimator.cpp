@@ -179,6 +179,10 @@ void Estimator::clearState()
     yaw_guard_prev_pos_     = Vector3d::Zero();
     yaw_guard_consec_       = 0;
     yaw_guard_last_warn_t_  = -1.0e18;
+    still_cum_streak_       = 0;
+    still_cum_valid_        = false;
+    still_cum_anchor_       = Vector3d::Zero();
+    still_cum_last_warn_t_  = -1.0e18;
 
     drift_correct_r = Matrix3d::Identity();
     drift_correct_t = Vector3d::Zero();
@@ -1422,6 +1426,54 @@ void Estimator::gaugeSlideGuard()
             for (int i = 0; i <= WINDOW_SIZE; i++)
                 Ps[i] -= pos_slide;
 
+        // [SW1-1866 07-30] 정지 창 누적 변위 가드 — per-solve 문턱(속도 제한)의 보완.
+        //   obs_v2 실증: 사람이 30s 서 있는 조건서 문턱(5mm) 이하 병진 슬라이드 p50
+        //   2~3.5mm가 방향 일관되게 누적 → 32s에 xy 0.32m('문턱=누설률'의 병진판).
+        //   대응 = 총량 제한: 정지 연속 확인 후 앵커 래치, 앵커 대비 누적 xy가 상한
+        //   (기본 0.03m = 정지 창 판정 기준)을 넘으면 초과분만 경계로 환원(게이지
+        //   방향이라 무비용, 경계 안 대역은 치유용 자유). 앵커 래치를 15 solve 지연
+        //   시키는 이유: 창 진입 직전 오염으로 틀리게 놓인 상태를 치유가 정당하게
+        //   크게 교정하는 과도(수 solve 내 완료, p50 1.7mm 계보)와 싸우지 않기 위함.
+        Vector3d cum_corr = Vector3d::Zero();
+        if (USE_STILL_CUM_GUARD)
+        {
+            if (still)
+            {
+                still_cum_streak_++;
+                constexpr int kCumAnchorSettleSolves = 15;
+                if (!still_cum_valid_ && still_cum_streak_ >= kCumAnchorSettleSolves)
+                {
+                    still_cum_anchor_ = Ps[frame_count];
+                    still_cum_valid_  = true;
+                }
+                if (still_cum_valid_)
+                {
+                    cum_corr = yaw_slide_guard::cumClampCorrection(
+                        Ps[frame_count] - still_cum_anchor_, STILL_CUM_XY_MAX);
+                    if (cum_corr.norm() > 0.0)
+                    {
+                        for (int i = 0; i <= WINDOW_SIZE; i++)
+                            Ps[i] += cum_corr;
+                        still_cum_trigger_cnt_++;
+                        if (stamp_now - still_cum_last_warn_t_ > 2.0)
+                        {
+                            still_cum_last_warn_t_ = stamp_now;
+                            RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                                        "[CUM-GUARD] t=%.3f 정지 창 누적 xy 상한 도달 — "
+                                        "%.3fm 환원 (누적 %ld회)",
+                                        stamp_now, cum_corr.norm(), still_cum_trigger_cnt_);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                still_cum_streak_ = 0;
+                still_cum_valid_  = false;
+            }
+        }
+        const bool cum_hit = cum_corr.norm() > 0.0;
+
         // 진단: 문턱 무관 slide 분포(정상 마진 실측용, 환경변수 게이트·read-only)
         static const bool dist_log = (std::getenv("VINS_SLIDE_DIST_LOG") != nullptr);
         if (dist_log)
@@ -1439,7 +1491,7 @@ void Estimator::gaugeSlideGuard()
             (yaw_slide_guard::isSlide(yaw_slide, YAW_SLIDE_GUARD_THRESH * 180.0 / M_PI) ||
              yaw_slide_guard::isPosSlide(pos_slide, POS_SLIDE_GUARD_THRESH));
 
-        if (do_rot || pos_hit)
+        if (do_rot || pos_hit || cum_hit)
         {
             // marg prior 선형화점도 동일 변환 — 생략하면 다음 solve가 역변환을 되돌린다
             //   (gravityRealignWindow와 동일 관용구·동일 근거)
@@ -1457,6 +1509,8 @@ void Estimator::gaugeSlideGuard()
                                 gravity_realign::rotatePoseBlock(data, dR, pivot);
                             if (pos_hit)
                                 yaw_slide_guard::translatePoseBlock(data, -pos_slide);
+                            if (cum_hit)
+                                yaw_slide_guard::translatePoseBlock(data, cum_corr);
                             break;
                         }
                         if (addr == para_SpeedBias[j])
