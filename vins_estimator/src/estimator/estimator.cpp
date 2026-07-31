@@ -1587,8 +1587,11 @@ void Estimator::gaugeSlideGuard()
             yaw_guard_consec_ = 0;  // 이상 없는 solve = 에피소드 종료
             // [SW1-1866 07-31] 정화 판정: 비강체 접수 solve는 anomaly 정의상 false지만
             //   절제가 일어난 solve라 정화가 아님 — 자기 리셋으로 에스컬레이션을 못
-            //   세게 되는 자충을 막는다
-            if (!nonrigid_takeover)
+            //   세게 되는 자충을 막는다. cum_hit도 동일: 누적 가드가 환원 중인 solve는
+            //   per-solve 슬라이드가 주행 문턱 아래여도 '개입 불필요'가 아니므로 정화
+            //   아님(문턱 넘나드는 중간 강도 폭주의 발동 회피 봉쇄; 평시 mm급 cum
+            //   발동은 카운터 0이라 무영향)
+            if (!nonrigid_takeover && !cum_hit)
                 guard_amputate_streak_ = 0;
         }
     }
