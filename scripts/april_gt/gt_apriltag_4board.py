@@ -20,7 +20,7 @@ from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
-from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+from tf2_ros import Buffer, StaticTransformBroadcaster, TransformBroadcaster, TransformListener
 
 
 DEFAULT_GRID_ROWS = 6
@@ -48,11 +48,18 @@ R_NY_WALL = np.array([[-1.0, 0.0, 0.0],
                       [ 0.0, 0.0, 1.0],
                       [ 0.0, 1.0, 0.0]], dtype=np.float64)
 
+# center = 보드 그리드 중심의 월드 좌표. PnP 월드 점 생성과 정적 TF 발행의 단일 출처다.
+#   z=0.2425는 지표면에서 보드 중심까지의 실측(0.24~0.245) 중간값. 이전 값 0.40은 근거 불명이었다.
+#   보드 전부가 같은 z를 쓰므로, 이 정정은 월드 점 집합을 통째로 평행이동시킨다 →
+#   PnP가 푸는 카메라 포즈도 z로만 -0.1575 m 이동하고 x/y/yaw는 불변이다.
+#   (그래서 기존 GT로 낸 x/y/yaw 기반 결과는 재측정 없이 유효하다.)
+#   ※ AR4는 --allowed-boards에서 빠져 현재 미사용이고 높이를 따로 실측하지 않았다.
+#      일관성 때문에 같은 값을 넣었으니 활성화 전에 반드시 확인할 것.
 BOARDS = [
-    {"name": "AR1", "first_id": 0,   "center": np.array([3.25,  0.00, 0.40]), "R": R_X_WALL},
-    {"name": "AR2", "first_id": 36,  "center": np.array([3.25, -0.83, 0.40]), "R": R_X_WALL},
-    {"name": "AR3", "first_id": 72,  "center": np.array([0.00,  0.35, 0.40]), "R": R_PY_WALL},
-    {"name": "AR4", "first_id": 108, "center": np.array([0.00, -1.25, 0.40]), "R": R_NY_WALL},
+    {"name": "AR1", "first_id": 0,   "center": np.array([3.25,  0.00, 0.2425]), "R": R_X_WALL},
+    {"name": "AR2", "first_id": 36,  "center": np.array([3.25, -0.83, 0.2425]), "R": R_X_WALL},
+    {"name": "AR3", "first_id": 72,  "center": np.array([0.00,  0.35, 0.2425]), "R": R_PY_WALL},
+    {"name": "AR4", "first_id": 108, "center": np.array([0.00, -1.25, 0.2425]), "R": R_NY_WALL},
 ]
 
 BOARD_NAMES = {board["name"] for board in BOARDS}
@@ -95,7 +102,11 @@ def make_detector():
 
 
 def image_to_gray(msg):
-    data = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+    # bytes(msg.data) 를 거치지 않는다 — rclpy의 msg.data는 이미 버퍼 프로토콜을 지원하므로
+    #   그 호출은 프레임마다 이미지 전체(640x480=307KB)를 한 번 더 복사할 뿐이다.
+    #   mono8 경로는 어차피 아래 .copy()로 연속 메모리를 만들고, 컬러 경로는 cvtColor가
+    #   새 배열을 내므로 여기서의 복사는 순수 낭비였다.
+    data = np.frombuffer(msg.data, dtype=np.uint8)
     if msg.encoding in ("mono8", "8UC1"):
         frame = data.reshape(msg.height, msg.step)[:, :msg.width]
         return frame.copy()
@@ -211,6 +222,39 @@ def parse_board_list(value):
     return boards
 
 
+def quat_to_rot(qx, qy, qz, qw):
+    n = np.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if n < 1e-12:
+        return np.eye(3)
+    qx, qy, qz, qw = qx / n, qy / n, qz / n, qw / n
+    return np.array([
+        [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw),     2 * (qx * qz + qy * qw)],
+        [2 * (qx * qy + qz * qw),     1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+        [2 * (qx * qz - qy * qw),     2 * (qy * qz + qx * qw),     1 - 2 * (qx * qx + qy * qy)],
+    ], dtype=np.float64)
+
+
+def tfmsg_to_matrix(tf_msg):
+    """geometry_msgs/TransformStamped → 4x4 동차행렬.
+
+    tf2의 lookup_transform(target, source)는 'source의 점을 target으로 옮기는' 변환을
+    돌려주므로, 반환 행렬은 T_target_source 다 (부모=target, 자식=source).
+    """
+    t = tf_msg.transform.translation
+    r = tf_msg.transform.rotation
+    M = np.eye(4)
+    M[:3, :3] = quat_to_rot(r.x, r.y, r.z, r.w)
+    M[:3, 3] = [t.x, t.y, t.z]
+    return M
+
+
+def invert_se3(M):
+    Mi = np.eye(4)
+    Mi[:3, :3] = M[:3, :3].T
+    Mi[:3, 3] = -M[:3, :3].T @ M[:3, 3]
+    return Mi
+
+
 def make_transform(stamp, parent_frame, child_frame, translation, quat_xyzw):
     transform = TransformStamped()
     transform.header.stamp = stamp
@@ -279,7 +323,30 @@ class FourBoardGtNode(Node):
         self.path_pub = self.create_publisher(Path, args.gt_path_topic, 10)
         self.publish_tf = args.publish_tf
         self.tf_broadcaster = TransformBroadcaster(self) if self.publish_tf else None
-        self.static_tf_broadcaster = StaticTransformBroadcaster(self) if args.publish_board_tf else None
+
+        # ── 실시간 3자 비교용 (GT / 휠 / VINS를 같은 프레임에서 겹쳐 보기) ──
+        #   ① gt/<base_frame> : GT 카메라 포즈를 로봇 base 점으로 옮긴 정적 자식.
+        #      GT는 '카메라' 포즈인데 휠·VINS는 'base' 점을 보고하므로, 같은 점으로
+        #      맞추지 않으면 회전할 때마다 레버암만큼 차이가 난다(전역 정렬로 안 풀림).
+        #   ② <frame_id> → <pin_odom_frame> : 첫 유효 GT 관측에서 한 번만 계산해 고정.
+        #      계속 갱신하면 오차가 이 변환에 흡수돼 화면에서 영원히 겹쳐 보인다 —
+        #      측정 대상이 사라지므로 반드시 1회 고정이다.
+        self.path_max_poses = args.path_max_poses
+        self.base_frame = args.base_frame
+        self.camera_optical_frame = args.camera_optical_frame
+        self.publish_gt_base_tf = args.publish_gt_base_tf
+        self.pin_odom_frame = args.pin_odom_frame
+        self.gt_base_child = f"gt/{args.base_frame}"
+
+        needs_static = bool(args.publish_board_tf or self.publish_gt_base_tf or self.pin_odom_frame)
+        self.static_tf_broadcaster = StaticTransformBroadcaster(self) if needs_static else None
+        self._static_tfs = []          # 누적 목록 — 매번 전체를 다시 보낸다(아래 주석 참조)
+
+        needs_tf_listen = bool(self.publish_gt_base_tf or self.pin_odom_frame)
+        self.tf_buffer = Buffer() if needs_tf_listen else None
+        self.tf_listener = TransformListener(self.tf_buffer, self) if needs_tf_listen else None
+        self.T_cam_base = None         # 카메라 광학 → base (URDF 상수, 지연 조회)
+        self.odom_pinned = False
 
         self.n_frames = 0
         self.n_no_detect = 0
@@ -295,7 +362,7 @@ class FourBoardGtNode(Node):
         if self.publish_tf:
             self.get_logger().info(f"publishing dynamic TF: {self.frame_id} -> {self.child_frame_id}")
         if args.publish_board_tf:
-            self.publish_static_board_tfs(args.rows, args.cols, args.tag_size, args.tag_spacing)
+            self.publish_static_board_tfs()
         id_ranges = ", ".join(
             f"{b['name']}={b['first_id']}-{b['first_id'] + args.rows * args.cols - 1}" for b in BOARDS
         )
@@ -310,27 +377,100 @@ class FourBoardGtNode(Node):
             f"+ {self.jump_prior_weight:g}*min(jump_m,{self.jump_clip:g})"
         )
 
-    def publish_static_board_tfs(self, rows, cols, tag_size, tag_spacing):
-        step = tag_size * (1.0 + tag_spacing)
-        grid_span = (max(rows, cols) - 1) * step + tag_size
-        grid_half = grid_span / 2.0
+    def send_static(self, transforms):
+        """정적 TF를 누적 목록에 넣고 '전체'를 다시 보낸다.
+
+        StaticTransformBroadcaster.sendTransform()의 누적/치환 동작이 배포판마다 달라서,
+        나중에 보낸 것이 앞서 보낸 board TF를 지워버릴 수 있다. 자체 목록을 들고 매번
+        전부 재발행하면 어느 구현에서도 안전하다.
+        """
+        if self.static_tf_broadcaster is None:
+            return
+        self._static_tfs.extend(transforms)
+        self.static_tf_broadcaster.sendTransform(list(self._static_tfs))
+
+    def ensure_cam_base_tf(self):
+        """카메라 광학 프레임 → base 프레임의 상수 변환을 URDF TF에서 1회 조회.
+
+        체인(base_footprint→base_link→chassis→stereo_camera_link→optical)이 전부 fixed
+        조인트라 상수가 보장된다. 다리 관절은 이 체인 밖(base_link→leg→wheel)이라 무관.
+        컨트롤러가 늦게 뜨면 조회가 실패하므로 성공할 때까지 프레임마다 재시도한다.
+        """
+        if self.T_cam_base is not None:
+            return True
+        if self.tf_buffer is None:
+            return False
+        try:
+            tf_msg = self.tf_buffer.lookup_transform(
+                self.camera_optical_frame, self.base_frame, rclpy.time.Time())
+        except Exception as exc:                                   # noqa: BLE001
+            self.get_logger().warn(
+                f"TF 조회 대기 중: {self.camera_optical_frame} -> {self.base_frame} ({exc})",
+                throttle_duration_sec=5.0)
+            return False
+        self.T_cam_base = tfmsg_to_matrix(tf_msg)
+        t = self.T_cam_base[:3, 3]
+        self.get_logger().info(
+            f"카메라→base 상수 확보: {self.camera_optical_frame} -> {self.base_frame} "
+            f"t=({t[0]:+.4f}, {t[1]:+.4f}, {t[2]:+.4f})")
+        if self.publish_gt_base_tf:
+            self.send_static([make_transform(
+                self.get_clock().now().to_msg(), self.child_frame_id, self.gt_base_child,
+                self.T_cam_base[:3, 3], rot_to_quat(self.T_cam_base[:3, :3]))])
+            self.get_logger().info(
+                f"published static TF: {self.child_frame_id} -> {self.gt_base_child}")
+        return True
+
+    def try_pin_odom(self, T_wc):
+        """첫 유효 GT 관측에서 <frame_id> → <odom> 을 1회 고정.
+
+            T_W_O = (T_W_C · T_C_B) · T_O_B⁻¹
+        이렇게 두면 고정 시점에 휠의 base와 GT의 base가 정확히 겹치고, 이후 벌어지는
+        양이 곧 휠 오도메트리의 누적 오차다.
+        """
+        if self.odom_pinned or not self.pin_odom_frame or self.T_cam_base is None:
+            return
+        try:
+            tf_ob = self.tf_buffer.lookup_transform(
+                self.pin_odom_frame, self.base_frame, rclpy.time.Time())
+        except Exception as exc:                                   # noqa: BLE001
+            self.get_logger().warn(
+                f"핀 대기 중: {self.pin_odom_frame} -> {self.base_frame} ({exc})",
+                throttle_duration_sec=5.0)
+            return
+        T_w_b = T_wc @ self.T_cam_base
+        T_w_o = T_w_b @ invert_se3(tfmsg_to_matrix(tf_ob))
+        self.send_static([make_transform(
+            self.get_clock().now().to_msg(), self.frame_id, self.pin_odom_frame,
+            T_w_o[:3, 3], rot_to_quat(T_w_o[:3, :3]))])
+        self.odom_pinned = True
+        t = T_w_o[:3, 3]
+        self.get_logger().info(
+            f"odom 고정 완료: {self.frame_id} -> {self.pin_odom_frame} "
+            f"t=({t[0]:+.4f}, {t[1]:+.4f}, {t[2]:+.4f}) — 이후 벌어지는 양이 휠 누적 오차다")
+
+    def publish_static_board_tfs(self):
+        # 발행 지점 = 보드 중심(center).
+        #   이전에는 그리드 좌하단 모서리(center + R @ [-grid_half, -grid_half, 0])에 발행해서
+        #   RViz의 *_board 프레임이 실제 보드 중심에서 grid_half(0.09 m)만큼 어긋나 보였다.
+        #   이 함수는 시각화 전용이다 — PnP 월드 점은 board_local_to_world()가 따로 만들고
+        #   그쪽은 여전히 모서리 기준이므로 GT 값은 이 변경에 영향받지 않는다.
         stamp = self.get_clock().now().to_msg()
         transforms = []
         active_names = {board["name"] for board in self.board_world_objs}
         for board in BOARDS:
             if board["name"] not in active_names:
                 continue
-            board_origin = board["center"] + board["R"] @ np.array([-grid_half, -grid_half, 0.0])
             transforms.append(
                 make_transform(
                     stamp,
                     self.frame_id,
                     f"{board['name']}_board",
-                    board_origin,
+                    board["center"],
                     rot_to_quat(board["R"]),
                 )
             )
-        self.static_tf_broadcaster.sendTransform(transforms)
+        self.send_static(transforms)
         self.get_logger().info(
             "published static board TFs: " + ", ".join(transform.child_frame_id for transform in transforms)
         )
@@ -435,12 +575,21 @@ class FourBoardGtNode(Node):
         pose.pose = odom.pose.pose
         self.path.header.stamp = stamp
         self.path.poses.append(pose)
+        # Path는 매번 '누적 전체'를 직렬화해 내보내므로 길이에 비례해 비용이 무한히 자란다.
+        #   시각화용이므로 최근 구간만 유지한다 — 분석용 전체 궤적은 TUM 파일에 그대로 남는다.
+        if self.path_max_poses > 0 and len(self.path.poses) > self.path_max_poses:
+            del self.path.poses[:len(self.path.poses) - self.path_max_poses]
         self.path_pub.publish(self.path)
 
         if self.tf_broadcaster is not None:
             self.tf_broadcaster.sendTransform(
                 make_transform(stamp, self.frame_id, self.child_frame_id, np.array([tx, ty, tz]), quat_xyzw)
             )
+
+        # 유효 포즈가 나온 뒤에야 상수 조회/핀이 의미를 갖는다 (핀은 T_wc를 쓰므로).
+        if self.publish_gt_base_tf or self.pin_odom_frame:
+            if self.ensure_cam_base_tf():
+                self.try_pin_odom(T_wc)
 
     def finish(self):
         self.out.flush()
@@ -511,6 +660,17 @@ def main():
     parser.add_argument("--child-frame-id", default="apriltag_camera", help="child_frame_id for published GT odometry")
     parser.add_argument("--publish-tf", action="store_true", help="publish dynamic TF from --frame-id to --child-frame-id")
     parser.add_argument("--publish-board-tf", action="store_true", help="publish static TFs for active board origins")
+    parser.add_argument("--base-frame", default="base_footprint",
+                        help="robot frame to project GT onto (compared against wheel/VINS)")
+    parser.add_argument("--camera-optical-frame", default="stereo_camera_left_optical_frame",
+                        help="URDF frame corresponding to the PnP camera (OpenCV optical convention)")
+    parser.add_argument("--publish-gt-base-tf", action="store_true",
+                        help="publish static <child-frame-id> -> gt/<base-frame> so GT is comparable "
+                             "at the same physical point as wheel/VINS")
+    parser.add_argument("--pin-odom-frame", default="",
+                        help="e.g. 'odom'. On the first valid GT pose, publish a ONE-SHOT static "
+                             "<frame-id> -> <odom> so both start coincident; later divergence is "
+                             "the wheel odometry error. Empty = disabled")
     parser.add_argument("--tag-size", type=float, default=DEFAULT_TAG_SIZE)
     parser.add_argument("--tag-spacing", type=float, default=DEFAULT_TAG_SPACING)
     parser.add_argument("--rows", type=int, default=DEFAULT_GRID_ROWS)
@@ -545,7 +705,20 @@ def main():
         "--allowed-boards",
         help="comma-separated board hypotheses to allow, e.g. AR3,AR4; useful for segment tests",
     )
+    parser.add_argument("--cv-threads", type=int, default=2,
+                        help="cv2.setNumThreads(). 0=OpenCV default (grabs every core). "
+                             "This is a ~15fps job on a saturated board, so capping it keeps "
+                             "cores for VINS and the control loop")
+    parser.add_argument("--path-max-poses", type=int, default=2000,
+                        help="cap on published Path length (visualization only; the TUM file "
+                             "always keeps the full trajectory). 0 = unbounded")
     args = parser.parse_args()
+
+    # OpenCV 스레드 상한. 기본값 그대로 두면 detectMarkers/PnP가 코어를 8개까지 잡아
+    #   (실측: 메인 55% + 워커 7개 41% = 123% CPU) 이미 포화된 보드에서 VINS·제어 루프의
+    #   CPU를 뺏는다. 이 노드는 15fps 입력 중 ~6개만 유효 포즈로 채택하므로 여유가 있다.
+    if args.cv_threads > 0:
+        cv2.setNumThreads(args.cv_threads)
 
     rclpy.init()
     node = FourBoardGtNode(args)
