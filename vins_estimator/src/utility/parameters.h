@@ -227,6 +227,12 @@ extern int    GUARD_ESCALATION_MAX;     // 정화 없는 연속 prior 절제 상
 //   1이면 휠 factor를 위치 3x3 제약만으로 재구성(회전은 gyro가 우월: GT −0.11% vs 휠 +2.7%).
 extern int    WHEEL_ROT_MARGINALIZE; // 0=기존 6자유도 유지, 1=회전 잔차 주변화
 
+// ===== init/출발 워밍업 게이트 (SW1-1866) — 전부 표본 수 조건(시간 상수 금지) =====
+extern int    WARMUP_GATE_STILL_SAMPLES;   // 1단 정지 실증 연속 표본 수 (<=0 게이트 비활성)
+extern int    WARMUP_GATE_IMU_SAMPLES;     // 2단 IMU 표본 축적 수 (ALICE 100 선례)
+extern int    WARMUP_GATE_MOVING_SAMPLES;  // 조기 폴백: 주행 연속 실증 표본 수 (<=0 없음)
+extern int    WARMUP_GATE_BUDGET_SAMPLES;  // 예산 폴백: 총 관측 상한 (무한 대기 금지)
+
 void readParameters(rclcpp::Node* node);
 
 enum SIZE_PARAMETERIZATION

@@ -194,6 +194,9 @@ if(BUILD_TESTING)
 
   # 스핀 중 accel 신뢰 강등 판정 로직 — 헤더-only 단독 검증
   ament_add_gtest(test_spin_acc_deweight test/test_spin_acc_deweight.cpp)
+
+  # [SW1-1866] init/출발 워밍업 게이트 판정 로직 — 헤더-only 단독 검증
+  ament_add_gtest(test_warmup_init_gate test/test_warmup_init_gate.cpp)
 endif()
 
 ament_package()

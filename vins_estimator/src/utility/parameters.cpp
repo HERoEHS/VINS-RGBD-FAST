@@ -85,6 +85,12 @@ double POS_SLIDE_GUARD_STILL_THRESH = 0.005;
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
 
+// ===== init/출발 워밍업 게이트 (SW1-1866) =====
+int    WARMUP_GATE_STILL_SAMPLES;
+int    WARMUP_GATE_IMU_SAMPLES;
+int    WARMUP_GATE_MOVING_SAMPLES;
+int    WARMUP_GATE_BUDGET_SAMPLES;
+
 // ===== Wheel odometry tight-coupling (SW1-1829) =====
 int             USE_WHEEL;
 std::string     WHEEL_TOPIC;
@@ -636,6 +642,21 @@ void readParameters(rclcpp::Node* node)
     if (WHEEL_ROT_MARGINALIZE)
         RCLCPP_INFO(node->get_logger(),
                     "WHEEL_ROT_MARGINALIZE: 1 (휠 factor 회전 잔차 주변화, 위치 3x3만 제약)");
+
+    // ===== init/출발 워밍업 게이트 (SW1-1866) — 키 없으면 비활성(기존 동작) =====
+    WARMUP_GATE_STILL_SAMPLES = fsSettings["warmup_gate_still_samples"].empty()
+                                    ? 0 : (int)fsSettings["warmup_gate_still_samples"];
+    WARMUP_GATE_IMU_SAMPLES = fsSettings["warmup_gate_imu_samples"].empty()
+                                  ? 100 : (int)fsSettings["warmup_gate_imu_samples"];
+    WARMUP_GATE_MOVING_SAMPLES = fsSettings["warmup_gate_moving_samples"].empty()
+                                     ? 100 : (int)fsSettings["warmup_gate_moving_samples"];
+    WARMUP_GATE_BUDGET_SAMPLES = fsSettings["warmup_gate_budget_samples"].empty()
+                                     ? 3000 : (int)fsSettings["warmup_gate_budget_samples"];
+    if (WARMUP_GATE_STILL_SAMPLES > 0)
+        RCLCPP_INFO(node->get_logger(),
+                    "WARMUP_GATE: 정지 실증 %d + IMU 표본 %d, 폴백(주행 %d / 예산 %d)",
+                    WARMUP_GATE_STILL_SAMPLES, WARMUP_GATE_IMU_SAMPLES,
+                    WARMUP_GATE_MOVING_SAMPLES, WARMUP_GATE_BUDGET_SAMPLES);
 
     fsSettings.release();
 }

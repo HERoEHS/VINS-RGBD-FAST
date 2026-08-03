@@ -23,6 +23,7 @@
 #include "../factor/wheel_factor.h"
 #include "../utility/leg_event_detector.h"
 #include "../utility/bgz_lock.h"
+#include "../utility/warmup_init_gate.h"
 #include "../factor/marginalization_factor.h"
 #include "../factor/pose_local_parameterization.h"
 #include "../factor/projection_factor.h"
@@ -196,6 +197,13 @@ public:
     std::atomic<bool>   z_anchor_wheel_moved_{false};     // 앵커 이후 휠 병진 발생 → 계승 차단
     std::atomic<double> latest_leg_l_{0.0}, latest_leg_r_{0.0};  // 최신 다리각(inputLegState)
     std::atomic<bool>   latest_leg_valid_{false};
+
+    // [SW1-1866] init/출발 워밍업 게이트 — 정지·다리 안정 실증+표본 축적 전 init 보류
+    //   (판정 로직은 warmup_init_gate.h, 배선은 processIMU 표본 공급 + processImage 관문)
+    warmup_init_gate::Gate warmup_gate_;
+    std::atomic<bool> leg_gate_active_now_{false};  // 다리 이벤트 진행 중(게이트 표본 입력, inputLegState 갱신)
+    bool warmup_fallback_logged_{false};   // 저신뢰(폴백) init 경고 1회
+    bool warmup_realign_logged_{false};    // 폴백 후 재정렬 기회 신호 1회(v1=로그만)
 
     // [SW1-1837] Bg_z 잠금 상태 — 상태 기반 발동 추적기·정지 실측·재잠금(온도 표류 추종)
     bool               bgz_locked_{false};

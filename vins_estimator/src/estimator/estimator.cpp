@@ -59,6 +59,16 @@ void Estimator::setParameter()
         leg_gate.setParams(lp);
     }
 
+    // ===== [SW1-1866] 워밍업 게이트 파라미터 배선 (config → gate) =====
+    {
+        warmup_init_gate::Params wp;
+        wp.still_samples  = WARMUP_GATE_STILL_SAMPLES;
+        wp.imu_samples    = WARMUP_GATE_IMU_SAMPLES;
+        wp.moving_samples = WARMUP_GATE_MOVING_SAMPLES;
+        wp.budget_samples = WARMUP_GATE_BUDGET_SAMPLES;
+        warmup_gate_.setParams(wp);
+    }
+
     featureTracker.readIntrinsicParameter(CAM_NAMES);
     if (FISHEYE)
     {
@@ -192,6 +202,13 @@ void Estimator::clearState()
     z_anchor_wheel_moved_   = false;
     still_cum_z_last_warn_t_ = -1.0e18;
 
+    // [SW1-1866] 워밍업 게이트 리셋 — 재초기화(에스컬레이션 reboot 포함) 시 게이트 재가동.
+    //   ⓐ 처방의 핵심 경로: reboot 직후 다리 애니메이션 중이면 leg_stable=false로
+    //   init이 보류된다(GUARD_RESET_PATH_CHECKLIST Q3: 병리 중 리셋의 게이트 우회 차단).
+    warmup_gate_.reset();
+    warmup_fallback_logged_ = false;
+    warmup_realign_logged_  = false;
+
     drift_correct_r = Matrix3d::Identity();
     drift_correct_t = Vector3d::Zero();
 
@@ -250,6 +267,12 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
     //   미끄러뜨리는(yaw_slide) 오염 신호라 계승 판정에 부적격(계측 run 실증: 로봇
     //   무회전인데 dyaw>5°로 재래치 → 래칫 소각 실패). bias 보정 gyro z 적분이 참값.
     anchor_net_yaw_rad_ += (angular_velocity.z() - Bgs[frame_count].z()) * dt;
+
+    // [SW1-1866] 워밍업 게이트 표본 공급 — IMU 표본 1개당 1회(게이트 계약).
+    //   입력은 기존 판정 재사용(R4): 휠 정지 atomic + 다리 이벤트 게이트 활성 여부.
+    //   READY 도달 후에는 게이트 내부에서 no-op이라 상시 호출해도 비용 없음.
+    warmup_gate_.onSample(last_wheel_speed_.load() < bgz_lock::kStillWheelMax,
+                          !leg_gate_active_now_.load());
 
     if (USE_BGZ_LOCK && solver_flag == SolverFlag::NON_LINEAR)
     {
@@ -453,8 +476,32 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
 
             if (USE_IMU)
             {
-                if (frame_count == WINDOW_SIZE)
+                // [SW1-1866] 워밍업 게이트 관문 — 정지(휠)+다리각 안정의 연속 실증과
+                //   IMU 표본 축적 전에는 static init을 보류한다(ⓐ 재초기화의 다리
+                //   애니메이션 착지 차단). WAIT면 가장 오래된 프레임을 밀어내(오염 창
+                //   폐기) 게이트가 열린 시점의 창이 최신 정지 데이터로 구성되게 한다.
+                //   FALLBACK = 주행 실증/예산 소진 → 저신뢰 init 허용(무한 대기 금지,
+                //   R2 하드 요건). 근거·검증은 doc/WARMUP_GATE_PROPOSAL.md.
+                const bool warmup_hold =
+                    WARMUP_GATE_STILL_SAMPLES > 0 &&
+                    warmup_gate_.verdict() == warmup_init_gate::Verdict::WAIT;
+                if (warmup_hold && frame_count == WINDOW_SIZE)
                 {
+                    static rclcpp::Clock warmup_clk;
+                    RCLCPP_INFO_THROTTLE(rclcpp::get_logger("vins_warmup_gate"), warmup_clk, 2000,
+                                         "[WARMUP-GATE] init 보류 — 정지 실증 %d / 표본 %d (총 %d)",
+                                         warmup_gate_.stillStreak(), warmup_gate_.imuCollected(),
+                                         warmup_gate_.totalSamples());
+                    slideWindow();
+                }
+                else if (frame_count == WINDOW_SIZE)
+                {
+                    if (WARMUP_GATE_STILL_SAMPLES > 0 && warmup_gate_.fellBack() &&
+                        !warmup_fallback_logged_)
+                    {
+                        warmup_fallback_logged_ = true;
+                        ROS_WARN("[WARMUP-GATE] 정지 실증 실패(주행 실증/예산 소진) — 저신뢰 init 진행");
+                    }
                     int i = 0;
                     for (auto &frame_it : all_image_frame)
                     {
@@ -3136,6 +3183,8 @@ void Estimator::inputLegState(double t, double theta_l, double theta_r)
     latest_leg_l_.store(theta_l);
     latest_leg_r_.store(theta_r);
     latest_leg_valid_.store(true);
+    // [SW1-1866] 워밍업 게이트 표본 입력 — 다리 이벤트 진행 중 여부(기존 detector 재사용)
+    leg_gate_active_now_.store(leg_gate.overlaps(t, t));
 }
 
 // [SW1-1837] 다리 위치 명령 입력 — 실측 반응 전에 게이트를 선행 개시

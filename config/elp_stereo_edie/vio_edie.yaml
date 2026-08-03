@@ -178,6 +178,18 @@ estimate_td_wheel: 0           # Step1=0 고정. Step2에서 1
 #   0↔1 전 지표 무차이 실측 → 역할 종료, 기본 0. 보상 미적용 구형 배포에서만 1 고려.
 wheel_rot_marginalize: 0
 
+# init/출발 워밍업 게이트 (SW1-1866, doc/WARMUP_GATE_PROPOSAL.md): static init을
+#   "휠 정지 AND 다리각 안정의 연속 실증 → IMU 표본 축적" 후로 지연 — ⓐ재초기화가
+#   다리 애니메이션 위에 착지해 R0 tilt를 굽는 것(07-31 실기 ~10°)을 차단.
+#   전부 표본 수 조건(시간 상수 금지, ALICE 접지 1s+IMU 100샘플 선례). IMU ~376Hz 기준
+#   still 100≈0.27s 실증 + imu 100≈0.27s 축적. 폴백 2중(주행 연속 실증 moving_samples /
+#   총 예산 budget_samples)이 무한 대기를 금지(R2 하드 요건) — 폴백 시 저신뢰 init 진행.
+#   still_samples 0 = 게이트 비활성(기존 동작). 기본값은 A/B 검증 후 결정 — 검증 전 0.
+warmup_gate_still_samples: 1 #0
+warmup_gate_imu_samples: 100
+warmup_gate_moving_samples: 100
+warmup_gate_budget_samples: 3000
+
 # ================================================================
 # Zero-velocity Update (ZUPT, SW1-1837) — 정지 시 속도 0 제약 → z drift 완화
 #   평지 주행서 VINS가 수평 acc bias를 오추정 → pitch bias → z drift 누적.
