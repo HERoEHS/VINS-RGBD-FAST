@@ -120,6 +120,21 @@ TEST(CumClamp, PureZDeviationIgnored)
     EXPECT_NEAR(ysg::cumClampCorrection({0.0, 0.0, 2.0}, 0.03).norm(), 0.0, 1e-12);
 }
 
+// ── 정지 z 래칫 클램프 (07-31 v13 실증 근거) ──
+TEST(CumClampZ, WithinBandNoCorrection)
+{
+    // 상한 이내(치유 대역)는 무보정
+    EXPECT_NEAR(ysg::cumClampZCorrection(0.015, 0.02), 0.0, 1e-12);
+    EXPECT_NEAR(ysg::cumClampZCorrection(-0.019, 0.02), 0.0, 1e-12);
+}
+
+TEST(CumClampZ, ExcessReturnsExactlyToBoundary)
+{
+    // v13 실측급 래칫(+50mm) → 보정 후 정확히 경계(+20mm), 아래 방향도 대칭
+    EXPECT_NEAR(0.05 + ysg::cumClampZCorrection(0.05, 0.02), 0.02, 1e-12);
+    EXPECT_NEAR(-0.05 + ysg::cumClampZCorrection(-0.05, 0.02), -0.02, 1e-12);
+}
+
 // ── 절제 에스컬레이션 판정 (07-31, 실기 정지 폭주 2건 근거) ──
 TEST(Escalation, FiresAtMaxStreak)
 {

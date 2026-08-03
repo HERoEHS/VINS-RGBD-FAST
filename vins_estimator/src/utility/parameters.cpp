@@ -42,6 +42,7 @@ int         USE_EVENT_GATING;
 int         GATE_LEG;
 double      LEG_POS_MIN, LEG_RATE_MIN, LEG_CMD_POS_MIN;
 double      LEG_PRE_MARGIN, LEG_POST_MARGIN, GATE_MAX_DURATION;
+int         KEEP_WHEEL_IN_LEG_EVENT = 1;  // 1=다리 이벤트 중 휠 factor 유지(기본) 0=하드 skip(레거시 롤백)
 std::string LEG_STATE_TOPIC, LEG_CMD_TOPIC_L, LEG_CMD_TOPIC_R;
 
 // ===== 고속 회전 비전 게이팅 (SW1-1837, yaw 처방) =====
@@ -74,6 +75,7 @@ double STILL_LOCK_YAW_W = 573.0;   // σ_yaw 0.1°
 int    USE_GAUGE_SLIDE_GUARD = 0;
 int    USE_STILL_CUM_GUARD = 0;
 double STILL_CUM_XY_MAX = 0.03;
+double STILL_CUM_Z_MAX  = 0.0;  // 0=끔 — yaml 키 없는 구형 config에서 동작 불변(보수 기본)
 double YAW_SLIDE_GUARD_THRESH = 3.0 * M_PI / 180.0;
 int    GUARD_ESCALATION_MAX   = 3;  // 정화 없는 연속 절제 상한(0=비활성) — 조기 재초기화 판정
 double POS_SLIDE_GUARD_THRESH = 0.05;
@@ -472,6 +474,10 @@ void readParameters(rclcpp::Node* node)
         LEG_PRE_MARGIN    = fsSettings["leg_pre_margin"].empty() ? 0.3 : (double)fsSettings["leg_pre_margin"];
         LEG_POST_MARGIN   = fsSettings["leg_post_margin"].empty() ? 0.5 : (double)fsSettings["leg_post_margin"];
         GATE_MAX_DURATION = fsSettings["gate_max_duration"].empty() ? 2.0 : (double)fsSettings["gate_max_duration"];
+        // [SW1-1866 08-03] 다리 이벤트 중 휠 factor 유지 — 3-bag 판별로 skip 은퇴.
+        //   키 없으면 1 = factor 유지(신규 기본). 0 = 하드 skip(구동작 롤백)
+        KEEP_WHEEL_IN_LEG_EVENT = fsSettings["keep_wheel_mode_in_leg_event"].empty()
+                                      ? 1 : (int)fsSettings["keep_wheel_mode_in_leg_event"];
         if (fsSettings["leg_state_topic"].empty()) LEG_STATE_TOPIC = "/joint_states";
         else fsSettings["leg_state_topic"] >> LEG_STATE_TOPIC;
         if (fsSettings["leg_cmd_topic_l"].empty()) LEG_CMD_TOPIC_L = "/edie/l_leg_position_controller/command";
@@ -479,8 +485,10 @@ void readParameters(rclcpp::Node* node)
         if (fsSettings["leg_cmd_topic_r"].empty()) LEG_CMD_TOPIC_R = "/edie/r_leg_position_controller/command";
         else fsSettings["leg_cmd_topic_r"] >> LEG_CMD_TOPIC_R;
         RCLCPP_INFO(node->get_logger(),
-                    "USE_EVENT_GATING: 1 (gate_leg=%d, rate>%.3f rad/s, margin -%.1f/+%.1f s, cap %.1f s)",
-                    GATE_LEG, LEG_RATE_MIN, LEG_PRE_MARGIN, LEG_POST_MARGIN, GATE_MAX_DURATION);
+                    "USE_EVENT_GATING: 1 (gate_leg=%d, rate>%.3f rad/s, margin -%.1f/+%.1f s, "
+                    "cap %.1f s, keep_wheel=%d[1=factor 유지 0=skip 롤백])",
+                    GATE_LEG, LEG_RATE_MIN, LEG_PRE_MARGIN, LEG_POST_MARGIN, GATE_MAX_DURATION,
+                    KEEP_WHEEL_IN_LEG_EVENT);
     }
 
     // ===== 고속 회전 비전 게이팅 (SW1-1837) =====
@@ -612,9 +620,14 @@ void readParameters(rclcpp::Node* node)
     {
         STILL_CUM_XY_MAX = fsSettings["still_cum_xy_max_m"].empty()
                                ? 0.03 : (double)fsSettings["still_cum_xy_max_m"];
+        // [07-31] z 래칫 가드 — 키 없으면 0(끔): 구형 config 동작 불변
+        STILL_CUM_Z_MAX = fsSettings["still_cum_z_max_m"].empty()
+                              ? 0.0 : (double)fsSettings["still_cum_z_max_m"];
         RCLCPP_INFO(node->get_logger(),
                     "USE_STILL_CUM_GUARD: 1 (정지 창 앵커 대비 누적 xy 상한 %.3fm — "
-                    "문턱 이하 지속 병진 누설의 총량 유계)", STILL_CUM_XY_MAX);
+                    "문턱 이하 지속 병진 누설의 총량 유계 / z 래칫 상한 %.3fm%s)",
+                    STILL_CUM_XY_MAX, STILL_CUM_Z_MAX,
+                    STILL_CUM_Z_MAX > 0.0 ? ", 앵커 창 간 계승" : "=끔");
     }
 
     // ===== 휠 회전 잔차 주변화 (SW1-1837) =====

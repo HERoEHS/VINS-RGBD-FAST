@@ -185,6 +185,12 @@ void Estimator::clearState()
     still_cum_valid_        = false;
     still_cum_anchor_       = Vector3d::Zero();
     still_cum_last_warn_t_  = -1.0e18;
+    still_cum_z_anchor_     = 0.0;
+    still_cum_z_valid_      = false;
+    anchor_history_valid_   = false;
+    anchor_net_yaw_rad_     = 0.0;
+    z_anchor_wheel_moved_   = false;
+    still_cum_z_last_warn_t_ = -1.0e18;
 
     drift_correct_r = Matrix3d::Identity();
     drift_correct_t = Vector3d::Zero();
@@ -240,6 +246,11 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
     //   → 재잠금 문턱(5e-4)보다 커서 오발동·잠금값 오염(1차 회귀 실측 실패).
     //   IMU 주기면 ~760개 → ~2e-4로 문턱의 2.5σ 밖. 시간축은 dt 누적 의사시간
     //   (창 스팬 판정에만 쓰여 절대시각 불필요).
+    // [SW1-1866 07-31] 앵커 계승용 물리 순회전 적분 — VINS yaw 추정은 다리 이벤트가
+    //   미끄러뜨리는(yaw_slide) 오염 신호라 계승 판정에 부적격(계측 run 실증: 로봇
+    //   무회전인데 dyaw>5°로 재래치 → 래칫 소각 실패). bias 보정 gyro z 적분이 참값.
+    anchor_net_yaw_rad_ += (angular_velocity.z() - Bgs[frame_count].z()) * dt;
+
     if (USE_BGZ_LOCK && solver_flag == SolverFlag::NON_LINEAR)
     {
         bgz_rest_t_ += dt;
@@ -1455,8 +1466,59 @@ void Estimator::gaugeSlideGuard()
                 constexpr int kCumAnchorSettleSolves = 15;
                 if (!still_cum_valid_ && still_cum_streak_ >= kCumAnchorSettleSolves)
                 {
-                    still_cum_anchor_ = Ps[frame_count];
-                    still_cum_valid_  = true;
+                    // [SW1-1866 07-31] 앵커는 정지 창 간 '계승'이 원칙 — 재래치만 하면
+                    //   다리 이벤트 중 스텝(v13 실증: z +20~50mm/이벤트, x도 동방향
+                    //   크리프)이 새 앵커에 구워져 래칫을 못 지운다. 계승 조건(상태):
+                    //   휠 병진 없음 + 다리각 복귀(자세가 바뀌면 진짜 높이 변화라 신규).
+                    //   xy는 추가로 '물리' 무회전 필요 — Ps는 IMU 위치라 제자리 회전만으로도
+                    //   레버암(0.1056m)만큼 원호로 '실제' 이동. 판정 신호는 gyro 순적분
+                    //   (bias 보정) — VINS yaw 추정은 다리 이벤트가 미끄러뜨리는 오염
+                    //   신호라 부적격(계측 실증: 무회전인데 dyaw>5° 재래치). |순회전|<5°면
+                    //   레버암 잔여 ≤9mm(<상한)로 무시 가능.
+                    constexpr double kLegMatchRad  = 0.035;  // 다리 엔코더 2-LSB(1°=0.0175)
+                    constexpr double kNetYawMaxRad = 5.0 * M_PI / 180.0;
+                    const double ll = latest_leg_l_.load(), lr = latest_leg_r_.load();
+                    const double yaw_now = Utility::R2ypr(Rs[frame_count]).x();
+                    const bool base_inherit =
+                        anchor_history_valid_ && !z_anchor_wheel_moved_.load() &&
+                        latest_leg_valid_.load() &&
+                        std::fabs(ll - z_anchor_leg_l_) < kLegMatchRad &&
+                        std::fabs(lr - z_anchor_leg_r_) < kLegMatchRad;
+                    const bool xy_inherit =
+                        base_inherit && std::fabs(anchor_net_yaw_rad_) < kNetYawMaxRad;
+                    // 진단 캡처 — 아래 갱신·플래그 리셋 '전' 판정 시점 값(계승 미발동 수사)
+                    const int    diag_wheel_mv = z_anchor_wheel_moved_.load() ? 1 : 0;
+                    const double diag_dl   = std::fabs(ll - z_anchor_leg_l_);
+                    const double diag_dr   = std::fabs(lr - z_anchor_leg_r_);
+                    const double diag_dyaw = std::fabs(
+                        yaw_slide_guard::wrappedDeltaDeg(yaw_now, anchor_yaw_deg_));
+                    const int    diag_hist = anchor_history_valid_ ? 1 : 0;
+                    const double diag_net  = anchor_net_yaw_rad_ * 180.0 / M_PI;
+                    if (!xy_inherit)
+                    {
+                        still_cum_anchor_ = Ps[frame_count];
+                        anchor_yaw_deg_   = yaw_now;
+                    }
+                    if (!base_inherit)
+                    {
+                        still_cum_z_anchor_ = Ps[frame_count].z();
+                        z_anchor_leg_l_     = ll;
+                        z_anchor_leg_r_     = lr;
+                    }
+                    still_cum_valid_      = true;
+                    still_cum_z_valid_    = true;  // 클램프 자체는 STILL_CUM_Z_MAX>0 게이트
+                    anchor_history_valid_ = true;
+                    z_anchor_wheel_moved_.store(false);
+                    anchor_net_yaw_rad_   = 0.0;  // 물리 순회전 적분 재시작(계승 판정 기준점)
+                    // 진단: 신규 판정 시 어느 조건이 깨졌는지(판정 '시점' 캡처값)
+                    RCLCPP_INFO(rclcpp::get_logger("vins_gauge_guard"),
+                                "[CUM-GUARD] t=%.3f 앵커 xy %s / z %s "
+                                "(hist=%d wheel_mv=%d legv=%d dl=%.3f dr=%.3f dyaw=%.1f "
+                                "net=%.1f)",
+                                stamp_now, xy_inherit ? "계승" : "신규",
+                                base_inherit ? "계승" : "신규", diag_hist, diag_wheel_mv,
+                                latest_leg_valid_.load() ? 1 : 0, diag_dl, diag_dr, diag_dyaw,
+                                diag_net);
                 }
                 if (still_cum_valid_)
                 {
@@ -1477,11 +1539,36 @@ void Estimator::gaugeSlideGuard()
                         }
                     }
                 }
+                // [SW1-1866 07-31] z 래칫 환원 — 정지 창 참값은 Δz=0. z 병진도 게이지
+                //   (비전·휠 상대 제약, IMU 중력 잔차는 병진 불변) — 유일 예외인 plane은
+                //   zpw 동반 이동으로 무비용 완성. 창·prior 이동은 cum_corr.z 경유(공통 경로).
+                if (STILL_CUM_Z_MAX > 0.0 && still_cum_z_valid_)
+                {
+                    const double zc = yaw_slide_guard::cumClampZCorrection(
+                        Ps[frame_count].z() - still_cum_z_anchor_, STILL_CUM_Z_MAX);
+                    if (zc != 0.0)
+                    {
+                        for (int i = 0; i <= WINDOW_SIZE; i++)
+                            Ps[i].z() += zc;
+                        zpw -= zc;  // zpw = -바퀴 고도(initPlane 규약) → 반대 부호로 동행
+                        cum_corr.z() += zc;  // marg prior 병진은 아래 공통 경로가 수행
+                        still_cum_z_trigger_cnt_++;
+                        if (stamp_now - still_cum_z_last_warn_t_ > 2.0)
+                        {
+                            still_cum_z_last_warn_t_ = stamp_now;
+                            RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                                        "[CUM-GUARD-Z] t=%.3f 정지 창 z 래칫 %+.3fm 환원 "
+                                        "(누적 %ld회)",
+                                        stamp_now, -zc, still_cum_z_trigger_cnt_);
+                        }
+                    }
+                }
             }
             else
             {
                 still_cum_streak_ = 0;
                 still_cum_valid_  = false;
+                // xy·z 앵커 값은 의도적으로 유지 — 정지 복귀 시 계승 판정의 후보(래칫 삭제 핵심)
             }
         }
         const bool cum_hit = cum_corr.norm() > 0.0;
@@ -2161,7 +2248,13 @@ void Estimator::optimization()
             // [SW1-1837] 다리 이벤트 게이팅: 다리가 움직인 구간은 휠이 몸체 운동을 못 봄(v=w=0 주장)
             //   → 틀린 앵커가 자세로 전가(07-13 실측: 자세 오차 1.6~3.4° 주입) → 그 구간 factor skip.
             //   발동 확인용 INFO는 1s 스로틀(A/B 검증 시 육안 확인, 평시 이벤트 없으면 무출력).
-            if (isLegGated(Headers[i], Headers[j]))
+            // [SW1-1866 08-03] 다리 이벤트 중에도 휠 factor '유지'가 기본.
+            //   3-bag 판별(v13/v4/v5): skip은 키프레임 '구간' 단위라 정지·저속(키프레임
+            //   성김, 실측 최장 7.1s)에선 0.2s 이벤트가 수 초 휠 앵커를 통째 제거(v13
+            //   146~158s +0.72m 도약의 주인 — 유지 시 xy RMS 0.30→0.11, v4/v5 동등).
+            //   이벤트 중 엔코더 실측은 '이동 작음'이 근사 참(실제 x·y 소이동 존재),
+            //   회전 과소보고는 gyr_n_wheel 0.3으로 이미 무해. 0 = 하드 skip 롤백.
+            if (!KEEP_WHEEL_IN_LEG_EVENT && isLegGated(Headers[i], Headers[j]))
             {
                 static rclcpp::Clock gate_clk;
                 RCLCPP_INFO_THROTTLE(rclcpp::get_logger("vins_event_gate"), gate_clk, 1000,
@@ -3026,6 +3119,11 @@ void Estimator::inputWheel(double t, const Vector3d &linearVelocity,
     // [SW1-1837] Bg_z 잠금 정지 판별자 — 엔코더가 돌면 '준정지'(느린 잔여 회전)도
     //   정지가 아님을 직접 알 수 있음(gyro 문턱만으로는 구분 불가, 회귀 실측).
     last_wheel_speed_.store(std::max(linearVelocity.norm(), angularVelocity.norm()));
+    // [SW1-1866 07-31] z 앵커 계승 판정 입력 — 휠 '병진'이 있었으면 바닥 기준 이동
+    //   가능성 → 계승 차단. 제자리 회전은 z 불변이라 병진만 본다. 임계 0.05 = 저속
+    //   데드밴드 실측 상한(그 이하는 엔코더가 물리적으로 정지와 구분 못 함).
+    if (linearVelocity.norm() > 0.05)
+        z_anchor_wheel_moved_.store(true);
     // Step1: fast-predict/퍼블리시 생략 (VINS 출력은 vision+IMU 기반 그대로 유지)
 }
 
@@ -3034,6 +3132,10 @@ void Estimator::inputLegState(double t, double theta_l, double theta_r)
 {
     std::lock_guard<std::mutex> lk(m_leg_gate);
     leg_gate.onMeasurement(t, theta_l, theta_r);
+    // [SW1-1866 07-31] z 앵커 계승 판정 입력 — 최신 다리각(앵커 시점 대비 복귀 여부)
+    latest_leg_l_.store(theta_l);
+    latest_leg_r_.store(theta_r);
+    latest_leg_valid_.store(true);
 }
 
 // [SW1-1837] 다리 위치 명령 입력 — 실측 반응 전에 게이트를 선행 개시

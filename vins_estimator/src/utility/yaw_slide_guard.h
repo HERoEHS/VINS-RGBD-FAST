@@ -74,6 +74,19 @@ inline Eigen::Vector3d cumClampCorrection(const Eigen::Vector3d &dev, double max
     return -dxy * ((n - max_m) / n);
 }
 
+// ── 정지 z 래칫 클램프 (07-31, v13 재생 실증으로 추가) ──
+//   다리 이벤트마다 z가 +20~50mm 계단식 래칫(순수 정지 bin은 +2mm 평평), 실기 4분 +0.30m.
+//   z는 절대 앵커 부재(zpw 재앵커 설계)라 한 번 새면 영구 → 정지 확정 창에서 총량 유계.
+//   호출측 책임 2가지: ①plane 높이 zpw 동반 이동(zpw=-고도 부호라 반대 방향 — plane
+//   잔차만 z 병진에 비가변이 아니므로) ②앵커는 '휠 병진 없음+다리각 복귀' 시 정지 창 간
+//   계승(재래치만 하면 이벤트 중 스텝이 새 앵커에 구워져 래칫 삭제 불가).
+inline double cumClampZCorrection(double dev, double max_m)
+{
+    if (std::fabs(dev) <= max_m)
+        return 0.0;
+    return -(dev - std::copysign(max_m, dev));  // 초과분만 경계로 환원(대역 안은 치유 자유)
+}
+
 // ── 절제 에스컬레이션 판정 (07-31, 실기 정지 폭주 2건 실증으로 추가) ──
 //   전제 붕괴 실측: prior 절제는 '다음 solve가 건강한 현재 상태로 재구축'이 전제인데,
 //   실기 2건에서 절제 7·15회 반복에도 견인이 지속·증폭(절제 직후 pos_slide

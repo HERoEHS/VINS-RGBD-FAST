@@ -213,6 +213,8 @@ extern double STILL_LOCK_YAW_W;         // yaw 가중치 = 1/σ_yaw [1/rad]
 extern int    USE_GAUGE_SLIDE_GUARD;    // 0=끔, 1=검출+역변환(yaw·병진)
 extern int    USE_STILL_CUM_GUARD;      // 0=끔, 1=정지 창 누적 xy 변위 상한(총량 유계)
 extern double STILL_CUM_XY_MAX;         // [m] 정지 창 앵커 대비 누적 xy 상한
+extern double STILL_CUM_Z_MAX;          // [m] 정지 창 z 래칫 상한(0=끔) — 앵커는 창 간 계승
+extern int    KEEP_WHEEL_IN_LEG_EVENT;  // 1=다리 이벤트 중 휠 factor 유지(기본) 0=하드 skip 롤백
 extern double YAW_SLIDE_GUARD_THRESH;   // [rad] 주행 중 solve당 yaw 이동 문턱(기본 3°)
 extern double POS_SLIDE_GUARD_THRESH;   // [m]   주행 중 solve당 위치 이동 문턱(기본 0.05)
 extern double YAW_SLIDE_GUARD_STILL_THRESH;  // [rad] 정지 확정 시 문턱(기본 0.1° — pose 고정)

@@ -183,6 +183,20 @@ public:
     long     still_cum_trigger_cnt_{0};
     double   still_cum_last_warn_t_{-1.0e18};
 
+    // [SW1-1866 07-31] 정지 z 래칫 가드 상태 — 앵커는 정지 창 간 '계승'
+    //   (휠 병진 없음 + 다리각 복귀 시. 재래치만 하면 이벤트 중 z 스텝이 구워짐)
+    double   still_cum_z_anchor_{0.0};
+    bool     still_cum_z_valid_{false};
+    bool     anchor_history_valid_{false};   // 이전 정지 창 앵커 실존(계승 후보) 여부
+    double   anchor_yaw_deg_{0.0};           // 앵커 시점 VINS yaw(진단용 — 판정엔 미사용)
+    double   anchor_net_yaw_rad_{0.0};       // 앵커 이후 물리 순회전(gyro-Bg 적분) — xy 계승 판정
+    double   z_anchor_leg_l_{0.0}, z_anchor_leg_r_{0.0};  // 앵커 시점 다리각(계승 판정 기준)
+    long     still_cum_z_trigger_cnt_{0};
+    double   still_cum_z_last_warn_t_{-1.0e18};
+    std::atomic<bool>   z_anchor_wheel_moved_{false};     // 앵커 이후 휠 병진 발생 → 계승 차단
+    std::atomic<double> latest_leg_l_{0.0}, latest_leg_r_{0.0};  // 최신 다리각(inputLegState)
+    std::atomic<bool>   latest_leg_valid_{false};
+
     // [SW1-1837] Bg_z 잠금 상태 — 상태 기반 발동 추적기·정지 실측·재잠금(온도 표류 추종)
     bool               bgz_locked_{false};
     bgz_lock::Tracker  bgz_lock_tracker_;
