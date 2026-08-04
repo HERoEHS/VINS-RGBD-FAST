@@ -173,6 +173,15 @@ private:
                             wheel_msg->twist.twist.angular.y,
                             wheel_msg->twist.twist.angular.z);
         estimator.inputWheel(last_wheel_t, vel, gyr);
+        // [reboot-pose-seed] 휠 odom pose 최신값 — 재초기화 다리(bridge) 병진 소스.
+        //   휠 odom은 VINS reboot와 무관한 외부 적분이라 캡처~재init 사이 연속.
+        const auto &p = wheel_msg->pose.pose.position;
+        const auto &q = wheel_msg->pose.pose.orientation;
+        estimator.latest_wheel_x_.store(p.x);
+        estimator.latest_wheel_y_.store(p.y);
+        estimator.latest_wheel_yaw_.store(
+            std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                       1.0 - 2.0 * (q.y * q.y + q.z * q.z)));
     }
 
     // [SW1-1837] 다리 실측 각도 콜백 — 관절명으로 다리 두 개만 추출해 이벤트 detector에 전달.

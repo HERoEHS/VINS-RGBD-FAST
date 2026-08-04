@@ -195,6 +195,16 @@ wheel_rot_marginalize: 0
 #   0 = 비활성. 결정판 문턱 보정은 'ⓐ 정지+다리 5분 bag' 스윕(0.2/0.3/0.5) 예정.
 still_cum_yaw_max_deg: 0.3
 
+# 재초기화 pose 시드 계승 (SW1-1866 reboot-pose-seed): 4선 방어 최종 계단(조기
+#   재초기화)이 발동하면 위치가 원점 복귀해 nav에 점프 충격(실기 08-04 재확인).
+#   1이면 failure 확정 직후·clearState 직전에 마지막 건전 pose를 캡처(1순위 정지 창
+#   앵커[래치<첫 절제 시각 검증], 2순위 마지막 정화 solve, 3순위 원점 폴백)하고,
+#   재init 완료 시 캡처~완료 사이 이동(휠 odom 병진+gyro yaw)을 얹어 T_seed 확정 →
+#   발행단에서 T_seed∘새 세션 pose로 합성(추정기 내부 무접촉, ALICE reanchor 동형).
+#   절대 오차 보정 아님(계승 시점까지의 드리프트는 이월 — AR 재앵커=SW1-1788 별도).
+#   검증 전 기본 0.
+use_reboot_pose_seed: 0
+
 # init/출발 워밍업 게이트 (SW1-1866, doc/WARMUP_GATE_PROPOSAL.md): static init을
 #   "휠 정지 AND 다리각 안정의 연속 실증 → IMU 표본 축적" 후로 지연 — ⓐ재초기화가
 #   다리 애니메이션 위에 착지해 R0 tilt를 굽는 것(07-31 실기 ~10°)을 차단.

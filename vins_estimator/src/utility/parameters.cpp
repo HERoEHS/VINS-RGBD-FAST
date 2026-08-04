@@ -88,6 +88,9 @@ int    WHEEL_ROT_MARGINALIZE;
 // ===== 정지 yaw 래칫 가드 (SW1-1866 08-04) =====
 double STILL_CUM_YAW_MAX_DEG;
 
+// ===== 재초기화 pose 시드 계승 (SW1-1866 reboot-pose-seed) =====
+int    USE_REBOOT_POSE_SEED;
+
 // ===== init/출발 워밍업 게이트 (SW1-1866) =====
 int    WARMUP_GATE_STILL_SAMPLES;
 int    WARMUP_GATE_IMU_SAMPLES;
@@ -653,6 +656,13 @@ void readParameters(rclcpp::Node* node)
         RCLCPP_INFO(node->get_logger(),
                     "STILL_CUM_YAW_GUARD: 정지 창 누적 yaw 상한 %.2fdeg",
                     STILL_CUM_YAW_MAX_DEG);
+
+    // ===== 재초기화 pose 시드 계승 (reboot-pose-seed) — 키 없으면 비활성 =====
+    USE_REBOOT_POSE_SEED = fsSettings["use_reboot_pose_seed"].empty()
+                               ? 0 : (int)fsSettings["use_reboot_pose_seed"];
+    if (USE_REBOOT_POSE_SEED)
+        RCLCPP_INFO(node->get_logger(),
+                    "REBOOT_POSE_SEED: 1 (재초기화 시 마지막 건전 pose 시드 계승)");
 
     // ===== init/출발 워밍업 게이트 (SW1-1866) — 키 없으면 비활성(기존 동작) =====
     WARMUP_GATE_STILL_SAMPLES = fsSettings["warmup_gate_still_samples"].empty()

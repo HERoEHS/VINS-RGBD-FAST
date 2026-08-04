@@ -169,6 +169,12 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
 
+  # [SW1-1866 reboot-pose-seed] 재초기화 시드 계승 순수 수학(Eigen 헤더-only) 단독 검증
+  ament_add_gtest(test_reboot_seed test/test_reboot_seed.cpp)
+  target_include_directories(test_reboot_seed PRIVATE
+    ${EIGEN3_INCLUDE_DIR}
+  )
+
   # [SW1-1866] 정지 상대운동 잠금 factor(AutoDiff, ceres+Eigen 헤더-only) 단독 검증
   ament_add_gtest(test_still_motion_factor test/test_still_motion_factor.cpp)
   target_include_directories(test_still_motion_factor PRIVATE

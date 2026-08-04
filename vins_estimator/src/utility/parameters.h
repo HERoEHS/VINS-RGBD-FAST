@@ -231,6 +231,10 @@ extern int    WHEEL_ROT_MARGINALIZE; // 0=기존 6자유도 유지, 1=회전 잔
 //   정지 창에서 창 전체 yaw의 문턱 이하 미세 게이지 슬라이드 총량 유계.
 extern double STILL_CUM_YAW_MAX_DEG;  // [deg] 정지 창 누적 yaw 상한 (<=0 비활성)
 
+// ===== 재초기화 pose 시드 계승 (SW1-1866 reboot-pose-seed) =====
+//   조기 재초기화(4선) 시 마지막 건전 pose를 시드로 발행단 합성 — 원점 점프 제거.
+extern int    USE_REBOOT_POSE_SEED;   // 0=기존(원점 복귀), 1=시드 계승
+
 // ===== init/출발 워밍업 게이트 (SW1-1866) — 전부 표본 수 조건(시간 상수 금지) =====
 extern int    WARMUP_GATE_STILL_SAMPLES;   // 1단 정지 실증 연속 표본 수 (<=0 게이트 비활성)
 extern int    WARMUP_GATE_IMU_SAMPLES;     // 2단 IMU 표본 축적 수 (ALICE 100 선례)

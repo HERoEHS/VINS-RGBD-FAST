@@ -79,6 +79,12 @@ public:
     void double2vector();
 
     bool failureDetection();
+    // [SW1-1866 reboot-pose-seed] failure 확정 후·clearState 전에 호출 — 시드 캡처
+    void captureRebootSeed(double stamp);
+    // 재init 완료 시 다리(휠/gyro 델타)를 얹어 T_seed 확정
+    void finalizeRebootSeed();
+    // 발행단 합성: published = T_seed ∘ session (seed_active_ 아니면 무변경)
+    void seedTransform(Eigen::Vector3d &p, Eigen::Matrix3d &R) const;
 
     bool staticInitialAlignWithDepth();
 
@@ -215,6 +221,30 @@ public:
     std::atomic<bool> leg_gate_active_now_{false};  // 다리 이벤트 진행 중(게이트 표본 입력, inputLegState 갱신)
     bool warmup_fallback_logged_{false};   // 저신뢰(폴백) init 경고 1회
     bool warmup_realign_logged_{false};    // 폴백 후 재정렬 기회 신호 1회(v1=로그만)
+
+    // [SW1-1866 reboot-pose-seed] 재초기화 pose 시드 계승 (수학=utility/reboot_seed.h)
+    //   ── T_seed(발행 합성 오프셋)와 다리 적분·캡처 스냅샷은 clearState에서 지우지
+    //   않는다(Q6: 상태 수명 > 세션 수명이 존재 이유). 시드 '재료'(정화 pose·앵커
+    //   래치 시각·첫 절제 시각)는 세션 스코프라 clearState에서 리셋한다 — 캡처가
+    //   clearState보다 먼저 실행되므로(processImage failure 경로) 안전.
+    bool     seed_active_{false};                       // T_seed 합성 on (발행단)
+    Eigen::Matrix3d seed_R_{Eigen::Matrix3d::Identity()};  // T_seed 회전(yaw only)
+    Eigen::Vector3d seed_P_{Eigen::Vector3d::Zero()};      // T_seed 병진
+    bool     seed_pending_{false};       // 캡처됨, 재init 완료 시 다리 얹어 확정 대기
+    Eigen::Vector3d seed_cap_P_{Eigen::Vector3d::Zero()};  // 캡처된 시드 pose(발행 프레임)
+    double   seed_cap_yaw_{0.0};
+    double   seed_cap_gyro_yaw_{0.0};    // 캡처 시점 다리 적분 스냅샷
+    double   seed_cap_wheel_x_{0.0}, seed_cap_wheel_y_{0.0}, seed_cap_wheel_yaw_{0.0};
+    double   bridge_gyro_yaw_rad_{0.0};  // raw gyro z 상시 적분(리셋 금지 — 다리 yaw)
+    long     seed_apply_cnt_{0};         // 텔레메트리
+    // 시드 재료(세션 스코프 — clearState 리셋)
+    double   clean_pose_t_{-1.0};        // 마지막 정화 solve 시각 (2순위 시드)
+    Eigen::Vector3d clean_P_{Eigen::Vector3d::Zero()};
+    double   clean_yaw_{0.0};
+    double   anchor_latch_t_{-1.0};      // 앵커 래치 시각 (1순위 Q4 자격 판정)
+    double   amputate_first_t_{-1.0};    // 현 에피소드 첫 절제 시각
+    // 휠 odom 최신 pose (외부 노드라 reboot 무관 연속 — 다리 병진 소스, 콜백 갱신)
+    std::atomic<double> latest_wheel_x_{0.0}, latest_wheel_y_{0.0}, latest_wheel_yaw_{0.0};
 
     // [SW1-1837] Bg_z 잠금 상태 — 상태 기반 발동 추적기·정지 실측·재잠금(온도 표류 추종)
     bool               bgz_locked_{false};

@@ -229,17 +229,25 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
         odometry.header          = header;
         odometry.header.frame_id = "map";
         odometry.child_frame_id  = "map";
-        Quaterniond tmp_Q        = Quaterniond(estimator.Rs[WINDOW_SIZE]);
-        odometry.pose.pose.position.x    = estimator.Ps[WINDOW_SIZE].x();
-        odometry.pose.pose.position.y    = estimator.Ps[WINDOW_SIZE].y();
-        odometry.pose.pose.position.z    = estimator.Ps[WINDOW_SIZE].z();
+        // [reboot-pose-seed] 재초기화 시드 합성: published = T_seed ∘ session.
+        //   시드 미사용/미발동이면 무변경(seedTransform은 no-op).
+        Vector3d seed_P = estimator.Ps[WINDOW_SIZE];
+        Matrix3d seed_R = estimator.Rs[WINDOW_SIZE];
+        estimator.seedTransform(seed_P, seed_R);
+        Vector3d seed_V = estimator.seed_active_
+                              ? Vector3d(estimator.seed_R_ * estimator.Vs[WINDOW_SIZE])
+                              : estimator.Vs[WINDOW_SIZE];
+        Quaterniond tmp_Q        = Quaterniond(seed_R);
+        odometry.pose.pose.position.x    = seed_P.x();
+        odometry.pose.pose.position.y    = seed_P.y();
+        odometry.pose.pose.position.z    = seed_P.z();
         odometry.pose.pose.orientation.x = tmp_Q.x();
         odometry.pose.pose.orientation.y = tmp_Q.y();
         odometry.pose.pose.orientation.z = tmp_Q.z();
         odometry.pose.pose.orientation.w = tmp_Q.w();
-        odometry.twist.twist.linear.x    = estimator.Vs[WINDOW_SIZE].x();
-        odometry.twist.twist.linear.y    = estimator.Vs[WINDOW_SIZE].y();
-        odometry.twist.twist.linear.z    = estimator.Vs[WINDOW_SIZE].z();
+        odometry.twist.twist.linear.x    = seed_V.x();
+        odometry.twist.twist.linear.y    = seed_V.y();
+        odometry.twist.twist.linear.z    = seed_V.z();
         pub_odometry->publish(odometry);
 
         Vector3d delta_p = estimator.Ps[WINDOW_SIZE] - estimator.Ps[WINDOW_SIZE - 2];
@@ -432,8 +440,11 @@ void pubTF(const Estimator &estimator, const std_msgs::msg::Header &header)
     if (estimator.solver_flag != Estimator::SolverFlag::NON_LINEAR || !g_br)
         return;
 
-    Vector3d    correct_t = estimator.Ps[WINDOW_SIZE];
-    Quaterniond correct_q(estimator.Rs[WINDOW_SIZE]);
+    // [reboot-pose-seed] map→body TF에도 시드 합성(odometry와 동일 프레임 유지)
+    Vector3d correct_t = estimator.Ps[WINDOW_SIZE];
+    Matrix3d correct_R = estimator.Rs[WINDOW_SIZE];
+    estimator.seedTransform(correct_t, correct_R);
+    Quaterniond correct_q(correct_R);
 
     geometry_msgs::msg::TransformStamped ts;
     ts.header         = header;

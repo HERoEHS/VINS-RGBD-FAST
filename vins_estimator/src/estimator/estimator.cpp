@@ -1,5 +1,6 @@
 #include "estimator.h"
 #include "../utility/visualization.h"
+#include "../utility/reboot_seed.h"
 #include "../factor/zero_velocity_factor.h"
 #include "../factor/still_motion_factor.h"
 #include "../factor/acc_bias_prior_factor.h"
@@ -205,6 +206,12 @@ void Estimator::clearState()
     still_cum_yaw_raw_net_rad_ = 0.0;
     still_cum_yaw_elapsed_     = 0.0;
     still_cum_yaw_last_warn_t_ = -1.0e18;
+    // [reboot-pose-seed] 시드 '재료'는 세션 스코프 → 리셋. T_seed(seed_active_/R/P)·
+    //   다리 적분(bridge_gyro_yaw_rad_)·캡처 스냅샷(seed_cap_*)·seed_pending_은
+    //   의도적으로 리셋하지 않는다(Q6: 캡처→clearState→재init을 관통해야 함).
+    clean_pose_t_     = -1.0;
+    anchor_latch_t_   = -1.0;
+    amputate_first_t_ = -1.0;
 
     // [SW1-1866] 워밍업 게이트 리셋 — 재초기화(에스컬레이션 reboot 포함) 시 게이트 재가동.
     //   ⓐ 처방의 핵심 경로: reboot 직후 다리 애니메이션 중이면 leg_stable=false로
@@ -275,6 +282,13 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
     //   판정 시점에 정지 실측 중앙값으로). 재잠금(Bgs 교체)에 불변.
     still_cum_yaw_raw_net_rad_ += angular_velocity.z() * dt;
     still_cum_yaw_elapsed_ += dt;
+    // [reboot-pose-seed] 다리 yaw 적분 — 상시·무리셋(clearState 생존). 시드 캡처~재init
+    //   완료 구간의 실회전을 스냅샷 차분으로 복원한다. 수 초 구간이라 bias 오차 무시.
+    //   dt 위생 가드: clearState 직후 첫 샘플의 epoch급 dt(기존 아티팩트 계열)가
+    //   무리셋 적분에 얹히면 다리 yaw가 폭주(1차 A/B 실증: -1.16e10deg) — IMU 주기
+    //   (~2.6ms)의 수십 배를 넘는 dt는 세션 경계 아티팩트로 보고 버린다.
+    if (dt > 0.0 && dt < 0.1)
+        bridge_gyro_yaw_rad_ += angular_velocity.z() * dt;
 
     // [SW1-1866] 워밍업 게이트 표본 공급 — IMU 표본 1개당 1회(게이트 계약).
     //   입력은 기존 판정 재사용(R4): 휠 정지 atomic + 다리 이벤트 게이트 활성 여부.
@@ -463,6 +477,7 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
                 if (result)
                 {
                     solver_flag = NON_LINEAR;
+                    finalizeRebootSeed();  // [reboot-pose-seed] 재init 완료 — T_seed 확정(시드 없으면 no-op)
                     solveOdometry();
                     slideWindow();
                     f_manager.removeFailures();
@@ -527,6 +542,7 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
                         optimization();
                         updateLatestStates();
                         solver_flag = NON_LINEAR;
+                        finalizeRebootSeed();  // [reboot-pose-seed] 재init 완료 — T_seed 확정(시드 없으면 no-op)
                         slideWindow();
                         ROS_INFO("Initialization finish!");
                         // [SW1-1837] VI 초기화 완료 → 지면평면 초기화 후 제약 활성
@@ -545,6 +561,7 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
                     optimization();
                     updateLatestStates();
                     solver_flag = NON_LINEAR;
+                    finalizeRebootSeed();  // [reboot-pose-seed] 재init 완료 — T_seed 확정(시드 없으면 no-op)
                     slideWindow();
                     ROS_INFO("Initialization finish!");
                 }
@@ -602,6 +619,10 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
         {
             ROS_WARN("failure detection!");
             failure_occur = true;
+            // [reboot-pose-seed] clearState 전에 시드 캡처 — 순서가 성립 조건
+            //   (앵커·정화 pose 등 재료가 clearState에서 지워지기 전 마지막 지점)
+            if (USE_REBOOT_POSE_SEED)
+                captureRebootSeed(Headers[frame_count]);
             clearState();
             setParameter();
             ROS_WARN("system reboot!");
@@ -1472,6 +1493,8 @@ void Estimator::gaugeSlideGuard()
             }
             // [SW1-1866 07-31] 정화 없는 연속 절제 집계 — 절제로 못 끊는 오염 판정 입력
             guard_amputate_streak_++;
+            if (amputate_first_t_ < 0.0)
+                amputate_first_t_ = stamp_now;  // [reboot-pose-seed] 오염 에피소드 시작
             if (!guard_escalation_fire_ &&
                 yaw_slide_guard::escalationReached(guard_amputate_streak_, GUARD_ESCALATION_MAX))
             {
@@ -1568,6 +1591,7 @@ void Estimator::gaugeSlideGuard()
                     still_cum_yaw_anchor_deg_    = yaw_now;
                     still_cum_yaw_raw_net_rad_   = 0.0;
                     still_cum_yaw_elapsed_       = 0.0;
+                    anchor_latch_t_       = stamp_now;  // [reboot-pose-seed] Q4 자격 판정용
                     anchor_history_valid_ = true;
                     z_anchor_wheel_moved_.store(false);
                     anchor_net_yaw_rad_   = 0.0;  // 물리 순회전 적분 재시작(계승 판정 기준점)
@@ -1767,6 +1791,8 @@ void Estimator::gaugeSlideGuard()
                                 stamp_now, kAmputateAfterConsec);
                     // [SW1-1866 07-31] 정화 없는 연속 절제 집계 (비강체 분기와 동일 판정)
                     guard_amputate_streak_++;
+                    if (amputate_first_t_ < 0.0)
+                        amputate_first_t_ = stamp_now;  // [reboot-pose-seed] 에피소드 시작
                     if (!guard_escalation_fire_ &&
                         yaw_slide_guard::escalationReached(guard_amputate_streak_,
                                                            GUARD_ESCALATION_MAX))
@@ -1790,7 +1816,16 @@ void Estimator::gaugeSlideGuard()
             //   아님(문턱 넘나드는 중간 강도 폭주의 발동 회피 봉쇄; 평시 mm급 cum
             //   발동은 카운터 0이라 무영향)
             if (!nonrigid_takeover && !cum_hit)
+            {
                 guard_amputate_streak_ = 0;
+                amputate_first_t_      = -1.0;  // 에피소드 종료 — 다음 절제가 새 시작
+                // [reboot-pose-seed] 2순위 시드 재료: 정화 solve의 pose 스냅샷.
+                //   정화 정의는 179807f 수술본(자기참조 제거) 그대로 재사용 — 이
+                //   순간의 상태는 '가드 개입이 불필요했던 건강한 solve'다.
+                clean_pose_t_ = stamp_now;
+                clean_P_      = Ps[frame_count];
+                clean_yaw_    = Utility::R2ypr(Rs[frame_count]).x() * M_PI / 180.0;
+            }
         }
     }
 
@@ -2066,6 +2101,85 @@ void Estimator::initPlane()
     zpw = sum_zpw / cnt;
     RCLCPP_INFO(rclcpp::get_logger("vins_plane"),
                 "[PLANE] init: normal=world-up(fixed), zpw=%.4f (frames=%d)", zpw, cnt);
+}
+
+// [SW1-1866 reboot-pose-seed] failure 확정 직후·clearState 직전 호출 — 시드 캡처.
+//   계층: ①정지 창 앵커(Q4: 래치 < 첫 절제 시각일 때만 — 오염 후 래치 기각)
+//        ②마지막 정화 solve pose(179807f 수술본 정화 정의)
+//        ③포기 → 원점 폴백(기존 T_seed 유지, 억지 계승 금지)
+void Estimator::captureRebootSeed(double stamp)
+{
+    Vector3d p_session;
+    double   yaw_session_rad;
+    const char *src;
+    // 앵커 1순위의 전제 = "현재 상태가 오염됐다"(절제 실증 존재). 절제가 없는
+    //   failure(big bias 등)는 직전 상태가 건강하므로 신선한 정화 pose가 우월 —
+    //   강제 reboot A/B 실증: 무절제 상태서 앵커 시드는 0.56m 낡아 GT 오차 2.2배.
+    const bool contamination_evidenced = amputate_first_t_ >= 0.0;
+    if (contamination_evidenced && anchor_history_valid_ &&
+        reboot_seed::anchorSeedEligible(anchor_latch_t_, amputate_first_t_))
+    {
+        p_session      = still_cum_anchor_;
+        p_session.z()  = still_cum_z_anchor_;
+        yaw_session_rad = anchor_yaw_deg_ * M_PI / 180.0;
+        src = "앵커";
+    }
+    else if (clean_pose_t_ >= 0.0)
+    {
+        p_session      = clean_P_;
+        yaw_session_rad = clean_yaw_;
+        src = "정화pose";
+    }
+    else
+    {
+        RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
+                    "[REBOOT-SEED] t=%.3f 시드 재료 없음 — 원점 폴백", stamp);
+        return;
+    }
+    // 발행 프레임으로 변환(기존 T_seed 합성) — 연속성의 기준은 '발행됐던' pose
+    const double prev_seed_yaw =
+        seed_active_ ? std::atan2(seed_R_(1, 0), seed_R_(0, 0)) : 0.0;
+    seed_cap_P_   = seed_active_ ? Vector3d(seed_R_ * p_session + seed_P_) : p_session;
+    seed_cap_yaw_ = yaw_session_rad + prev_seed_yaw;
+    seed_cap_gyro_yaw_  = bridge_gyro_yaw_rad_;
+    seed_cap_wheel_x_   = latest_wheel_x_.load();
+    seed_cap_wheel_y_   = latest_wheel_y_.load();
+    seed_cap_wheel_yaw_ = latest_wheel_yaw_.load();
+    seed_pending_ = true;
+    RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
+                "[REBOOT-SEED] t=%.3f 시드 캡처(%s): (%.3f, %.3f, %.3f) yaw=%.1fdeg",
+                stamp, src, seed_cap_P_.x(), seed_cap_P_.y(), seed_cap_P_.z(),
+                seed_cap_yaw_ * 180.0 / M_PI);
+}
+
+// 재init 완료 후 첫 solve에서 호출 — 캡처~지금 사이 이동(휠 병진+gyro yaw)을 얹어
+// T_seed 확정. 주 시나리오(정지 폭주)에선 다리≈0.
+void Estimator::finalizeRebootSeed()
+{
+    if (!seed_pending_)
+        return;
+    const double d_yaw = bridge_gyro_yaw_rad_ - seed_cap_gyro_yaw_;
+    const Eigen::Vector2d wheel_delta(latest_wheel_x_.load() - seed_cap_wheel_x_,
+                                      latest_wheel_y_.load() - seed_cap_wheel_y_);
+    const Vector3d d_p =
+        reboot_seed::bridgeTranslation(seed_cap_yaw_, seed_cap_wheel_yaw_, wheel_delta);
+    reboot_seed::finalizeSeed(seed_cap_P_, seed_cap_yaw_, d_p, d_yaw, seed_R_, seed_P_);
+    seed_active_  = true;
+    seed_pending_ = false;
+    seed_apply_cnt_++;
+    RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
+                "[REBOOT-SEED] T_seed 확정(누적 %ld회): (%.3f, %.3f, %.3f) yaw=%.1fdeg "
+                "(다리 %.3fm / %.2fdeg)",
+                seed_apply_cnt_, seed_P_.x(), seed_P_.y(), seed_P_.z(),
+                std::atan2(seed_R_(1, 0), seed_R_(0, 0)) * 180.0 / M_PI,
+                d_p.norm(), d_yaw * 180.0 / M_PI);
+}
+
+void Estimator::seedTransform(Vector3d &p, Matrix3d &R) const
+{
+    if (!seed_active_)
+        return;
+    reboot_seed::compose(seed_R_, seed_P_, p, R);
 }
 
 bool Estimator::failureDetection()
@@ -3214,7 +3328,12 @@ void Estimator::inputIMU(double t, const Vector3d &linearAcceleration,
         m_propagate.lock();
         predict(t, linearAcceleration, angularVelocity);
         m_propagate.unlock();
-        pubLatestOdometry(latest_P, latest_Q, latest_V, t);
+        // [reboot-pose-seed] 고주기 경로에도 동일 시드 합성(저주기 발행과 프레임 일치)
+        Vector3d pub_P = latest_P;
+        Matrix3d pub_R = latest_Q.toRotationMatrix();
+        seedTransform(pub_P, pub_R);
+        pubLatestOdometry(pub_P, Quaterniond(pub_R),
+                          seed_active_ ? Vector3d(seed_R_ * latest_V) : latest_V, t);
     }
 }
 
