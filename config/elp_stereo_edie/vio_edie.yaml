@@ -184,8 +184,13 @@ wheel_rot_marginalize: 0
 #   전부 표본 수 조건(시간 상수 금지, ALICE 접지 1s+IMU 100샘플 선례). IMU ~376Hz 기준
 #   still 100≈0.27s 실증 + imu 100≈0.27s 축적. 폴백 2중(주행 연속 실증 moving_samples /
 #   총 예산 budget_samples)이 무한 대기를 금지(R2 하드 요건) — 폴백 시 저신뢰 init 진행.
-#   still_samples 0 = 게이트 비활성(기존 동작). 기본값은 A/B 검증 후 결정 — 검증 전 0.
-warmup_gate_still_samples: 1 #0
+#   still_samples 0 = 게이트 비활성(기존 동작).
+#   ★기본 100(활성) 채택(08-04 사용자 결정): 무해 3중 실증 — vg1(v13) 완전 투명·xy
+#   챔피언 대역, vg2 폴백 경로 생존(무한 대기 없음), 유휴 다리 애니메이션은 검출
+#   문턱(2-LSB) 이하라 게이트와 불충돌 실측. R1 실전 효과(ⓐ 착지 차단)는 ⓐ bag/실기
+#   재초기화 시나리오에서 후속 검증(기존 bag엔 ⓐ급 대진폭 애니메이션 부재 확정).
+#   ※d3d0b34에 스테이징 실수로 동승했던 1(정지 1표본≈2.6ms 실증=무의미 값) 정정 포함.
+warmup_gate_still_samples: 100
 warmup_gate_imu_samples: 100
 warmup_gate_moving_samples: 100
 warmup_gate_budget_samples: 3000
