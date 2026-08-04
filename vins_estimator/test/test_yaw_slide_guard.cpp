@@ -153,6 +153,31 @@ TEST(Escalation, DisabledWhenMaxNonPositive)
     EXPECT_FALSE(ysg::escalationReached(100, -1));
 }
 
+// [SW1-1866 08-04] 정지 yaw 래칫 편차 — 물리 순회전 차감 + ±180 경계 안전
+TEST(CumYawDeviation, SubtractsPhysicalRotation)
+{
+    // 앵커 10°, 현재 12.5°, 그중 2°는 실제 크리프 회전(gyro 실측) → 편차 0.5°만
+    EXPECT_NEAR(ysg::cumYawDeviationDeg(12.5, 10.0, 2.0), 0.5, 1e-12);
+    // 실제 회전이 전부 설명하면 편차 0 (오탐 없음)
+    EXPECT_NEAR(ysg::cumYawDeviationDeg(12.0, 10.0, 2.0), 0.0, 1e-12);
+}
+
+TEST(CumYawDeviation, WrapBoundarySafe)
+{
+    // ±180 경계 통과: 앵커 179°, 현재 -179° = 실제 이동 +2° (359° 오검출 금지)
+    EXPECT_NEAR(ysg::cumYawDeviationDeg(-179.0, 179.0, 0.0), 2.0, 1e-12);
+    EXPECT_NEAR(ysg::cumYawDeviationDeg(179.0, -179.0, 0.0), -2.0, 1e-12);
+}
+
+TEST(CumYawDeviation, ClampComposesWithSharedMath)
+{
+    // 편차 1.7°(v14 실측 슬라이드급), 상한 0.3° → 초과 1.4°만 환원(경계 안 대역은 자유)
+    const double dev = ysg::cumYawDeviationDeg(11.7, 10.0, 0.0);
+    EXPECT_NEAR(ysg::cumClampZCorrection(dev, 0.3), -1.4, 1e-12);
+    // 상한 내(0.2°)는 무개입
+    EXPECT_NEAR(ysg::cumClampZCorrection(0.2, 0.3), 0.0, 1e-12);
+}
+
 int main(int argc, char **argv)
 {
     testing::InitGoogleTest(&argc, argv);

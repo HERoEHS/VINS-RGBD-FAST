@@ -201,6 +201,10 @@ void Estimator::clearState()
     anchor_net_yaw_rad_     = 0.0;
     z_anchor_wheel_moved_   = false;
     still_cum_z_last_warn_t_ = -1.0e18;
+    still_cum_yaw_anchor_deg_  = 0.0;
+    still_cum_yaw_raw_net_rad_ = 0.0;
+    still_cum_yaw_elapsed_     = 0.0;
+    still_cum_yaw_last_warn_t_ = -1.0e18;
 
     // [SW1-1866] 워밍업 게이트 리셋 — 재초기화(에스컬레이션 reboot 포함) 시 게이트 재가동.
     //   ⓐ 처방의 핵심 경로: reboot 직후 다리 애니메이션 중이면 leg_stable=false로
@@ -267,6 +271,10 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
     //   미끄러뜨리는(yaw_slide) 오염 신호라 계승 판정에 부적격(계측 run 실증: 로봇
     //   무회전인데 dyaw>5°로 재래치 → 래칫 소각 실패). bias 보정 gyro z 적분이 참값.
     anchor_net_yaw_rad_ += (angular_velocity.z() - Bgs[frame_count].z()) * dt;
+    // [SW1-1866 08-04] yaw 래칫 가드용 raw 적분 — bias 미차감(자기참조 절단, 차감은
+    //   판정 시점에 정지 실측 중앙값으로). 재잠금(Bgs 교체)에 불변.
+    still_cum_yaw_raw_net_rad_ += angular_velocity.z() * dt;
+    still_cum_yaw_elapsed_ += dt;
 
     // [SW1-1866] 워밍업 게이트 표본 공급 — IMU 표본 1개당 1회(게이트 계약).
     //   입력은 기존 판정 재사용(R4): 휠 정지 atomic + 다리 이벤트 게이트 활성 여부.
@@ -1554,6 +1562,12 @@ void Estimator::gaugeSlideGuard()
                     }
                     still_cum_valid_      = true;
                     still_cum_z_valid_    = true;  // 클램프 자체는 STILL_CUM_Z_MAX>0 게이트
+                    // [SW1-1866 08-04] yaw 앵커는 무조건 신규 — 주행 구간의 실회전 탓에
+                    //   창 간 계승 불가(계승 허용오차 5°가 yaw 문턱 0.3°보다 커서 오염됨).
+                    //   raw 적분·경과시간 리셋과 같은 순간이라 편차 기준점이 정확히 동기.
+                    still_cum_yaw_anchor_deg_    = yaw_now;
+                    still_cum_yaw_raw_net_rad_   = 0.0;
+                    still_cum_yaw_elapsed_       = 0.0;
                     anchor_history_valid_ = true;
                     z_anchor_wheel_moved_.store(false);
                     anchor_net_yaw_rad_   = 0.0;  // 물리 순회전 적분 재시작(계승 판정 기준점)
@@ -1607,6 +1621,56 @@ void Estimator::gaugeSlideGuard()
                                         "[CUM-GUARD-Z] t=%.3f 정지 창 z 래칫 %+.3fm 환원 "
                                         "(누적 %ld회)",
                                         stamp_now, -zc, still_cum_z_trigger_cnt_);
+                        }
+                    }
+                }
+
+                // [SW1-1866 08-04] yaw 래칫 환원 — v14 굽힘 타임라인 실증: 정지 창에서
+                //   창 전체 yaw가 per-solve 절제 문턱 이하로 미세하게 도는 게이지 슬라이드
+                //   (+1.72°/s@|w|=0, "계단 2"의 정체). 정지 잠금은 상대 제약이라 구성상
+                //   무력(8단 소거+힌지 probe로 확정) → 총량 유계가 처방. 편차에서 물리
+                //   순회전(gyro 적분)을 차감해 문턱 이하 실제 크리프 회전은 오탐하지 않음.
+                //   역회전은 states-only(피벗=현재 위치라 xy·z 앵커 불변) — per-solve
+                //   역회전(위 do_rot)과 동일 선례. prior가 계속 밀면 매 solve 초과분만
+                //   잘려 총량 유계, 지속 견인은 기존 절제·에스컬레이션 관할.
+                // 물리 회전 기준 = raw 적분 − 정지 실측 bias(rest 중앙값)×경과시간.
+                //   Bgs 기반이면 잠금 잔차(슬라이드의 원인)가 기준까지 오염하는 자기참조
+                //   ([YAW-DEV] 진단 실증: yaw와 net이 동행해 dev≈0) — bgz_lock이 절대
+                //   가드 한계를 '정지 실측 기준'으로 푼 계보 그대로. rest 미축적 시
+                //   ready() 게이트로 우아하게 보류(bgz_rest는 정지 중 IMU 주기 축적이라
+                //   앵커 래치(15 solve≈1.5s) 시점엔 통상 충족).
+                // ※ready() 게이트는 크래시 방어이기도 함: RestBias::median()은 빈 이력에서
+                //   UB(back()) — ready()가 비어있지 않음을 보증(08-04 진단 크래시 실증).
+                if (STILL_CUM_YAW_MAX_DEG > 0.0 && still_cum_valid_ &&
+                    bgz_rest_.ready(1.5))
+                {
+                    const double net_phys_deg =
+                        (still_cum_yaw_raw_net_rad_ -
+                         bgz_rest_.median(BGZ_RELOCK_WIN_SEC) * still_cum_yaw_elapsed_) *
+                        180.0 / M_PI;
+                    const double dev_deg = yaw_slide_guard::cumYawDeviationDeg(
+                        Utility::R2ypr(Rs[frame_count]).x(), still_cum_yaw_anchor_deg_,
+                        net_phys_deg);
+                    const double yc =
+                        yaw_slide_guard::cumClampZCorrection(dev_deg, STILL_CUM_YAW_MAX_DEG);
+                    if (yc != 0.0)
+                    {
+                        const Matrix3d dRy = yaw_slide_guard::counterRotation(-yc);
+                        const Vector3d pv  = Ps[frame_count];
+                        for (int i = 0; i <= WINDOW_SIZE; i++)
+                        {
+                            Ps[i] = pv + dRy * (Ps[i] - pv);
+                            Rs[i] = dRy * Rs[i];
+                            Vs[i] = dRy * Vs[i];
+                        }
+                        still_cum_yaw_trigger_cnt_++;
+                        if (stamp_now - still_cum_yaw_last_warn_t_ > 2.0)
+                        {
+                            still_cum_yaw_last_warn_t_ = stamp_now;
+                            RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                                        "[CUM-GUARD-YAW] t=%.3f 정지 창 yaw 래칫 %+.2fdeg 환원 "
+                                        "(누적 %ld회)",
+                                        stamp_now, yc, still_cum_yaw_trigger_cnt_);
                         }
                     }
                 }

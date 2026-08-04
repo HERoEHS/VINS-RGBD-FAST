@@ -85,6 +85,9 @@ double POS_SLIDE_GUARD_STILL_THRESH = 0.005;
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
 
+// ===== 정지 yaw 래칫 가드 (SW1-1866 08-04) =====
+double STILL_CUM_YAW_MAX_DEG;
+
 // ===== init/출발 워밍업 게이트 (SW1-1866) =====
 int    WARMUP_GATE_STILL_SAMPLES;
 int    WARMUP_GATE_IMU_SAMPLES;
@@ -642,6 +645,14 @@ void readParameters(rclcpp::Node* node)
     if (WHEEL_ROT_MARGINALIZE)
         RCLCPP_INFO(node->get_logger(),
                     "WHEEL_ROT_MARGINALIZE: 1 (휠 factor 회전 잔차 주변화, 위치 3x3만 제약)");
+
+    // ===== 정지 yaw 래칫 가드 (SW1-1866 08-04) — 키 없으면 비활성 =====
+    STILL_CUM_YAW_MAX_DEG = fsSettings["still_cum_yaw_max_deg"].empty()
+                                ? 0.0 : (double)fsSettings["still_cum_yaw_max_deg"];
+    if (STILL_CUM_YAW_MAX_DEG > 0.0)
+        RCLCPP_INFO(node->get_logger(),
+                    "STILL_CUM_YAW_GUARD: 정지 창 누적 yaw 상한 %.2fdeg",
+                    STILL_CUM_YAW_MAX_DEG);
 
     // ===== init/출발 워밍업 게이트 (SW1-1866) — 키 없으면 비활성(기존 동작) =====
     WARMUP_GATE_STILL_SAMPLES = fsSettings["warmup_gate_still_samples"].empty()

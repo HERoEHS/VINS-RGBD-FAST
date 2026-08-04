@@ -87,6 +87,20 @@ inline double cumClampZCorrection(double dev, double max_m)
     return -(dev - std::copysign(max_m, dev));  // 초과분만 경계로 환원(대역 안은 치유 자유)
 }
 
+// ── 정지 yaw 래칫 편차 (08-04, v14 굽힘 타임라인 실증으로 추가) ──
+//   per-solve 문턱(위 isSlide, 폭주급 13~16° 대비 3°)은 '속도' 제한이라, 문턱 이하로
+//   지속되는 미세 게이지 슬라이드(실측: 정지 창에서 +1.72°/s@|w|=0, 0.17°/solve급)는
+//   통과한다 — yaw판 '문턱=누설률'. 정지 잠금(StillMotionFactor)은 상대 yaw 제약이라
+//   창 전체 회전에 구성상 불변(무력)임이 8단 소거+힌지 probe로 확정. 이 함수는 '총량'
+//   판정 입력: 정지 창 앵커 대비 yaw 이탈에서 물리 순회전(gyro 적분 — 문턱 이하 실제
+//   크리프 회전을 오탐하지 않기 위함)을 뺀 편차를 준다. 클램프는 cumClampZCorrection
+//   재사용(동일 1-D 수학), 환원은 counterRotation 재사용(창 전체 z축 역회전 = 게이지
+//   방향이라 무비용).
+inline double cumYawDeviationDeg(double yaw_now_deg, double anchor_deg, double net_rot_deg)
+{
+    return wrappedDeltaDeg(yaw_now_deg, anchor_deg) - net_rot_deg;
+}
+
 // ── 절제 에스컬레이션 판정 (07-31, 실기 정지 폭주 2건 실증으로 추가) ──
 //   전제 붕괴 실측: prior 절제는 '다음 solve가 건강한 현재 상태로 재구축'이 전제인데,
 //   실기 2건에서 절제 7·15회 반복에도 견인이 지속·증폭(절제 직후 pos_slide

@@ -194,6 +194,17 @@ public:
     double   z_anchor_leg_l_{0.0}, z_anchor_leg_r_{0.0};  // 앵커 시점 다리각(계승 판정 기준)
     long     still_cum_z_trigger_cnt_{0};
     double   still_cum_z_last_warn_t_{-1.0e18};
+
+    // [SW1-1866 08-04] 정지 yaw 래칫 가드 상태 — 앵커는 매 정지 창 신규(주행 중 실회전
+    //   탓에 창 간 계승 불가 — z와 다른 점). 물리 회전 판정은 raw gyro 적분 −
+    //   정지 실측 bias(rest 중앙값)×경과시간 — Bgs 기반이면 잠금 잔차가 슬라이드의
+    //   원인이자 기준이 되는 자기참조로 가드가 무력화됨([YAW-DEV] 진단 실증). raw
+    //   적분은 창 중간 재잠금(Bgs 교체)에도 불변.
+    double   still_cum_yaw_anchor_deg_{0.0};
+    double   still_cum_yaw_raw_net_rad_{0.0};  // 래치 이후 raw gyro z 적분(bias 미차감)
+    double   still_cum_yaw_elapsed_{0.0};      // 래치 이후 경과시간(rest 중앙값 차감용)
+    long     still_cum_yaw_trigger_cnt_{0};
+    double   still_cum_yaw_last_warn_t_{-1.0e18};
     std::atomic<bool>   z_anchor_wheel_moved_{false};     // 앵커 이후 휠 병진 발생 → 계승 차단
     std::atomic<double> latest_leg_l_{0.0}, latest_leg_r_{0.0};  // 최신 다리각(inputLegState)
     std::atomic<bool>   latest_leg_valid_{false};
