@@ -70,4 +70,18 @@ inline bool anchorSeedEligible(double anchor_latch_t, double first_amputate_t)
     return first_amputate_t < 0.0 || anchor_latch_t < first_amputate_t;
 }
 
+// ── 출력 map 핀 (SW1-1866 vins-output-map-anchor) ──
+// yaw 회전 + 병진의 일반 합성 한 단계: p ← Rz(yaw)·p + t,  R ← Rz(yaw)·R.
+// 표시 핀 사슬 published = T(map→odom) ∘ T(odom←세션) ∘ pose 를 이 함수 2회로 구성.
+// yaw-only인 이유: 두 프레임 모두 중력 정렬이라 roll/pitch 성분은 ~0(핀의 z만 병진 반영).
+inline void composeYawXYZ(double yaw, const Eigen::Vector3d &t, Eigen::Vector3d &p,
+                          Eigen::Matrix3d &R)
+{
+    const double c = std::cos(yaw), s = std::sin(yaw);
+    Eigen::Matrix3d Y;
+    Y << c, -s, 0, s, c, 0, 0, 0, 1;
+    p = Y * p + t;
+    R = Y * R;
+}
+
 }  // namespace reboot_seed

@@ -91,6 +91,9 @@ double STILL_CUM_YAW_MAX_DEG;
 // ===== 재초기화 pose 시드 계승 (SW1-1866 reboot-pose-seed) =====
 int    USE_REBOOT_POSE_SEED;
 
+// ===== 출력 map 핀 (SW1-1866 vins-output-map-anchor) =====
+int    USE_OUTPUT_MAP_ANCHOR;
+
 // ===== init/출발 워밍업 게이트 (SW1-1866) =====
 int    WARMUP_GATE_STILL_SAMPLES;
 int    WARMUP_GATE_IMU_SAMPLES;
@@ -660,6 +663,11 @@ void readParameters(rclcpp::Node* node)
     // ===== 재초기화 pose 시드 계승 (reboot-pose-seed) — 키 없으면 비활성 =====
     USE_REBOOT_POSE_SEED = fsSettings["use_reboot_pose_seed"].empty()
                                ? 0 : (int)fsSettings["use_reboot_pose_seed"];
+    USE_OUTPUT_MAP_ANCHOR = fsSettings["use_output_map_anchor"].empty()
+                                ? 0 : (int)fsSettings["use_output_map_anchor"];
+    if (USE_OUTPUT_MAP_ANCHOR)
+        RCLCPP_INFO(node->get_logger(),
+                    "OUTPUT_MAP_ANCHOR: 1 (map→odom 핀 ∘ init 휠 스냅샷을 발행단 합성)");
     if (USE_REBOOT_POSE_SEED)
         RCLCPP_INFO(node->get_logger(),
                     "REBOOT_POSE_SEED: 1 (재초기화 시 마지막 건전 pose 시드 계승)");

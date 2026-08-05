@@ -233,10 +233,12 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
         //   시드 미사용/미발동이면 무변경(seedTransform은 no-op).
         Vector3d seed_P = estimator.Ps[WINDOW_SIZE];
         Matrix3d seed_R = estimator.Rs[WINDOW_SIZE];
-        estimator.seedTransform(seed_P, seed_R);
-        Vector3d seed_V = estimator.seed_active_
-                              ? Vector3d(estimator.seed_R_ * estimator.Vs[WINDOW_SIZE])
-                              : estimator.Vs[WINDOW_SIZE];
+        estimator.displayTransform(seed_P, seed_R);
+        // 속도 방향도 동일 사슬 회전(net 회전 = displayTransform의 R 사슬)
+        Vector3d net_p = Vector3d::Zero();
+        Matrix3d net_R = Matrix3d::Identity();
+        estimator.displayTransform(net_p, net_R);
+        Vector3d seed_V = net_R * estimator.Vs[WINDOW_SIZE];
         Quaterniond tmp_Q        = Quaterniond(seed_R);
         odometry.pose.pose.position.x    = seed_P.x();
         odometry.pose.pose.position.y    = seed_P.y();
@@ -443,7 +445,7 @@ void pubTF(const Estimator &estimator, const std_msgs::msg::Header &header)
     // [reboot-pose-seed] map→body TF에도 시드 합성(odometry와 동일 프레임 유지)
     Vector3d correct_t = estimator.Ps[WINDOW_SIZE];
     Matrix3d correct_R = estimator.Rs[WINDOW_SIZE];
-    estimator.seedTransform(correct_t, correct_R);
+    estimator.displayTransform(correct_t, correct_R);
     Quaterniond correct_q(correct_R);
 
     geometry_msgs::msg::TransformStamped ts;

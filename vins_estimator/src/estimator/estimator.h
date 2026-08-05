@@ -85,6 +85,11 @@ public:
     void finalizeRebootSeed();
     // 발행단 합성: published = T_seed ∘ session (seed_active_ 아니면 무변경)
     void seedTransform(Eigen::Vector3d &p, Eigen::Matrix3d &R) const;
+    // [SW1-1866 vins-output-map-anchor] 발행단 종합 변환: 출력 핀 ∘ T_seed ∘ session.
+    //   핀 미수신/비활성 시 seedTransform과 동일(우아한 퇴화).
+    void displayTransform(Eigen::Vector3d &p, Eigen::Matrix3d &R) const;
+    void setMapOdomPin(double x, double y, double z, double yaw);  // nodelet static TF 수신
+    void snapshotOutputAnchor();  // init 완료(비시드) 시 T(odom←세션) = 휠 pose 스냅샷
 
     bool staticInitialAlignWithDepth();
 
@@ -237,6 +242,15 @@ public:
     double   seed_cap_wheel_x_{0.0}, seed_cap_wheel_y_{0.0}, seed_cap_wheel_yaw_{0.0};
     double   bridge_gyro_yaw_rad_{0.0};  // raw gyro z 상시 적분(리셋 금지 — 다리 yaw)
     long     seed_apply_cnt_{0};         // 텔레메트리
+    // [SW1-1866 vins-output-map-anchor] 출력 map 핀 — 표시 전용, 추정기 무접촉.
+    //   published = T(map→odom)[GT 스크립트 1회 핀, static TF 수신] ∘
+    //               T(odom←세션)[init 순간 휠 pose 스냅샷 — 부팅 정렬 가정 불요] ∘ ...
+    //   스냅샷은 seed 비활성 init에서만 갱신(시드 계승 시 원 세션 프레임 유지).
+    std::atomic<bool> map_odom_pin_valid_{false};
+    double   map_odom_x_{0.0}, map_odom_y_{0.0}, map_odom_z_{0.0}, map_odom_yaw_{0.0};
+    bool     output_anchor_valid_{false};   // T(odom←세션) 스냅샷 존재
+    double   anchor_wheel_x_{0.0}, anchor_wheel_y_{0.0}, anchor_wheel_yaw_{0.0};
+    mutable bool map_pin_wait_logged_{false};  // 핀 미수신 1회 알림
     // 시드 재료(세션 스코프 — clearState 리셋)
     double   clean_pose_t_{-1.0};        // 마지막 정화 solve 시각 (2순위 시드)
     Eigen::Vector3d clean_P_{Eigen::Vector3d::Zero()};

@@ -23,7 +23,8 @@
 #include <std_msgs/msg/header.hpp>
 #include <geometry_msgs/msg/point32.hpp>
 #include <nav_msgs/msg/odometry.hpp>  // 휠 오도메트리 구독 (SW1-1829)
-#include <sensor_msgs/msg/joint_state.hpp>       // 다리 실측 각도 구독 (이벤트 게이팅, SW1-1837)
+#include <sensor_msgs/msg/joint_state.hpp>  // 다리 실측 각도 구독 (이벤트 게이팅, SW1-1837)
+#include <tf2_msgs/msg/tf_message.hpp>       // map→odom 핀 수신 (vins-output-map-anchor)
 #include <std_msgs/msg/float64.hpp>              // 다리 위치 명령 구독 (이벤트 게이팅, SW1-1837)
 
 class EstimatorNode : public rclcpp::Node
@@ -60,6 +61,29 @@ public:
             sub_wheel = create_subscription<nav_msgs::msg::Odometry>(
                 WHEEL_TOPIC, sensor_qos,
                 std::bind(&EstimatorNode::wheel_callback, this, std::placeholders::_1));
+
+        // [SW1-1866 vins-output-map-anchor] map→odom 핀 수신 — GT 스크립트가 1회
+        //   발행하는 static TF. transient_local(latched)이라 늦게 켜도 수신.
+        if (USE_OUTPUT_MAP_ANCHOR)
+        {
+            sub_tf_static = create_subscription<tf2_msgs::msg::TFMessage>(
+                "/tf_static", rclcpp::QoS(rclcpp::KeepLast(10)).transient_local(),
+                [this](tf2_msgs::msg::TFMessage::ConstSharedPtr msg)
+                {
+                    for (const auto &tr : msg->transforms)
+                    {
+                        if (tr.header.frame_id == "map" && tr.child_frame_id == "odom")
+                        {
+                            const auto &t = tr.transform.translation;
+                            const auto &q = tr.transform.rotation;
+                            estimator.setMapOdomPin(
+                                t.x, t.y, t.z,
+                                std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                           1.0 - 2.0 * (q.y * q.y + q.z * q.z)));
+                        }
+                    }
+                });
+        }
 
         // [SW1-1837] 다리 이벤트 게이팅 입력 — 실측(joint_states) + 위치 명령(선행 트리거)
         if (USE_EVENT_GATING && GATE_LEG)
@@ -109,6 +133,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr           sub_imu;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr         sub_wheel;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr     sub_joint_states;  // [SW1-1837]
+    rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr         sub_tf_static;     // [vins-output-map-anchor]
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr  sub_leg_cmd_l;     // [SW1-1837]
     rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr  sub_leg_cmd_r;     // [SW1-1837]
     rclcpp::Subscription<sensor_msgs::msg::PointCloud>::SharedPtr     sub_relo_points;

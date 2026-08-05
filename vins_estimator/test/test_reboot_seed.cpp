@@ -78,6 +78,33 @@ TEST(RebootSeed, AnchorEligibilityGuardsContamination)
     EXPECT_FALSE(rs::anchorSeedEligible(-1.0, -1.0));  // 래치 없음 → 기각
 }
 
+// [SW1-1866 vins-output-map-anchor] 출력 핀 사슬 — composeYawXYZ 2회 합성 검증
+TEST(OutputMapAnchor, ChainComposesPinAndSessionAnchor)
+{
+    // 세션 pose (1,0,0)/yaw0. T(odom←세션)=yaw90°+(2,0,0) → odom (2,1,0)/yaw90.
+    // T(map→odom)=yaw-90°+(0,0,0.1) → map (1,-2,0.1)/yaw0.
+    Eigen::Vector3d p(1, 0, 0);
+    Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+    rs::composeYawXYZ(M_PI / 2, Eigen::Vector3d(2, 0, 0), p, R);
+    EXPECT_NEAR(p.x(), 2.0, 1e-12);
+    EXPECT_NEAR(p.y(), 1.0, 1e-12);
+    rs::composeYawXYZ(-M_PI / 2, Eigen::Vector3d(0, 0, 0.1), p, R);
+    EXPECT_NEAR(p.x(), 1.0, 1e-9);
+    EXPECT_NEAR(p.y(), -2.0, 1e-9);
+    EXPECT_NEAR(p.z(), 0.1, 1e-12);
+    EXPECT_NEAR(std::atan2(R(1, 0), R(0, 0)), 0.0, 1e-9);
+}
+
+TEST(OutputMapAnchor, IdentityPinIsTransparent)
+{
+    Eigen::Vector3d p(0.3, -0.7, 0.05);
+    Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+    rs::composeYawXYZ(0.0, Eigen::Vector3d::Zero(), p, R);
+    EXPECT_NEAR(p.x(), 0.3, 1e-12);
+    EXPECT_NEAR(p.y(), -0.7, 1e-12);
+    EXPECT_NEAR(p.z(), 0.05, 1e-12);
+}
+
 int main(int argc, char **argv)
 {
     testing::InitGoogleTest(&argc, argv);

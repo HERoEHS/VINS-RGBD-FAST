@@ -2156,6 +2156,10 @@ void Estimator::captureRebootSeed(double stamp)
 // T_seed 확정. 주 시나리오(정지 폭주)에선 다리≈0.
 void Estimator::finalizeRebootSeed()
 {
+    // [vins-output-map-anchor] init 완료 공용 훅: seed 비활성 init = 이 세션이 발행
+    //   기준 프레임 → T(odom←세션) 스냅샷. 시드 계승 시엔 원 세션 스냅샷 유지.
+    if (USE_OUTPUT_MAP_ANCHOR && !seed_active_ && !seed_pending_)
+        snapshotOutputAnchor();
     if (!seed_pending_)
         return;
     const double d_yaw = bridge_gyro_yaw_rad_ - seed_cap_gyro_yaw_;
@@ -2180,6 +2184,54 @@ void Estimator::seedTransform(Vector3d &p, Matrix3d &R) const
     if (!seed_active_)
         return;
     reboot_seed::compose(seed_R_, seed_P_, p, R);
+}
+
+// [SW1-1866 vins-output-map-anchor] 발행단 종합 변환. 사슬:
+//   published = T(map→odom) ∘ T(odom←세션) ∘ (T_seed ∘ session)
+//   T(odom←세션)은 init 순간 휠 pose 스냅샷이라 VINS를 언제 켰든 정확(부팅 정렬
+//   가정 불요). 핀/스냅샷이 없으면 그 단계를 생략 = 현행 동작(우아한 퇴화).
+void Estimator::displayTransform(Vector3d &p, Matrix3d &R) const
+{
+    seedTransform(p, R);
+    if (!USE_OUTPUT_MAP_ANCHOR)
+        return;
+    if (!output_anchor_valid_ || !map_odom_pin_valid_.load())
+    {
+        if (!map_pin_wait_logged_)
+        {
+            map_pin_wait_logged_ = true;
+            RCLCPP_INFO(rclcpp::get_logger("vins_output_anchor"),
+                        "[OUTPUT-ANCHOR] 핀 대기 중(map→odom static %s, 스냅샷 %s) — "
+                        "수신 전까지 세션 프레임 발행",
+                        map_odom_pin_valid_.load() ? "수신" : "미수신",
+                        output_anchor_valid_ ? "있음" : "없음");
+        }
+        return;
+    }
+    reboot_seed::composeYawXYZ(anchor_wheel_yaw_,
+                               Eigen::Vector3d(anchor_wheel_x_, anchor_wheel_y_, 0.0), p, R);
+    reboot_seed::composeYawXYZ(map_odom_yaw_,
+                               Eigen::Vector3d(map_odom_x_, map_odom_y_, map_odom_z_), p, R);
+}
+
+void Estimator::setMapOdomPin(double x, double y, double z, double yaw)
+{
+    map_odom_x_ = x; map_odom_y_ = y; map_odom_z_ = z; map_odom_yaw_ = yaw;
+    map_odom_pin_valid_.store(true);  // 값 기록 후 플래그(수신 스레드→발행 스레드 공개 순서)
+    RCLCPP_INFO(rclcpp::get_logger("vins_output_anchor"),
+                "[OUTPUT-ANCHOR] map→odom 핀 수신: (%.3f, %.3f, %.3f) yaw=%.2fdeg",
+                x, y, z, yaw * 180.0 / M_PI);
+}
+
+void Estimator::snapshotOutputAnchor()
+{
+    anchor_wheel_x_   = latest_wheel_x_.load();
+    anchor_wheel_y_   = latest_wheel_y_.load();
+    anchor_wheel_yaw_ = latest_wheel_yaw_.load();
+    output_anchor_valid_ = true;
+    RCLCPP_INFO(rclcpp::get_logger("vins_output_anchor"),
+                "[OUTPUT-ANCHOR] T(odom←세션) 스냅샷: (%.3f, %.3f) yaw=%.2fdeg",
+                anchor_wheel_x_, anchor_wheel_y_, anchor_wheel_yaw_ * 180.0 / M_PI);
 }
 
 bool Estimator::failureDetection()
@@ -3331,9 +3383,11 @@ void Estimator::inputIMU(double t, const Vector3d &linearAcceleration,
         // [reboot-pose-seed] 고주기 경로에도 동일 시드 합성(저주기 발행과 프레임 일치)
         Vector3d pub_P = latest_P;
         Matrix3d pub_R = latest_Q.toRotationMatrix();
-        seedTransform(pub_P, pub_R);
-        pubLatestOdometry(pub_P, Quaterniond(pub_R),
-                          seed_active_ ? Vector3d(seed_R_ * latest_V) : latest_V, t);
+        displayTransform(pub_P, pub_R);
+        Vector3d net_p = Vector3d::Zero();
+        Matrix3d net_R = Matrix3d::Identity();
+        displayTransform(net_p, net_R);
+        pubLatestOdometry(pub_P, Quaterniond(pub_R), Vector3d(net_R * latest_V), t);
     }
 }
 

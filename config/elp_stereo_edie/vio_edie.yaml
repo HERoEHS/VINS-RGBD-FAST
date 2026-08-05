@@ -205,6 +205,16 @@ still_cum_yaw_max_deg: 0.3
 #   검증 전 기본 0.
 use_reboot_pose_seed: 0
 
+# 출력 map 핀 (SW1-1866 vins-output-map-anchor): 휠 base_footprint만 GT 스크립트의
+#   map→odom 1회 핀을 받고 VINS는 부팅 원점 기준 발행이라, 부팅 yaw(+7.5° 실측)가
+#   3m 거리서 ~0.4m 오프셋으로 관측되는 표시 앵커 비대칭(KPI 성분②)을 제거.
+#   1이면 published = T(map→odom)[static TF 수신] ∘ T(odom←세션)[init 순간 휠 pose
+#   스냅샷 — 부팅 정렬 가정 불요] ∘ (T_seed ∘ 세션 pose). 표시 전용·추정기 무접촉,
+#   핀 미수신 시 우아한 퇴화(현행 동작). GT 평가 세션은 gt_apriltag_4board.py를
+#   --pin-odom-frame odom 포함 표준 명령으로 실행해야 핀이 존재(scripts/april_gt/
+#   README 참조). 검증 전 기본 0.
+use_output_map_anchor: 0
+
 # init/출발 워밍업 게이트 (SW1-1866, doc/WARMUP_GATE_PROPOSAL.md): static init을
 #   "휠 정지 AND 다리각 안정의 연속 실증 → IMU 표본 축적" 후로 지연 — ⓐ재초기화가
 #   다리 애니메이션 위에 착지해 R0 tilt를 굽는 것(07-31 실기 ~10°)을 차단.
