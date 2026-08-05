@@ -142,7 +142,11 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
     if (PUB_HF_BODY_TF && g_br)
     {
         static double last_tf_t = -1.0;
-        if (t - last_tf_t >= 0.01 || t < last_tf_t)  // 100Hz 스로틀 (역행 시 리셋)
+        // 스로틀 주기 = 1/HF_BODY_TF_RATE_HZ (기본 100Hz = 종전 하드코딩). 무선 원격
+        //   구독 시 이 발행률이 pps를 지배 — 08-05 실측: 100Hz가 RELIABLE 재전송
+        //   증폭으로 496pkt/s가 되어 ESP32 링크 붕괴(ping 100% 손실), 20Hz면 생존.
+        const double hf_period = 1.0 / HF_BODY_TF_RATE_HZ;
+        if (t - last_tf_t >= hf_period || t < last_tf_t)  // 스로틀 (역행 시 리셋)
         {
             // 발행단 스무딩 — 예측(IMU 100Hz)이 매 최적화 완료(~10-15Hz)마다 보정값으로
             //   스냅하는 왕복이 실기에서 가시적 떨림으로 나타남(정지 시 = 최적화 지터,
@@ -153,7 +157,7 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
             static bool               hf_init = false;
             static Eigen::Vector3d    hf_P;
             static Eigen::Quaterniond hf_Q;
-            const double dt_tf = (last_tf_t < 0.0 || t < last_tf_t) ? 0.01 : (t - last_tf_t);
+            const double dt_tf = (last_tf_t < 0.0 || t < last_tf_t) ? hf_period : (t - last_tf_t);
             if (!hf_init || t < last_tf_t || HF_BODY_TF_TAU <= 0.0 ||
                 (P - hf_P).norm() > kTeleportPosM)
             {

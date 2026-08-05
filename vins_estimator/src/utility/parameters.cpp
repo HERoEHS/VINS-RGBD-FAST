@@ -67,6 +67,7 @@ double BGZ_RELOCK_COOLDOWN   = 10.0;
 
 // ===== 고주기 body TF (SW1-1837) =====
 int    PUB_HF_BODY_TF = 0;
+double HF_BODY_TF_RATE_HZ = 100.0;
 double HF_BODY_TF_TAU = 0.05;
 int    PUB_VINS_FOOTPRINT_TF = 0;
 int    USE_STILL_MOTION_LOCK = 0;
@@ -565,6 +566,13 @@ void readParameters(rclcpp::Node* node)
         fsSettings["publish_hf_body_tf"].empty() ? 0 : (int)fsSettings["publish_hf_body_tf"];
     if (PUB_HF_BODY_TF)
     {
+        // [SW1-1866 08-05] 발행률 스로틀 — 키 없으면 100Hz(기존 하드코딩 값) 유지.
+        //   0 이하는 무의미(무제한 발행=IMU rate)라 100으로 폴백.
+        HF_BODY_TF_RATE_HZ = fsSettings["hf_body_tf_rate_hz"].empty()
+                                 ? 100.0 : (double)fsSettings["hf_body_tf_rate_hz"];
+        if (HF_BODY_TF_RATE_HZ <= 0.0)
+            HF_BODY_TF_RATE_HZ = 100.0;
+        RCLCPP_INFO(node->get_logger(), "HF_BODY_TF_RATE: %.1f Hz", HF_BODY_TF_RATE_HZ);
         HF_BODY_TF_TAU = fsSettings["hf_body_tf_tau"].empty()
                              ? 0.05 : (double)fsSettings["hf_body_tf_tau"];
         RCLCPP_INFO(node->get_logger(),

@@ -185,6 +185,8 @@ extern double BGZ_RELOCK_COOLDOWN;// [s] 재잠금 최소 간격 — 잦은 갱�
 //   소비(nav/도킹)에 부적합. 1이면 IMU 전파 자세(imu_propagate와 동일)를 100Hz 스로틀로
 //   map→body TF 송출하고 저주기 송출은 중단(이중 소스 널뛰기 방지).
 extern int PUB_HF_BODY_TF;        // 0=기존(최적화 후 저주기), 1=IMU 전파 고주기 TF
+extern double HF_BODY_TF_RATE_HZ; // [Hz] 고주기 TF 발행률 상한(스로틀). 무선 원격 구독 시
+                                  //   pps가 링크를 좌우 — 상세는 yaml 주석(운용 규약)
 extern double HF_BODY_TF_TAU;     // [s] 고주기 TF 발행단 스무딩 시정수(예측-보정 스냅 떨림
                                   //   감쇠). 클수록 부드럽지만 반응 지연 증가. <=0=스무딩 끔
 
