@@ -227,7 +227,7 @@ still_cum_yaw_max_deg: 0.3
 #   발행단에서 T_seed∘새 세션 pose로 합성(추정기 내부 무접촉, ALICE reanchor 동형).
 #   절대 오차 보정 아님(계승 시점까지의 드리프트는 이월 — AR 재앵커=SW1-1788 별도).
 #   검증 전 기본 0.
-use_reboot_pose_seed: 0
+use_reboot_pose_seed: 0 #1
 
 # 출력 map 핀 (SW1-1866 vins-output-map-anchor): 휠 base_footprint만 GT 스크립트의
 #   map→odom 1회 핀을 받고 VINS는 부팅 원점 기준 발행이라, 부팅 yaw(+7.5° 실측)가
@@ -237,7 +237,7 @@ use_reboot_pose_seed: 0
 #   핀 미수신 시 우아한 퇴화(현행 동작). GT 평가 세션은 gt_apriltag_4board.py를
 #   --pin-odom-frame odom 포함 표준 명령으로 실행해야 핀이 존재(scripts/april_gt/
 #   README 참조). 검증 전 기본 0.
-use_output_map_anchor: 0
+use_output_map_anchor: 1
 
 # init/출발 워밍업 게이트 (SW1-1866, doc/WARMUP_GATE_PROPOSAL.md): static init을
 #   "휠 정지 AND 다리각 안정의 연속 실증 → IMU 표본 축적" 후로 지연 — ⓐ재초기화가
@@ -613,8 +613,8 @@ bgz_relock_cooldown: 10.0 # [s] 재잠금 최소 간격 — 잦은 갱신 방지
 #   주의: 매 최적화 완료 시 mm·0.0x° 미세 점프는 정상(예측→보정 재기저).
 #   속도가 필요한 소비자는 TF 미분 말고 imu_propagate의 twist를 쓸 것.
 # ================================================================
-publish_hf_body_tf: 1     # 0=기존(최적화 후 저주기), 1=IMU 전파 고주기 TF
-hf_body_tf_rate_hz: 100.0    # [Hz] 고주기 TF 발행률 상한. 기본 100 = 종전 하드코딩 동작.
+publish_hf_body_tf: 0 #1     # 0=기존(최적화 후 저주기), 1=IMU 전파 고주기 TF
+hf_body_tf_rate_hz: 20.0 #100.0    # [Hz] 고주기 TF 발행률 상한. 기본 100 = 종전 하드코딩 동작.
                           #   ★운용 규약(08-05 실측): 로봇 무선(ESP32-SDIO)에서 원격 rviz가
                           #   /tf를 구독하면 이 발행률이 pps를 지배한다 — 100Hz는 RELIABLE
                           #   재전송 증폭으로 496pkt/s가 되어 링크 붕괴(로봇 ping 100% 손실,
