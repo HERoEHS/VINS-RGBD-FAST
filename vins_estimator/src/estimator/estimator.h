@@ -89,7 +89,10 @@ public:
     //   핀 미수신/비활성 시 seedTransform과 동일(우아한 퇴화).
     void displayTransform(Eigen::Vector3d &p, Eigen::Matrix3d &R) const;
     void setMapOdomPin(double x, double y, double z, double yaw);  // nodelet static TF 수신
-    void snapshotOutputAnchor();  // init 완료(비시드) 시 T(odom←세션) = 휠 pose 스냅샷
+    void snapshotOutputAnchor();  // init 완료(비시드) — 새 세션이므로 표시 앵커 재캡처 요청
+    // [SW1-1866 08-09] 표시 앵커 1회 캡처 — 핀과 세션 pose가 '동시에' 유효한 시점에
+    //   T_display = W ∘ S⁻¹ 를 확정한다. 추정기 스레드에서만 호출(세션 pose 정합).
+    void maybeCaptureDisplayAnchor();
 
     bool staticInitialAlignWithDepth();
 
@@ -248,9 +251,15 @@ public:
     //   스냅샷은 seed 비활성 init에서만 갱신(시드 계승 시 원 세션 프레임 유지).
     std::atomic<bool> map_odom_pin_valid_{false};
     double   map_odom_x_{0.0}, map_odom_y_{0.0}, map_odom_z_{0.0}, map_odom_yaw_{0.0};
-    bool     output_anchor_valid_{false};   // T(odom←세션) 스냅샷 존재
-    double   anchor_wheel_x_{0.0}, anchor_wheel_y_{0.0}, anchor_wheel_yaw_{0.0};
     mutable bool map_pin_wait_logged_{false};  // 핀 미수신 1회 알림
+    // [SW1-1866 08-09 output-anchor-time-consistency] 단일 표시 변환.
+    //   구 구현은 T(odom←세션)을 init 순간에, 핀을 첫 태그 검출 순간에 캡처해 놓고
+    //   동시각인 양 곱해, 두 시각 사이 휠 드리프트가 영구 오프셋으로 굳었다(실기 실측
+    //   핀 init+24초 세션에서 궤적 통째 회전). 이제 '둘 다 유효한 첫 시점'에 1회 확정.
+    //   재init(시드 비활성)이면 세션 프레임이 새로 생기므로 재캡처한다.
+    bool            display_anchor_valid_{false};
+    double          disp_yaw_{0.0};
+    Eigen::Vector3d disp_t_{Eigen::Vector3d::Zero()};
     // 시드 재료(세션 스코프 — clearState 리셋)
     double   clean_pose_t_{-1.0};        // 마지막 정화 solve 시각 (2순위 시드)
     Eigen::Vector3d clean_P_{Eigen::Vector3d::Zero()};

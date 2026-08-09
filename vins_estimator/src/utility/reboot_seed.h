@@ -84,4 +84,45 @@ inline void composeYawXYZ(double yaw, const Eigen::Vector3d &t, Eigen::Vector3d 
     R = Y * R;
 }
 
+// ── 발행 앵커 시각 정합 (SW1-1866 08-09 output-anchor-time-consistency) ──
+//
+// [고친 결함] 구 구현은 T(odom←세션)을 'VINS init 순간'에, T(map→odom) 핀을 '첫 태그
+//   검출 순간'에 캡처해 놓고 두 변환을 동시각인 양 곱했다. odom 은 map 대비 고정
+//   프레임이 아니라(휠 오도메트리가 흐른다) 두 시각 사이의 드리프트가 발행 pose 에
+//   영구 상수 오프셋으로 굳는다 — 실기 실측으로 핀이 init+24초에 온 세션에서 궤적이
+//   통째로 회전(12.66°면 3m 지점 0.66m). 그래서 "태그가 보이는 상태로 켜야만" 맞았다.
+//
+// [올바른 정의] 표시 변환을 '핀과 세션 pose 가 모두 유효한 한 시점 t_a'에서 1회 정한다.
+//     T_display = W(t_a) ∘ S(t_a)⁻¹
+//       W(t_a) = T(map→odom) ∘ T(odom←base)(t_a)   그 순간 휠이 말하는 map 상 base pose
+//       S(t_a) = (T_seed ∘ session)(t_a)           그 순간 발행 직전 pose
+//   이러면 t_a 에 발행 pose 가 W 와 정확히 일치하고, init 과 핀의 시각차가 무관해진다.
+//
+// [회귀 없음] S = I (핀이 init 보다 먼저 도착 = 기존 정상 경로)이면
+//   disp_yaw = map_odom_yaw + wheel_yaw, disp_t = W 의 위치가 되어 구 2단 합성과
+//   수식이 정확히 일치한다. gtest 로 고정.
+//
+// yaw-only 인 이유는 composeYawXYZ 와 같다(두 프레임 모두 중력 정렬 → roll/pitch ~0).
+inline void computeDisplayAnchor(double map_odom_yaw, const Eigen::Vector3d &map_odom_t,
+                                 double wheel_yaw, const Eigen::Vector3d &wheel_t,
+                                 const Eigen::Vector3d &p_s, const Eigen::Matrix3d &R_s,
+                                 double &disp_yaw, Eigen::Vector3d &disp_t)
+{
+    const double yaw_s = std::atan2(R_s(1, 0), R_s(0, 0));
+    disp_yaw           = map_odom_yaw + wheel_yaw - yaw_s;
+
+    // W 의 위치 = Rz(map_odom_yaw)·wheel_t + map_odom_t
+    const double cm = std::cos(map_odom_yaw), sm = std::sin(map_odom_yaw);
+    const Eigen::Vector3d w_p(cm * wheel_t.x() - sm * wheel_t.y() + map_odom_t.x(),
+                              sm * wheel_t.x() + cm * wheel_t.y() + map_odom_t.y(),
+                              wheel_t.z() + map_odom_t.z());
+
+    // disp_t = W_p − Rz(disp_yaw)·S_p  (그래야 Rz(disp_yaw)·S_p + disp_t = W_p)
+    const double cd = std::cos(disp_yaw), sd = std::sin(disp_yaw);
+    disp_t = Eigen::Vector3d(w_p.x() - (cd * p_s.x() - sd * p_s.y()),
+                             w_p.y() - (sd * p_s.x() + cd * p_s.y()),
+                             w_p.z() - p_s.z());
+}
+
+
 }  // namespace reboot_seed

@@ -277,18 +277,27 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
     // [SW1-1866 07-31] 앵커 계승용 물리 순회전 적분 — VINS yaw 추정은 다리 이벤트가
     //   미끄러뜨리는(yaw_slide) 오염 신호라 계승 판정에 부적격(계측 run 실증: 로봇
     //   무회전인데 dyaw>5°로 재래치 → 래칫 소각 실패). bias 보정 gyro z 적분이 참값.
-    anchor_net_yaw_rad_ += (angular_velocity.z() - Bgs[frame_count].z()) * dt;
-    // [SW1-1866 08-04] yaw 래칫 가드용 raw 적분 — bias 미차감(자기참조 절단, 차감은
-    //   판정 시점에 정지 실측 중앙값으로). 재잠금(Bgs 교체)에 불변.
-    still_cum_yaw_raw_net_rad_ += angular_velocity.z() * dt;
-    still_cum_yaw_elapsed_ += dt;
-    // [reboot-pose-seed] 다리 yaw 적분 — 상시·무리셋(clearState 생존). 시드 캡처~재init
-    //   완료 구간의 실회전을 스냅샷 차분으로 복원한다. 수 초 구간이라 bias 오차 무시.
-    //   dt 위생 가드: clearState 직후 첫 샘플의 epoch급 dt(기존 아티팩트 계열)가
-    //   무리셋 적분에 얹히면 다리 yaw가 폭주(1차 A/B 실증: -1.16e10deg) — IMU 주기
-    //   (~2.6ms)의 수십 배를 넘는 dt는 세션 경계 아티팩트로 보고 버린다.
-    if (dt > 0.0 && dt < 0.1)
+    // ★dt 위생 가드 (SW1-1866 08-09 — 이 블록의 '모든' 누적기에 적용)
+    //   세션 경계(첫 샘플·clearState 직후)의 dt는 초기화 전 기준시각과 빼져 epoch급
+    //   (~1.8e9s)이 된다. IMU 주기(~2.6ms)의 수십 배를 넘으면 물리적 dt가 아니다.
+    //   [고친 결함] 이 가드는 원래 bridge_gyro_yaw_rad_ 한 곳에만 있었고, 아래 3개는
+    //   무방비였다. 실측 역산으로 확정: [CUM-GUARD] net=406410490.3deg = 7.09e6 rad,
+    //   gyro 0.004rad/s로 나누면 1.77e9s = 정확히 epoch. 오염 결과는
+    //     · anchor_net_yaw_rad_        → 첫 정지 창 xy 앵커 '계승' 판정이 항상 불가
+    //     · still_cum_yaw_raw_net_rad_ → yaw 래칫 가드의 편차 기준 오염
+    //     · still_cum_yaw_elapsed_     → 경과시간 ≈1.8e9초
+    const bool dt_sane = (dt > 0.0 && dt < 0.1);
+    if (dt_sane)
+    {
+        anchor_net_yaw_rad_ += (angular_velocity.z() - Bgs[frame_count].z()) * dt;
+        // [SW1-1866 08-04] yaw 래칫 가드용 raw 적분 — bias 미차감(자기참조 절단, 차감은
+        //   판정 시점에 정지 실측 중앙값으로). 재잠금(Bgs 교체)에 불변.
+        still_cum_yaw_raw_net_rad_ += angular_velocity.z() * dt;
+        still_cum_yaw_elapsed_ += dt;
+        // [reboot-pose-seed] 다리 yaw 적분 — 상시·무리셋(clearState 생존). 시드 캡처~재init
+        //   완료 구간의 실회전을 스냅샷 차분으로 복원한다. 수 초 구간이라 bias 오차 무시.
         bridge_gyro_yaw_rad_ += angular_velocity.z() * dt;
+    }
 
     // [SW1-1866] 워밍업 게이트 표본 공급 — IMU 표본 1개당 1회(게이트 계약).
     //   입력은 기존 판정 재사용(R4): 휠 정지 atomic + 다리 이벤트 게이트 활성 여부.
@@ -644,6 +653,10 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
     }
 
     static double whole_opt_time = 0;
+    // [SW1-1866 08-09] 표시 앵커 — 핀이 init보다 늦게 와도 그 시점 세션 pose로 잡는다.
+    //   이미 잡혔거나 핀 미수신이면 no-op(비용 0).
+    maybeCaptureDisplayAnchor();
+
     static size_t cnt_frame      = 0;
     ++cnt_frame;
     whole_opt_time += opt_time.toc();
@@ -1030,6 +1043,7 @@ bool Estimator::staticInitialAlignWithDepth()
     // solveGyroscopeBias(all_image_frame, Bgs);
     ROS_WARN_STREAM("gyroscope bias initial calibration " << avg_w.transpose());
     ROS_WARN_STREAM("accelerator bias initial calibration " << tmp_Bas.transpose());
+
     for (int i = 0; i <= WINDOW_SIZE; i++)
     {
         Bgs[i] = avg_w;
@@ -2195,23 +2209,50 @@ void Estimator::displayTransform(Vector3d &p, Matrix3d &R) const
     seedTransform(p, R);
     if (!USE_OUTPUT_MAP_ANCHOR)
         return;
-    if (!output_anchor_valid_ || !map_odom_pin_valid_.load())
+    if (!display_anchor_valid_)
     {
         if (!map_pin_wait_logged_)
         {
             map_pin_wait_logged_ = true;
             RCLCPP_INFO(rclcpp::get_logger("vins_output_anchor"),
-                        "[OUTPUT-ANCHOR] 핀 대기 중(map→odom static %s, 스냅샷 %s) — "
+                        "[OUTPUT-ANCHOR] 핀 대기 중(map→odom static %s) — "
                         "수신 전까지 세션 프레임 발행",
-                        map_odom_pin_valid_.load() ? "수신" : "미수신",
-                        output_anchor_valid_ ? "있음" : "없음");
+                        map_odom_pin_valid_.load() ? "수신" : "미수신");
         }
         return;
     }
-    reboot_seed::composeYawXYZ(anchor_wheel_yaw_,
-                               Eigen::Vector3d(anchor_wheel_x_, anchor_wheel_y_, 0.0), p, R);
-    reboot_seed::composeYawXYZ(map_odom_yaw_,
-                               Eigen::Vector3d(map_odom_x_, map_odom_y_, map_odom_z_), p, R);
+    // 단일 변환 1회 적용. 구 2단 합성(init 스냅샷 × 나중 핀)의 시각 불일치 제거.
+    reboot_seed::composeYawXYZ(disp_yaw_, disp_t_, p, R);
+}
+
+// [SW1-1866 08-09] 표시 앵커 확정 — 핀과 세션 pose가 '동시에' 유효한 첫 시점에 1회.
+//   추정기 스레드 전용(세션 pose를 창 상태에서 읽으므로). 핀이 init보다 먼저 오면
+//   init 직후 여기서 잡히고(S≈I → 구 동작과 동일), 늦게 오면 그 시점 S로 잡혀
+//   그 사이 휠 드리프트가 오프셋으로 굳지 않는다.
+void Estimator::maybeCaptureDisplayAnchor()
+{
+    if (!USE_OUTPUT_MAP_ANCHOR || display_anchor_valid_)
+        return;
+    if (solver_flag != NON_LINEAR || !map_odom_pin_valid_.load())
+        return;
+
+    // S = 발행 직전 pose = T_seed ∘ (창 최신 상태)
+    Vector3d p_s = Ps[WINDOW_SIZE];
+    Matrix3d R_s = Rs[WINDOW_SIZE];
+    seedTransform(p_s, R_s);
+
+    // W = T(map→odom) ∘ T(odom←base)(지금) — 휠은 평면이라 z=0
+    const Vector3d wheel_t(latest_wheel_x_.load(), latest_wheel_y_.load(), 0.0);
+    reboot_seed::computeDisplayAnchor(
+        map_odom_yaw_, Eigen::Vector3d(map_odom_x_, map_odom_y_, map_odom_z_),
+        latest_wheel_yaw_.load(), wheel_t, p_s, R_s, disp_yaw_, disp_t_);
+    display_anchor_valid_ = true;
+    RCLCPP_INFO(rclcpp::get_logger("vins_output_anchor"),
+                "[OUTPUT-ANCHOR] 표시 앵커 확정: yaw=%.2fdeg t=(%.3f, %.3f, %.3f) "
+                "[핀 yaw=%.2f + 휠 yaw=%.2f − 세션 yaw=%.2f]",
+                disp_yaw_ * 180.0 / M_PI, disp_t_.x(), disp_t_.y(), disp_t_.z(),
+                map_odom_yaw_ * 180.0 / M_PI, latest_wheel_yaw_.load() * 180.0 / M_PI,
+                std::atan2(R_s(1, 0), R_s(0, 0)) * 180.0 / M_PI);
 }
 
 void Estimator::setMapOdomPin(double x, double y, double z, double yaw)
@@ -2223,15 +2264,20 @@ void Estimator::setMapOdomPin(double x, double y, double z, double yaw)
                 x, y, z, yaw * 180.0 / M_PI);
 }
 
+// 비시드 init 완료 훅 — 새 세션 프레임이 태어났으므로 표시 앵커를 무효화해 재캡처를
+// 예약한다. 값 자체는 maybeCaptureDisplayAnchor()가 '핀과 세션 pose가 동시에 유효한'
+// 시점에 잡는다(구현은 init 시점 휠 스냅샷을 그대로 썼고, 그게 시각 불일치의 원인).
+// ※시드 계승 중(seed_active_/pending_)에는 호출되지 않는다 — T_seed가 연속성을 잇고
+//   원 세션의 표시 앵커를 그대로 유지해야 하기 때문.
 void Estimator::snapshotOutputAnchor()
 {
-    anchor_wheel_x_   = latest_wheel_x_.load();
-    anchor_wheel_y_   = latest_wheel_y_.load();
-    anchor_wheel_yaw_ = latest_wheel_yaw_.load();
-    output_anchor_valid_ = true;
+    display_anchor_valid_ = false;
+    map_pin_wait_logged_  = false;
     RCLCPP_INFO(rclcpp::get_logger("vins_output_anchor"),
-                "[OUTPUT-ANCHOR] T(odom←세션) 스냅샷: (%.3f, %.3f) yaw=%.2fdeg",
-                anchor_wheel_x_, anchor_wheel_y_, anchor_wheel_yaw_ * 180.0 / M_PI);
+                "[OUTPUT-ANCHOR] 새 세션 — 표시 앵커 재캡처 예약(휠 pose=(%.3f, %.3f) "
+                "yaw=%.2fdeg)",
+                latest_wheel_x_.load(), latest_wheel_y_.load(),
+                latest_wheel_yaw_.load() * 180.0 / M_PI);
 }
 
 bool Estimator::failureDetection()

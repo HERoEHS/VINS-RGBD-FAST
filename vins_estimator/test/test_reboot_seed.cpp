@@ -105,6 +105,129 @@ TEST(OutputMapAnchor, IdentityPinIsTransparent)
     EXPECT_NEAR(p.z(), 0.05, 1e-12);
 }
 
+// ── 표시 앵커 시각 정합 (SW1-1866 08-09) ──
+// 구 구현: composeYawXYZ(wheel) 다음 composeYawXYZ(pin) 2단 합성.
+// 새 구현: computeDisplayAnchor 로 단일 변환. 아래 헬퍼로 두 경로를 직접 비교한다.
+namespace
+{
+void legacyTwoStage(double pin_yaw, const Eigen::Vector3d &pin_t, double wheel_yaw,
+                    const Eigen::Vector3d &wheel_t, Eigen::Vector3d &p, Eigen::Matrix3d &R)
+{
+    rs::composeYawXYZ(wheel_yaw, wheel_t, p, R);
+    rs::composeYawXYZ(pin_yaw, pin_t, p, R);
+}
+}  // namespace
+
+// 회귀 고정: 세션 pose S = I (핀이 init 보다 먼저 도착 = 기존 정상 경로)이면
+// 새 단일 변환이 구 2단 합성과 '수치까지' 같아야 한다. 이게 깨지면 정상 세션이 회귀한다.
+TEST(DisplayAnchor, MatchesLegacyWhenSessionPoseIsIdentity)
+{
+    const double          pin_yaw = 83.10 * M_PI / 180.0;  // 실기 실측값
+    const Eigen::Vector3d pin_t(0.003, 0.077, 0.002);
+    const double          wheel_yaw = -0.08 * M_PI / 180.0;
+    const Eigen::Vector3d wheel_t(0.0, 0.0, 0.0);
+
+    double          disp_yaw = 0.0;
+    Eigen::Vector3d disp_t   = Eigen::Vector3d::Zero();
+    rs::computeDisplayAnchor(pin_yaw, pin_t, wheel_yaw, wheel_t, Eigen::Vector3d::Zero(),
+                             Eigen::Matrix3d::Identity(), disp_yaw, disp_t);
+
+    // 임의의 후속 pose 를 두 경로로 통과시켜 비교
+    for (double k : {0.0, 0.5, -1.3})
+    {
+        Eigen::Vector3d p_new(k, 2 * k, 0.1 * k), p_old = p_new;
+        Eigen::Matrix3d R_new = Eigen::Matrix3d::Identity(), R_old = R_new;
+        rs::composeYawXYZ(disp_yaw, disp_t, p_new, R_new);
+        legacyTwoStage(pin_yaw, pin_t, wheel_yaw, wheel_t, p_old, R_old);
+        EXPECT_NEAR(p_new.x(), p_old.x(), 1e-12);
+        EXPECT_NEAR(p_new.y(), p_old.y(), 1e-12);
+        EXPECT_NEAR(p_new.z(), p_old.z(), 1e-12);
+        EXPECT_NEAR(std::atan2(R_new(1, 0), R_new(0, 0)),
+                    std::atan2(R_old(1, 0), R_old(0, 0)), 1e-12);
+    }
+}
+
+// 본질 요건: 앵커를 잡은 시점의 발행 pose 가 목표 W(= 핀 ∘ 그 순간 휠 pose)와 일치.
+// 세션 pose 가 원점이 아닌(핀이 늦게 온) 경우가 바로 구 구현이 틀리던 자리다.
+TEST(DisplayAnchor, PublishedPoseEqualsWheelTargetAtCaptureTime)
+{
+    const double          pin_yaw = 0.4;
+    const Eigen::Vector3d pin_t(1.0, -2.0, 0.05);
+    const double          wheel_yaw = 1.1;
+    const Eigen::Vector3d wheel_t(3.0, 0.5, 0.0);
+
+    // 핀이 늦게 와서 세션이 이미 많이 진행된 상태
+    Eigen::Vector3d p_s(2.5, -1.25, 0.3);
+    Eigen::Matrix3d R_s;
+    const double    yaw_s = -0.75;
+    R_s << std::cos(yaw_s), -std::sin(yaw_s), 0, std::sin(yaw_s), std::cos(yaw_s), 0, 0, 0, 1;
+
+    double          disp_yaw = 0.0;
+    Eigen::Vector3d disp_t   = Eigen::Vector3d::Zero();
+    rs::computeDisplayAnchor(pin_yaw, pin_t, wheel_yaw, wheel_t, p_s, R_s, disp_yaw, disp_t);
+
+    // 같은 S 를 통과시키면 목표 W 가 나와야 한다
+    Eigen::Vector3d p = p_s;
+    Eigen::Matrix3d R = R_s;
+    rs::composeYawXYZ(disp_yaw, disp_t, p, R);
+
+    // 목표 W = T(map→odom) ∘ T(odom←base) 를 base 원점에 적용한 것.
+    //   ※ wheel_t 는 이미 odom 프레임 병진이므로 wheel_yaw 로 다시 돌리면 안 된다
+    //     (원점에서 출발해 두 변환을 순서대로 얹는 것이 정의).
+    Eigen::Vector3d w_p = Eigen::Vector3d::Zero();
+    Eigen::Matrix3d w_R = Eigen::Matrix3d::Identity();
+    rs::composeYawXYZ(wheel_yaw, wheel_t, w_p, w_R);
+    rs::composeYawXYZ(pin_yaw, pin_t, w_p, w_R);
+
+    EXPECT_NEAR(p.x(), w_p.x(), 1e-9);
+    EXPECT_NEAR(p.y(), w_p.y(), 1e-9);
+    EXPECT_NEAR(p.z(), w_p.z(), 1e-9);
+    EXPECT_NEAR(std::atan2(R(1, 0), R(0, 0)), std::atan2(w_R(1, 0), w_R(0, 0)), 1e-9);
+}
+
+// 구 구현 재현: init 스냅샷(휠 pose@init)과 나중 핀을 짝지으면, 그 사이 휠이 움직인 만큼
+// 발행 pose 가 목표에서 어긋난다. 이 테스트는 '버그가 실재했음'을 고정한다.
+TEST(DisplayAnchor, LegacyDriftsWhenPinArrivesLate)
+{
+    const double          pin_yaw = 0.4;
+    const Eigen::Vector3d pin_t(1.0, -2.0, 0.05);
+    const Eigen::Vector3d wheel_at_init(0.0, 0.0, 0.0);
+    const double          wheel_yaw_init = 0.0;
+    // 핀이 오기까지 로봇이 이동·회전(휠 odom 기준)
+    const Eigen::Vector3d wheel_at_pin(3.0, 0.5, 0.0);
+    const double          wheel_yaw_pin = 1.1;
+
+    Eigen::Vector3d p_s(2.5, -1.25, 0.3);
+    Eigen::Matrix3d R_s = Eigen::Matrix3d::Identity();
+
+    Eigen::Vector3d p_legacy = p_s;
+    Eigen::Matrix3d R_legacy = R_s;
+    legacyTwoStage(pin_yaw, pin_t, wheel_yaw_init, wheel_at_init, p_legacy, R_legacy);
+
+    double          disp_yaw = 0.0;
+    Eigen::Vector3d disp_t   = Eigen::Vector3d::Zero();
+    rs::computeDisplayAnchor(pin_yaw, pin_t, wheel_yaw_pin, wheel_at_pin, p_s, R_s, disp_yaw,
+                             disp_t);
+    Eigen::Vector3d p_fixed = p_s;
+    Eigen::Matrix3d R_fixed = R_s;
+    rs::composeYawXYZ(disp_yaw, disp_t, p_fixed, R_fixed);
+
+    // 구 경로는 목표에서 크게 벗어나야 한다(= 버그). 새 경로는 위 테스트가 일치를 보장.
+    EXPECT_GT((p_legacy - p_fixed).norm(), 1.0);
+}
+
+// dt 위생 — epoch급 dt 는 배제, 정상 IMU 주기는 통과.
+// (estimator 쪽 가드 조건 dt>0 && dt<0.1 과 동일한 판정을 여기서 고정)
+TEST(DtHygiene, RejectsEpochScaleDt)
+{
+    auto sane = [](double dt) { return dt > 0.0 && dt < 0.1; };
+    EXPECT_FALSE(sane(1.786e9));   // 세션 경계 아티팩트(실측 net=4.06e8deg의 원인)
+    EXPECT_FALSE(sane(0.0));
+    EXPECT_FALSE(sane(-1.0));
+    EXPECT_TRUE(sane(1.0 / 376.0));  // IMU 주기 ~2.66ms
+    EXPECT_TRUE(sane(0.099));
+}
+
 int main(int argc, char **argv)
 {
     testing::InitGoogleTest(&argc, argv);
