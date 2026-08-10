@@ -2291,17 +2291,21 @@ bool Estimator::failureDetection()
                  GUARD_ESCALATION_MAX);
         return true;
     }
+    // [SW1-1866 08-10 R3] 아래 조건은 로그만 남기고 발동하지 않는다(원본 VINS부터 주석 처리).
+    //   현행 유지 근거: 실측상 이 판정이 켜져 있었으면 정상 구간에서도 재초기화가 났다 —
+    //   v16 4런서 last_track_num<2가 사고 없이 여러 번 관측됨(사람 통과 외 구간 포함).
+    //   되살리려면 '지속 시간' 조건이 함께 필요하다(순간값은 평시에도 바닥을 침).
     if (f_manager.last_track_num < 2)
     {
         ROS_INFO(" little feature %d", f_manager.last_track_num);
-        // return true;
+        // return true;  // ← 의도적 비활성(위 근거). 복원 시 지속 조건 동반 필수
     }
-    if (Bas[WINDOW_SIZE].norm() > 2.5)
+    if (Bas[WINDOW_SIZE].norm() > FAILURE_BA_MAX)
     {
         ROS_INFO(" big IMU acc bias estimation %f", Bas[WINDOW_SIZE].norm());
         return true;
     }
-    if (Bgs[WINDOW_SIZE].norm() > 1.0)
+    if (Bgs[WINDOW_SIZE].norm() > FAILURE_BG_MAX)
     {
         ROS_INFO(" big IMU gyr bias estimation %f", Bgs[WINDOW_SIZE].norm());
         return true;
@@ -2313,13 +2317,17 @@ bool Estimator::failureDetection()
         return true;
     }
     */
+    // ⚠️아래 두 판정은 last_P/last_R 기준 = **solve 간 델타**다(last_P는 매 solve 갱신,
+    //   이 파일 processImage 말미). 따라서 '천천히 크게' 벗어나는 누적 드리프트는 원리적으로
+    //   못 본다 — v16 실측: 발행 pose가 40m 이탈 중인데 미발동, 단발 5m 점프가 나서야 발동.
+    //   누적 판정은 별도 경로가 담당한다(R2).
     Vector3d tmp_P = Ps[WINDOW_SIZE];
-    if ((tmp_P - last_P).norm() > 5)
+    if ((tmp_P - last_P).norm() > FAILURE_DP_MAX)
     {
         ROS_INFO(" big translation");
         return true;
     }
-    if (abs(tmp_P.z() - last_P.z()) > 1)
+    if (abs(tmp_P.z() - last_P.z()) > FAILURE_DZ_MAX)
     {
         ROS_INFO(" big z translation");
         return true;
@@ -2332,7 +2340,9 @@ bool Estimator::failureDetection()
     if (delta_angle > 50)
     {
         ROS_INFO(" big delta_angle ");
-        // return true;
+        // return true;  // ← 의도적 비활성(R3). 이 로봇은 제자리 스핀이 상시 안무라
+        //   solve 간 50° 회전이 정상 주행에서도 발생한다(v14 스핀 |w|1.4~1.8 rad/s).
+        //   복원하려면 gyro 예측 대비 '잔차' 기준으로 바꿔야 한다(절대 각도 아님).
     }
     return false;
 }

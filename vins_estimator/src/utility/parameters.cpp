@@ -82,6 +82,11 @@ int    GUARD_ESCALATION_MAX   = 3;  // 정화 없는 연속 절제 상한(0=비�
 double POS_SLIDE_GUARD_THRESH = 0.05;
 double YAW_SLIDE_GUARD_STILL_THRESH = 0.1 * M_PI / 180.0;
 double POS_SLIDE_GUARD_STILL_THRESH = 0.005;
+// [SW1-1866 08-10 R1] failureDetection 문턱 — 기본값은 종전 하드코딩 값 그대로(무변경).
+double FAILURE_BA_MAX = 2.5;
+double FAILURE_BG_MAX = 1.0;
+double FAILURE_DP_MAX = 5.0;
+double FAILURE_DZ_MAX = 1.0;
 
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 처방) =====
 int    WHEEL_ROT_MARGINALIZE;
@@ -632,6 +637,24 @@ void readParameters(rclcpp::Node* node)
                         "GUARD_ESCALATION_MAX: %d (정화 없는 연속 prior 절제 상한 — 도달 시 "
                         "조기 재초기화로 폭주 발행 차단)", GUARD_ESCALATION_MAX);
     }
+
+    // ===== failureDetection 문턱 (SW1-1866 08-10, R1) =====
+    //   ⚠️어떤 조건문 안에도 넣지 않는다 — 과거 정지 판정이 조건부 로드되는 남의 파라미터
+    //   (GRAVITY_ALIGN_VEL_THRESH)를 재사용해 use_gravity_align:0이면 0으로 남아 판정이
+    //   영구 불합격했던 버그가 있었다. 재초기화 판정은 항상 살아있어야 하므로 무조건 로드.
+    //   키가 없으면 종전 하드코딩 값 → 구형 config 동작 불변.
+    FAILURE_BA_MAX = fsSettings["failure_ba_max"].empty()
+                         ? 2.5 : (double)fsSettings["failure_ba_max"];
+    FAILURE_BG_MAX = fsSettings["failure_bg_max"].empty()
+                         ? 1.0 : (double)fsSettings["failure_bg_max"];
+    FAILURE_DP_MAX = fsSettings["failure_dp_max"].empty()
+                         ? 5.0 : (double)fsSettings["failure_dp_max"];
+    FAILURE_DZ_MAX = fsSettings["failure_dz_max"].empty()
+                         ? 1.0 : (double)fsSettings["failure_dz_max"];
+    RCLCPP_INFO(node->get_logger(),
+                "FAILURE 문턱: Ba>%.2f m/s² / Bg>%.2f rad/s / Δp>%.2fm / Δz>%.2fm "
+                "(Δp·Δz는 solve 간 델타라 누적 드리프트는 못 봄 — 누적 판정은 별도)",
+                FAILURE_BA_MAX, FAILURE_BG_MAX, FAILURE_DP_MAX, FAILURE_DZ_MAX);
 
     // ===== 정지 창 누적 변위 가드 (SW1-1866, 07-30) =====
     //   per-solve 문턱은 속도 제한이라 문턱 이하 지속 압력의 총량을 못 막음(obs_v2 말미

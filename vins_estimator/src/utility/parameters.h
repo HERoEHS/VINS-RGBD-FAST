@@ -223,6 +223,16 @@ extern double YAW_SLIDE_GUARD_STILL_THRESH;  // [rad] 정지 확정 시 문턱(�
 extern double POS_SLIDE_GUARD_STILL_THRESH;  // [m]   정지 확정 시 문턱(기본 0.005)
 extern int    GUARD_ESCALATION_MAX;     // 정화 없는 연속 prior 절제 상한(0=비활성) — 도달 시 조기 재초기화
 
+// ===== failureDetection 문턱 (SW1-1866 08-10, R1) =====
+//   원래 estimator.cpp::failureDetection()에 매직넘버로 박혀 있던 값들(Day-1 규칙 6 위반).
+//   키가 없으면 종전 하드코딩 값이 그대로 들어가므로 **기본 동작 무변경**이고, 실기에서
+//   문턱만 바꿔 재현·롤백할 경로가 생긴다. 값 자체의 타당성은 R2에서 별도로 다룬다.
+extern double FAILURE_BA_MAX;   // [m/s²]  가속도 bias 노름 상한 (종전 2.5)
+extern double FAILURE_BG_MAX;   // [rad/s] 자이로 bias 노름 상한 (종전 1.0)
+extern double FAILURE_DP_MAX;   // [m] solve 간 위치 점프 상한 (종전 5.0) — **프레임 간 델타**라
+                                //     누적 드리프트는 원리적으로 못 본다(R2가 보강)
+extern double FAILURE_DZ_MAX;   // [m] solve 간 z 점프 상한 (종전 1.0)
+
 // ===== 휠 회전 잔차 주변화 (SW1-1837, yaw 드리프트 처방) =====
 //   휠 twist는 +65ms 지연(diff_drive_controller rolling mean)으로 회전 전이 구간서
 //   틀린 delta_q를 만들어 몸체 yaw를 오염(v7 A/B: 잔차 제거 시 드리프트 −45%·결정론 회복).
