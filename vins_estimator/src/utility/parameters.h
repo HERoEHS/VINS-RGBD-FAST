@@ -247,6 +247,19 @@ extern double STILL_CUM_YAW_MAX_DEG;  // [deg] 정지 창 누적 yaw 상한 (<=0
 //   조기 재초기화(4선) 시 마지막 건전 pose를 시드로 발행단 합성 — 원점 점프 제거.
 extern int    USE_REBOOT_POSE_SEED;   // 0=기존(원점 복귀), 1=시드 계승
 
+// ===== 정지 중 발산 가드 (SW1-1866 08-11) =====
+//   failureDetection의 Δp/Δz는 solve 간 델타라 누적 이탈을 원리적으로 못 본다(40m 이탈
+//   중 미발동 실측). 그 결과 '재부팅 전 폭주'가 정지창 오차의 최대 성분이 된다
+//   (런별 441mm~37,660mm). 휠이 확정 정지인 동안의 VINS 창 변위로 그걸 직접 잡는다.
+//   값은 전부 yaml 노출 — 확실한 값이라도 cpp에 박으면 나중에 추적이 안 된다(08-11 지시).
+extern int    USE_STILL_DRIFT_GUARD;    // 0=기존 동작 유지, 1=가드 활성
+extern double STILL_DRIFT_MAX;          // [m]  창 변위 상한 (설계상 STILL_CUM_XY_MAX와 동일값)
+extern double STILL_DRIFT_WINDOW_SEC;      // [s]  변위 측정 창 — 지속 정지 창보다 짧아야 함
+extern double STILL_CHECK_DURATION_SEC;    // [s]  지속 정지 요구 (주행 중 '일시정지' 배제용)
+extern double STILL_CHECK_XY_TOL;    // [m]  그 구간 휠 병진 허용치
+extern double STILL_CHECK_YAW_TOL_DEG;// [deg] 그 구간 휠 회전 허용치 — 제자리 회전 배제
+extern int    STILL_DRIFT_CONSEC;       //      연속 초과 solve 수 (단발 노이즈 배제)
+
 // ===== 출력 map 핀 (SW1-1866 vins-output-map-anchor) — 표시 전용, 추정기 무접촉 =====
 extern int    USE_OUTPUT_MAP_ANCHOR;  // 0=세션 프레임 발행(현행), 1=map 핀 합성
 

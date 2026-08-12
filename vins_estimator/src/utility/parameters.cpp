@@ -97,6 +97,15 @@ double STILL_CUM_YAW_MAX_DEG;
 // ===== 재초기화 pose 시드 계승 (SW1-1866 reboot-pose-seed) =====
 int    USE_REBOOT_POSE_SEED;
 
+// ===== 정지 중 발산 가드 (SW1-1866 08-11) — 기본값도 yaml이 정본, 아래는 키 부재 시 폴백 =====
+int    USE_STILL_DRIFT_GUARD = 0;      // 기본 0 = 종전 동작
+double STILL_DRIFT_MAX       = 0.03;
+double STILL_DRIFT_WINDOW_SEC   = 0.5;
+double STILL_CHECK_DURATION_SEC = 2.0;
+double STILL_CHECK_XY_TOL = 0.005;
+double STILL_CHECK_YAW_TOL_DEG = 2.0;
+int    STILL_DRIFT_CONSEC    = 3;
+
 // ===== 출력 map 핀 (SW1-1866 vins-output-map-anchor) =====
 int    USE_OUTPUT_MAP_ANCHOR;
 
@@ -694,6 +703,41 @@ void readParameters(rclcpp::Node* node)
     // ===== 재초기화 pose 시드 계승 (reboot-pose-seed) — 키 없으면 비활성 =====
     USE_REBOOT_POSE_SEED = fsSettings["use_reboot_pose_seed"].empty()
                                ? 0 : (int)fsSettings["use_reboot_pose_seed"];
+
+    // ===== 정지 중 발산 가드 (08-11) =====
+    // ⚠️조건부 블록 '밖'에서 로드 — GRAVITY_ALIGN_VEL_THRESH가 use_gravity_align:1일 때만
+    //   로드돼 0으로 남았던 함정(4차 A/B서 still 항상 불합격의 범인)과 같은 사고 방지.
+    USE_STILL_DRIFT_GUARD = fsSettings["use_still_drift_guard"].empty()
+                                ? 0 : (int)fsSettings["use_still_drift_guard"];
+    if (!fsSettings["still_drift_max_m"].empty())
+        STILL_DRIFT_MAX = (double)fsSettings["still_drift_max_m"];
+    if (!fsSettings["still_drift_window_sec"].empty())
+        STILL_DRIFT_WINDOW_SEC = (double)fsSettings["still_drift_window_sec"];
+    if (!fsSettings["still_check_duration_sec"].empty())
+        STILL_CHECK_DURATION_SEC = (double)fsSettings["still_check_duration_sec"];
+    if (!fsSettings["still_check_xy_tol_m"].empty())
+        STILL_CHECK_XY_TOL = (double)fsSettings["still_check_xy_tol_m"];
+    if (!fsSettings["still_check_yaw_tol_deg"].empty())
+        STILL_CHECK_YAW_TOL_DEG = (double)fsSettings["still_check_yaw_tol_deg"];
+    if (!fsSettings["still_drift_consec_solves"].empty())
+        STILL_DRIFT_CONSEC = (int)fsSettings["still_drift_consec_solves"];
+    if (USE_STILL_DRIFT_GUARD)
+    {
+        // 설계 전제: 측정 창은 지속 정지 창보다 짧아야 한다(같으면 정지 진입 전환 구간을
+        //   물어 v14서 3/3 오탐 재현됨). 어긋나면 조용히 틀리지 말고 시작 시 경고.
+        if (STILL_DRIFT_WINDOW_SEC >= STILL_CHECK_DURATION_SEC)
+            RCLCPP_WARN(node->get_logger(),
+                        "STILL_DRIFT: win(%.2fs) >= still(%.2fs) — 정지 진입 전환 구간이 창에 "
+                        "섞여 오탐 위험(v14 실증). win < still 로 설정 권장",
+                        STILL_DRIFT_WINDOW_SEC, STILL_CHECK_DURATION_SEC);
+        RCLCPP_INFO(node->get_logger(),
+                    "STILL_DRIFT_GUARD: 1 (휠 %.1fs 정지(<%.0fmm·<%.1fdeg) 확정 중 VINS가 %.2fs 창에서 "
+                    "%.0fmm 초과 이동이 연속 %d회면 발동)",   // ⚠️안내문에 이벤트 판별 문구를 넣지 말 것
+                    //   — grep 집계가 안내문을 이벤트로 오집계한다(08-11 5회 재발한 함정).
+                    STILL_CHECK_DURATION_SEC, STILL_CHECK_XY_TOL * 1000.0,
+                    STILL_CHECK_YAW_TOL_DEG, STILL_DRIFT_WINDOW_SEC, STILL_DRIFT_MAX * 1000.0,
+                    STILL_DRIFT_CONSEC);
+    }
     USE_OUTPUT_MAP_ANCHOR = fsSettings["use_output_map_anchor"].empty()
                                 ? 0 : (int)fsSettings["use_output_map_anchor"];
     if (USE_OUTPUT_MAP_ANCHOR)

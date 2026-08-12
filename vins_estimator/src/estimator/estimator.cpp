@@ -212,6 +212,9 @@ void Estimator::clearState()
     clean_pose_t_     = -1.0;
     anchor_latch_t_   = -1.0;
     amputate_first_t_ = -1.0;
+    // [08-11] 발산 가드 이력 — 새 세션의 pose는 옛 세션과 다른 원점이라 이어붙이면 안 된다.
+    still_drift_hist_.clear();
+    still_drift_consec_ = 0;
 
     // [SW1-1866] 워밍업 게이트 리셋 — 재초기화(에스컬레이션 reboot 포함) 시 게이트 재가동.
     //   ⓐ 처방의 핵심 경로: reboot 직후 다리 애니메이션 중이면 leg_stable=false로
@@ -1721,6 +1724,88 @@ void Estimator::gaugeSlideGuard()
             }
         }
         const bool cum_hit = cum_corr.norm() > 0.0;
+
+        // [SW1-1866 08-11] 정지 중 발산 가드 — 재부팅 '전' 폭주 차단.
+        //   [고친 구멍] failureDetection의 Δp/Δz는 solve 간 델타라 '천천히 크게' 벗어나는
+        //   누적을 원리적으로 못 본다(이 파일 failureDetection 주석 + v16 실측: 발행 pose가
+        //   40m 이탈 중인데 미발동, 단발 5m 점프가 나서야 발동). 그 결과 재부팅 전 폭주가
+        //   정지창 오차의 최대 성분이 된다(실측 런별 441mm ~ 37,660mm).
+        //   [신호] 휠이 확정 정지인 동안 VINS pose가 창 안에서 얼마나 움직였나. 휠은 외부
+        //   노드라 VIO 오염에 면역이므로 '움직이지 않았다'는 독립 관측이 되고, 그때 VINS의
+        //   이동은 전부 오차다. ※휠 변위를 빼는 형태(‖ΔVINS − Δ휠‖)와 결과가 전 항목 동일해
+        //   (24런 실측) 프레임 변환 없는 ‖ΔVINS‖로 단순화했다 — 확정 정지 중 Δ휠이 무시 가능.
+        //   [실측] 큰 폭주(>1m) 4/4 · 중간(0.3~1m) 6/6 검출, v15·v14 오탐 0/3+0/3.
+        //   [채택 08-12] v16_play 28런 A/B(OFF 14 / ON 14, 양쪽 시드 ON) → **기본 1**.
+        //   단 사전 등록 합격선은 미달이다(최대오차 p=0.077, 합격선 0.05). 켜는 근거는
+        //   유의성이 아니라 ①오탐 0(재부팅 1회×28런) ②>1m 폭주 3/14→0/14 ③OFF 최악
+        //   5.751m vs ON 최악 0.777m 이라는 손해의 비대칭이다. 근거 전문·한계·되돌릴
+        //   조건은 vio_edie.yaml의 use_still_drift_guard 주석에 있다(여기서 중복 금지).
+        //   ⚠️USE_REBOOT_POSE_SEED와 한 세트 — 시드가 꺼지면 채택 근거가 함께 무효다.
+        //   문턱은 STILL_CUM_XY_MAX 와 같은 값(30mm) — 정지 창에서 클램프가 유지하기로 한
+        //   경계를 넘었다는 뜻이라 배수가 필요 없다. 지속 정지 요구가 핵심이었다: 0.5~1.05s면
+        //   주행 중 '일시정지'가 섞여 v14에서 3/3 오탐(t=117s, 그 20초간 로봇은 2.77m 주행).
+        //   [발동] 새 실패 판정을 만들지 않고 기존 에스컬레이션을 세운다 — 저쪽은 "절제로
+        //   못 끊는 오염", 이쪽은 "클램프로 못 끊는 오염"이라 결말(조기 재초기화)이 같다.
+        if (USE_STILL_DRIFT_GUARD && !guard_escalation_fire_)
+        {
+            still_drift_hist_.emplace_back(stamp_now, Ps[frame_count],
+                                   Vector2d(latest_wheel_x_.load(), latest_wheel_y_.load()),
+                                   latest_wheel_yaw_.load() * 180.0 / M_PI);
+            // 지속 정지 판정에 필요한 만큼만 보관. 1.5는 **문턱이 아니라 버퍼 여유**다 —
+            //   1보다 크기만 하면 거동이 같아서 yaml 키로 뺄 이유가 없다(튜닝 축 아님).
+            constexpr double kHistKeepFactor = 1.5;
+            while (still_drift_hist_.size() > 1 &&
+                   stamp_now - std::get<0>(still_drift_hist_.front()) >
+                       STILL_CHECK_DURATION_SEC * kHistKeepFactor)
+                still_drift_hist_.pop_front();
+
+            // 지속 정지 = 기준 시간 이상 뒤 표본이 존재하고, 그 사이 휠 변위가 허용치 미만
+            const Vector3d *p_win = nullptr;   // 창(WIN) 시작 pose
+            bool sustained = false;
+            for (auto it = still_drift_hist_.rbegin(); it != still_drift_hist_.rend(); ++it)
+            {
+                const double age = stamp_now - std::get<0>(*it);
+                if (!p_win && age >= STILL_DRIFT_WINDOW_SEC)
+                    p_win = &std::get<1>(*it);
+                if (age >= STILL_CHECK_DURATION_SEC)
+                {
+                    // [08-11 수정] 병진만으로 정지를 판정하면 **제자리 회전이 통과한다**.
+                    //   Ps는 IMU 위치라 제자리 회전만으로도 레버암(0.1056m)만큼 원호로
+                    //   '실제' 이동한다(이 파일 앵커 계승 주석의 같은 근거). 상한 30mm는
+                    //   회전 30/105.6 = 0.284rad = 16.3°에서 그냥 넘는다.
+                    //   실기 실증(dv1_r1): 회전 전환 구간에서 5회 과발동, 그때 다리 yaw가
+                    //   ±45~90°였다. 휠 yaw도 함께 게이트해야 한다(휠 w는 외부 관측).
+                    const double dyaw = std::fabs(yaw_slide_guard::wrappedDeltaDeg(
+                        latest_wheel_yaw_.load() * 180.0 / M_PI, std::get<3>(*it)));
+                    //   ≤0 이면 yaw 검사 안 함(A/B 대조군). 이 저장소 관행과 동일 —
+                    //   still_cum_z_max_m(0=끔)·still_cum_yaw_max_deg(<=0 비활성).
+                    //   ⚠️`dyaw < 0`으로 두면 항상 거짓이 되어 가드 '전체'가 죽으니 분기 필수.
+                    const bool yaw_ok =
+                        (STILL_CHECK_YAW_TOL_DEG <= 0.0) || (dyaw < STILL_CHECK_YAW_TOL_DEG);
+                    sustained = (Vector2d(latest_wheel_x_.load(), latest_wheel_y_.load()) -
+                                 std::get<2>(*it)).norm() < STILL_CHECK_XY_TOL &&
+                                yaw_ok;
+                    break;
+                }
+            }
+            if (sustained && p_win)
+            {
+                const double div = (Ps[frame_count] - *p_win).head<2>().norm();
+                still_drift_consec_ = (div > STILL_DRIFT_MAX) ? still_drift_consec_ + 1 : 0;
+                if (still_drift_consec_ >= STILL_DRIFT_CONSEC)
+                {
+                    guard_escalation_fire_ = true;
+                    RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                                "[STILL-DRIFT] t=%.3f 정지 확정인데 VINS가 %.3fs 창에서 %.3fm "
+                                "이동(연속 %d회, 상한 %.3fm) — 클램프로 못 끊는 폭주 → "
+                                "조기 재초기화 요청",
+                                stamp_now, STILL_DRIFT_WINDOW_SEC, div, still_drift_consec_,
+                                STILL_DRIFT_MAX);
+                }
+            }
+            else
+                still_drift_consec_ = 0;
+        }
 
         // 진단: 문턱 무관 slide 분포(정상 마진 실측용, 환경변수 게이트·read-only)
         static const bool dist_log = (std::getenv("VINS_SLIDE_DIST_LOG") != nullptr);

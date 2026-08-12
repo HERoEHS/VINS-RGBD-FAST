@@ -1,8 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <mutex>
 #include <thread>
+#include <tuple>
 
 #include "../feature_manager/feature_manager.h"
 #include "../initial/initial_alignment.h"
@@ -265,6 +267,14 @@ public:
     Eigen::Vector3d clean_P_{Eigen::Vector3d::Zero()};
     double   clean_yaw_{0.0};
     double   anchor_latch_t_{-1.0};      // 앵커 래치 시각 (1순위 Q4 자격 판정)
+
+    // [SW1-1866 08-11] 정지 중 발산 가드 상태 — (시각, VINS pose, 휠 xy, 휠 yaw[deg]) 이력.
+    //   휠 xy·yaw는 '지속 정지' 판정용(외부 센서라 VIO 오염에 면역), VINS pose는 창 변위용.
+    //   yaw가 필요한 이유: 제자리 회전은 휠 병진이 0이라 병진만 보면 통과하는데, Ps는 IMU
+    //   위치라 레버암(0.1056m)만큼 원호로 실제 이동한다(dv1_r1서 5회 과발동으로 실증).
+    //   보관 길이는 STILL_CHECK_DURATION_SEC 기준이라 수십 표본 규모(비용 무시 가능).
+    std::deque<std::tuple<double, Eigen::Vector3d, Eigen::Vector2d, double>> still_drift_hist_;
+    int      still_drift_consec_{0};             // 연속 초과 solve 수
     double   amputate_first_t_{-1.0};    // 현 에피소드 첫 절제 시각
     // 휠 odom 최신 pose (외부 노드라 reboot 무관 연속 — 다리 병진 소스, 콜백 갱신)
     std::atomic<double> latest_wheel_x_{0.0}, latest_wheel_y_{0.0}, latest_wheel_yaw_{0.0};
