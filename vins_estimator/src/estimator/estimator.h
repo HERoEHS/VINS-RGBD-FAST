@@ -275,6 +275,10 @@ public:
     //   보관 길이는 STILL_CHECK_DURATION_SEC 기준이라 수십 표본 규모(비용 무시 가능).
     std::deque<std::tuple<double, Eigen::Vector3d, Eigen::Vector2d, double>> still_drift_hist_;
     int      still_drift_consec_{0};             // 연속 초과 solve 수
+    // [08-12] 가드가 이탈을 처음 감지한 창의 **시작** 시각. 시드 분기 선택자가
+    //   '무절제=건강'으로 오판하지 않게 하는 오염 실증이다(절제 시각과 같은 수명:
+    //   정화 solve에서 해제). -1 = 실증 없음.
+    double   still_drift_first_t_{-1.0};
     double   amputate_first_t_{-1.0};    // 현 에피소드 첫 절제 시각
     // 휠 odom 최신 pose (외부 노드라 reboot 무관 연속 — 다리 병진 소스, 콜백 갱신)
     std::atomic<double> latest_wheel_x_{0.0}, latest_wheel_y_{0.0}, latest_wheel_yaw_{0.0};

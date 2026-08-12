@@ -71,11 +71,55 @@ TEST(RebootSeed, FinalizeAddsBridge)
 
 TEST(RebootSeed, AnchorEligibilityGuardsContamination)
 {
-    // 래치가 오염(첫 절제)보다 앞서야 자격 — Q4 방어
-    EXPECT_TRUE(rs::anchorSeedEligible(10.0, 12.0));   // 래치 10s < 절제 12s → 유효
+    // 래치가 오염 시작보다 앞서야 자격 — Q4 방어
+    EXPECT_TRUE(rs::anchorSeedEligible(10.0, 12.0));   // 래치 10s < 오염 12s → 유효
     EXPECT_FALSE(rs::anchorSeedEligible(13.0, 12.0));  // 오염 후 래치 → 기각
-    EXPECT_TRUE(rs::anchorSeedEligible(10.0, -1.0));   // 절제 없음 → 래치만으로 유효
+    EXPECT_TRUE(rs::anchorSeedEligible(10.0, -1.0));   // 오염 없음 → 래치만으로 유효
     EXPECT_FALSE(rs::anchorSeedEligible(-1.0, -1.0));  // 래치 없음 → 기각
+}
+
+// [SW1-1866 08-12] 회귀: 오염 시작 시각은 에피소드당 한 번만 굳는다.
+//   초과→미달→재초과에서 뒤로 밀리면 그 사이 래치된 앵커가 부당하게 자격을 얻는다.
+TEST(RebootSeed, OnsetRecordedOnlyOncePerEpisode)
+{
+    double onset = -1.0;
+    rs::recordOnsetOnce(onset, 10.0);
+    EXPECT_DOUBLE_EQ(onset, 10.0);
+    rs::recordOnsetOnce(onset, 20.0);              // 재초과 — 밀리면 안 된다
+    EXPECT_DOUBLE_EQ(onset, 10.0);
+
+    // 앵커 자격에 미치는 영향: 12s 래치는 오염(10s) 이후라 기각되어야 한다.
+    EXPECT_FALSE(rs::anchorSeedEligible(12.0, onset));
+
+    onset = -1.0;                                  // 에피소드 종료(정화 solve) 후 재무장
+    rs::recordOnsetOnce(onset, 20.0);
+    EXPECT_DOUBLE_EQ(onset, 20.0);
+}
+
+// [SW1-1866 08-12] 오염 시작 = 절제 ∪ 발산 가드 감지
+TEST(RebootSeed, ContaminationOnsetUnionOfAmputationAndDrift)
+{
+    EXPECT_DOUBLE_EQ(rs::contaminationOnset(-1.0, -1.0), -1.0);  // 둘 다 없음
+    EXPECT_DOUBLE_EQ(rs::contaminationOnset(12.0, -1.0), 12.0);  // 절제만
+    EXPECT_DOUBLE_EQ(rs::contaminationOnset(-1.0, 12.0), 12.0);  // 가드만
+    EXPECT_DOUBLE_EQ(rs::contaminationOnset(12.0, 9.0),   9.0);  // 먼저 온 쪽(가드)
+    EXPECT_DOUBLE_EQ(rs::contaminationOnset(9.0, 12.0),   9.0);  // 먼저 온 쪽(절제)
+}
+
+// 회귀: 가드가 발동한 무절제 재부팅에서 앵커가 살아나는가.
+//   이 테스트가 없으면 선택자가 '무절제=건강'으로 되돌아가도 아무도 모른다 —
+//   그 상태에서 오염된 정화pose를 계승한 실측이 시드 ‖xy‖ 5.663m 런이다.
+TEST(RebootSeed, GuardFiredWithoutAmputationStillPicksAnchor)
+{
+    const double latch = 10.0, drift = 12.0, no_amputation = -1.0;
+    const double onset = rs::contaminationOnset(no_amputation, drift);
+
+    EXPECT_GE(onset, 0.0) << "가드 감지가 오염 실증으로 인정되어야 한다";
+    EXPECT_TRUE(rs::anchorSeedEligible(latch, onset))
+        << "오염 前 래치된 앵커는 무절제 재부팅에서도 1순위여야 한다";
+
+    // 오염 이후 래치된 앵커는 여전히 기각(가드 경로에서도 Q4 방어 유지)
+    EXPECT_FALSE(rs::anchorSeedEligible(13.0, onset));
 }
 
 // [SW1-1866 vins-output-map-anchor] 출력 핀 사슬 — composeYawXYZ 2회 합성 검증

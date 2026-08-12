@@ -11,6 +11,7 @@
 // 이 파일은 상태 없는 순수 함수만 둔다(gtest 대상, Q7). 시드 선택·저장은 estimator.
 
 #include <Eigen/Dense>
+#include <algorithm>   // std::min — contaminationOnset
 #include <cmath>
 
 namespace reboot_seed
@@ -61,13 +62,44 @@ inline void finalizeSeed(const Eigen::Vector3d &p_seed, double yaw_seed,
     t_out = p_seed + delta_p;
 }
 
-// 1순위(정지 창 앵커) 채택 자격 — Q4 방어: 앵커가 오염 시작(첫 절제) 이전에
-// 래치됐을 때만 신뢰한다. 절제가 아직 없으면(first_amputate_t < 0) 래치 유효성만.
-inline bool anchorSeedEligible(double anchor_latch_t, double first_amputate_t)
+// 오염 시작 시각 = 절제 실증과 발산 가드 감지 중 **먼저 온 쪽**. 둘 다 없으면 -1.
+//
+// [08-12 SW1-1866] 왜 둘을 합치나:
+//   원래 오염 실증은 '첫 절제'뿐이었고, 그 밑에는 "절제가 없었다 = 직전 상태가
+//   건강하다"는 전제가 깔려 있었다(무절제 failure는 big bias 등이라 신선한 정화
+//   pose가 우월 — 강제 reboot A/B로 실증된 설계).
+//   발산 가드(use_still_drift_guard)는 그 전제가 깨지는 **제3의 경우**를 만든다:
+//   정지 확정인데 VINS가 창 안에서 상한 이상 움직인 상태 = **오염됐는데 절제는 없는**
+//   재부팅이다. 이때 선택자가 '건강'으로 오판해 정화pose를 물면 오염된 pose를 그대로
+//   계승한다. 28런 A/B 실측: 가드 ON이 정화pose 분기를 3/14 → 8/14로 늘렸고,
+//   시드가 크게 튄 두 런(‖xy‖ 5.663m·0.634m)은 **전부 정화pose 분기**였다.
+//   앵커 분기는 28런 내내 0.21~0.31m로 얌전했다.
+// 오염 시작 시각을 **한 번만** 기록한다(에피소드 첫 실증 시각 고정). 해제는 호출부의
+// 에피소드 종료(정화 solve) 한 곳에서만.
+// 왜 헬퍼로 빼는가: `if (consec == 0)`처럼 비슷해 보이는 조건으로 쓰면 초과→미달→재초과
+//   때 시작 시각이 뒤로 밀리고, 그 사이에 래치된 앵커가 부당하게 자격을 얻어 Q4 방어가
+//   조용히 약해진다. 08-12에 실제로 그렇게 썼다가 A/B 직전 점검에서 잡았다.
+inline void recordOnsetOnce(double &onset, double t)
+{
+    if (onset < 0.0)
+        onset = t;
+}
+
+inline double contaminationOnset(double first_amputate_t, double drift_detect_t)
+{
+    if (first_amputate_t < 0.0) return drift_detect_t;
+    if (drift_detect_t   < 0.0) return first_amputate_t;
+    return std::min(first_amputate_t, drift_detect_t);
+}
+
+// 1순위(정지 창 앵커) 채택 자격 — Q4 방어: 앵커가 오염 시작 이전에 래치됐을 때만
+// 신뢰한다. 오염 실증이 아직 없으면(first_contam_t < 0) 래치 유효성만 본다.
+// ※둘째 인자는 '첫 절제'가 아니라 **오염 시작**이다(위 contaminationOnset 참조).
+inline bool anchorSeedEligible(double anchor_latch_t, double first_contam_t)
 {
     if (anchor_latch_t < 0.0)
         return false;
-    return first_amputate_t < 0.0 || anchor_latch_t < first_amputate_t;
+    return first_contam_t < 0.0 || anchor_latch_t < first_contam_t;
 }
 
 // ── 출력 map 핀 (SW1-1866 vins-output-map-anchor) ──

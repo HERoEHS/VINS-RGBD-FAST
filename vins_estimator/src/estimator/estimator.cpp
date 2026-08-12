@@ -214,7 +214,8 @@ void Estimator::clearState()
     amputate_first_t_ = -1.0;
     // [08-11] 발산 가드 이력 — 새 세션의 pose는 옛 세션과 다른 원점이라 이어붙이면 안 된다.
     still_drift_hist_.clear();
-    still_drift_consec_ = 0;
+    still_drift_consec_  = 0;
+    still_drift_first_t_ = -1.0;
 
     // [SW1-1866] 워밍업 게이트 리셋 — 재초기화(에스컬레이션 reboot 포함) 시 게이트 재가동.
     //   ⓐ 처방의 핵심 경로: reboot 직후 다리 애니메이션 중이면 leg_stable=false로
@@ -1735,11 +1736,14 @@ void Estimator::gaugeSlideGuard()
         //   이동은 전부 오차다. ※휠 변위를 빼는 형태(‖ΔVINS − Δ휠‖)와 결과가 전 항목 동일해
         //   (24런 실측) 프레임 변환 없는 ‖ΔVINS‖로 단순화했다 — 확정 정지 중 Δ휠이 무시 가능.
         //   [실측] 큰 폭주(>1m) 4/4 · 중간(0.3~1m) 6/6 검출, v15·v14 오탐 0/3+0/3.
-        //   [채택 08-12] v16_play 28런 A/B(OFF 14 / ON 14, 양쪽 시드 ON) → **기본 1**.
-        //   단 사전 등록 합격선은 미달이다(최대오차 p=0.077, 합격선 0.05). 켜는 근거는
-        //   유의성이 아니라 ①오탐 0(재부팅 1회×28런) ②>1m 폭주 3/14→0/14 ③OFF 최악
-        //   5.751m vs ON 최악 0.777m 이라는 손해의 비대칭이다. 근거 전문·한계·되돌릴
-        //   조건은 vio_edie.yaml의 use_still_drift_guard 주석에 있다(여기서 중복 금지).
+        //   [채택 08-12] v16_play 64런 A/B(28런+36런, 양쪽 시드 ON) → **기본 1**.
+        //   ⚠️사전 등록 합격선은 **두 번 다 미달**(최대오차 p=0.077 / p=0.339)이고,
+        //     상시 비용이 있다 — 정지창 오차 중앙 0.152→0.188m(+24%, p=0.0002).
+        //     켜는 근거는 꼬리 하나뿐이다: >1m 폭주 합산 9/32 → 0/32 (p=0.002).
+        //   ⚠️가드를 더 깎아도 폭발 구간은 안 줄어든다 — 27초간 1.8mm로 서 있다가
+        //     0.14초 만에 1.1m 튀고, 가드는 그 안에 이미 반응한다. 수확 한계.
+        //   근거 전문·철회된 진단 3건·다음 단서는 vio_edie.yaml의 use_still_drift_guard
+        //   주석에 있다(여기서 중복 금지).
         //   ⚠️USE_REBOOT_POSE_SEED와 한 세트 — 시드가 꺼지면 채택 근거가 함께 무효다.
         //   문턱은 STILL_CUM_XY_MAX 와 같은 값(30mm) — 정지 창에서 클램프가 유지하기로 한
         //   경계를 넘었다는 뜻이라 배수가 필요 없다. 지속 정지 요구가 핵심이었다: 0.5~1.05s면
@@ -1761,12 +1765,16 @@ void Estimator::gaugeSlideGuard()
 
             // 지속 정지 = 기준 시간 이상 뒤 표본이 존재하고, 그 사이 휠 변위가 허용치 미만
             const Vector3d *p_win = nullptr;   // 창(WIN) 시작 pose
+            double t_win = -1.0;               // 그 pose의 시각 = 오염 시작 후보
             bool sustained = false;
             for (auto it = still_drift_hist_.rbegin(); it != still_drift_hist_.rend(); ++it)
             {
                 const double age = stamp_now - std::get<0>(*it);
                 if (!p_win && age >= STILL_DRIFT_WINDOW_SEC)
+                {
                     p_win = &std::get<1>(*it);
+                    t_win = std::get<0>(*it);
+                }
                 if (age >= STILL_CHECK_DURATION_SEC)
                 {
                     // [08-11 수정] 병진만으로 정지를 판정하면 **제자리 회전이 통과한다**.
@@ -1791,7 +1799,20 @@ void Estimator::gaugeSlideGuard()
             if (sustained && p_win)
             {
                 const double div = (Ps[frame_count] - *p_win).head<2>().norm();
-                still_drift_consec_ = (div > STILL_DRIFT_MAX) ? still_drift_consec_ + 1 : 0;
+                if (div > STILL_DRIFT_MAX)
+                {
+                    // [08-12] 오염 시작 시각을 남긴다 — 시드 분기 선택자가 이 재부팅을
+                    //   '무절제=건강'으로 오판해 오염된 정화pose를 물지 않게 하기 위함
+                    //   (근거는 reboot_seed.h contaminationOnset 주석).
+                    //   기준은 **창 시작 시각**이다: 그 시점 pose가 비교 기준이었으니
+                    //   "여기까지는 건강했다"고 말할 수 있는 마지막 시각이다.
+                    //   ⚠️**미설정일 때만** 기록한다(amputate_first_t_와 같은 관행).
+                    //     해제는 정화 solve 한 곳에서만 — 근거는 recordOnsetOnce 주석.
+                    reboot_seed::recordOnsetOnce(still_drift_first_t_, t_win);
+                    ++still_drift_consec_;
+                }
+                else
+                    still_drift_consec_ = 0;   // 오염 시작 시각은 정화 solve에서만 해제
                 if (still_drift_consec_ >= STILL_DRIFT_CONSEC)
                 {
                     guard_escalation_fire_ = true;
@@ -1918,6 +1939,10 @@ void Estimator::gaugeSlideGuard()
             {
                 guard_amputate_streak_ = 0;
                 amputate_first_t_      = -1.0;  // 에피소드 종료 — 다음 절제가 새 시작
+                // [08-12] 발산 가드의 오염 실증도 같은 수명이다. 정화 solve가 났다는 건
+                //   아래에서 clean_P_가 건강한 pose로 갱신된다는 뜻이므로, 2순위
+                //   정화pose 분기가 다시 안전해진다 → 오염 실증을 들고 있을 이유가 없다.
+                still_drift_first_t_   = -1.0;
                 // [reboot-pose-seed] 2순위 시드 재료: 정화 solve의 pose 스냅샷.
                 //   정화 정의는 179807f 수술본(자기참조 제거) 그대로 재사용 — 이
                 //   순간의 상태는 '가드 개입이 불필요했던 건강한 solve'다.
@@ -2214,9 +2239,15 @@ void Estimator::captureRebootSeed(double stamp)
     // 앵커 1순위의 전제 = "현재 상태가 오염됐다"(절제 실증 존재). 절제가 없는
     //   failure(big bias 등)는 직전 상태가 건강하므로 신선한 정화 pose가 우월 —
     //   강제 reboot A/B 실증: 무절제 상태서 앵커 시드는 0.56m 낡아 GT 오차 2.2배.
-    const bool contamination_evidenced = amputate_first_t_ >= 0.0;
+    //   ⚠️[08-12] 위 전제("절제 없음 = 건강")는 **발산 가드 발동 케이스에서 거짓**이다.
+    //     가드는 '정지 확정인데 VINS가 계속 움직인' 상태에서 재부팅시키므로 오염됐는데
+    //     절제는 없다. 그래서 오염 실증을 절제 시각과 가드 감지 시각의 **합집합**으로
+    //     본다(reboot_seed.h contaminationOnset).
+    const double contam_t =
+        reboot_seed::contaminationOnset(amputate_first_t_, still_drift_first_t_);
+    const bool contamination_evidenced = contam_t >= 0.0;
     if (contamination_evidenced && anchor_history_valid_ &&
-        reboot_seed::anchorSeedEligible(anchor_latch_t_, amputate_first_t_))
+        reboot_seed::anchorSeedEligible(anchor_latch_t_, contam_t))
     {
         p_session      = still_cum_anchor_;
         p_session.z()  = still_cum_z_anchor_;
