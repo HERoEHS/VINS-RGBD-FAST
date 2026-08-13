@@ -1939,10 +1939,15 @@ void Estimator::gaugeSlideGuard()
             {
                 guard_amputate_streak_ = 0;
                 amputate_first_t_      = -1.0;  // 에피소드 종료 — 다음 절제가 새 시작
-                // [08-12] 발산 가드의 오염 실증도 같은 수명이다. 정화 solve가 났다는 건
-                //   아래에서 clean_P_가 건강한 pose로 갱신된다는 뜻이므로, 2순위
-                //   정화pose 분기가 다시 안전해진다 → 오염 실증을 들고 있을 이유가 없다.
-                still_drift_first_t_   = -1.0;
+                // [08-13 수정] 발산 가드의 오염 실증은 **가드 미발동일 때만** 정화 리셋.
+                //   옛 판(08-12)은 무조건 지웠는데, 누적 드리프트는 per-solve 델타가 작아
+                //   **가드가 발동한 바로 그 solve가 '정화'로 판정**된다 → 같은 solve에서
+                //   ①오염 실증 소거 ②드리프트된 pose를 clean_P_로 저장 → captureRebootSeed가
+                //   "오염 없음"으로 보고 그 오염 pose를 시드로 물었다(DIAG 실측 dg1_r2:
+                //   clean_t=발동 시각, 착지 오차 0.4m급 — +24% 비용의 주범).
+                //   발동 후엔 재부팅 → clearState가 전부 리셋하므로 들고 있어도 안전.
+                if (!guard_escalation_fire_)
+                    still_drift_first_t_ = -1.0;
                 // [reboot-pose-seed] 2순위 시드 재료: 정화 solve의 pose 스냅샷.
                 //   정화 정의는 179807f 수술본(자기참조 제거) 그대로 재사용 — 이
                 //   순간의 상태는 '가드 개입이 불필요했던 건강한 solve'다.
@@ -2280,6 +2285,15 @@ void Estimator::captureRebootSeed(double stamp)
                 "[REBOOT-SEED] t=%.3f 시드 캡처(%s): (%.3f, %.3f, %.3f) yaw=%.1fdeg",
                 stamp, src, seed_cap_P_.x(), seed_cap_P_.y(), seed_cap_P_.z(),
                 seed_cap_yaw_ * 180.0 / M_PI);
+    // [SW1-1866 08-13 계측] 분기 판정에 실제로 쓰인 내부 상태 4값 — 08-12 A/B에서
+    //   외부 타임라인이 동일한 런들(r2·r5 vs r13)이 다른 분기로 갈렸는데, 로그 재구성으로는
+    //   앵커 자격이 성립해 보여 판별이 막혔다(가드 이벤트 로그는 스로틀·계승 갱신 탓에
+    //   내부 상태의 대리 지표가 못 된다는 게 그 수사의 결론). 판정 '입력'을 직접 남긴다.
+    RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
+                "[REBOOT-SEED-DIAG] latch_t=%.3f amputate_t=%.3f drift_t=%.3f "
+                "hist=%d clean_t=%.3f",
+                anchor_latch_t_, amputate_first_t_, still_drift_first_t_,
+                anchor_history_valid_ ? 1 : 0, clean_pose_t_);
 }
 
 // 재init 완료 후 첫 solve에서 호출 — 캡처~지금 사이 이동(휠 병진+gyro yaw)을 얹어
