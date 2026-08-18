@@ -794,3 +794,18 @@ hf_body_tf_tau: 0.10         # [s] 발행단 스무딩 시정수 — 예측(100H
 # ================================================================
 publish_vins_footprint_tf: 1   # 0=끔, 1=비교용 정적 TF 부착(기본 — 시작 시 /tf_static 1회
                                #   발행뿐이라 상시 비용 0, 운영 TF 대역 불변)
+
+# ================================================================
+# [docking] odom→base_vins TF — 도킹 앵커·전파의 "같은 자" 간선
+#   도킹은 앵커(odom→station_docking_obs)를 찍고 다음 검출까지 오도메트리로 전파한다.
+#   앵커와 전파가 같은 추정기를 써야 드리프트가 상쇄되는데, VINS는 별도 map 섬에 있어
+#   그대로 못 쓴다. 1이면 body pose에 body→base_footprint 환산(RIO/TIO+바퀴반지름
+#   0.04)을 합성해 odom→base_vins 로 발행 — station_docking과 Docking Controller가
+#   이 간선을 쓰면 자가 VINS 하나로 통일된다 (EKF 시절 odom→base_ekf 병행 발행 선례).
+#   - 발행 경로는 map→body와 대칭: publish_hf_body_tf=1이면 HF 블록(스무딩 적용,
+#     hf_body_tf_rate_hz 스로틀), 0이면 저주기 pubTF(최적화 후 100~500ms 지연).
+#     도킹 전파용 실전 투입 시 HF 켜기를 권장.
+#   - map→body와 같은 TFMessage로 묶어 발행 → 패킷 수 불변 (08-05 ESP32 무선 이력).
+#   - 기존 간선 삭제·변경 없음. child는 base_vins 고정(body로 바꾸면 이중부모 플리핑).
+# ================================================================
+publish_odom_base_vins_tf: 1   # 0=끔(기본), 1=odom→base_vins 발행 (도킹 소비용)

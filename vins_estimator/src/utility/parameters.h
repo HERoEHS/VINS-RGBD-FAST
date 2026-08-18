@@ -198,6 +198,15 @@ extern double HF_BODY_TF_TAU;     // [s] 고주기 TF 발행단 스무딩 시정
 //   이름 충돌 금지 → vins/ 네임스페이스 필수.
 extern int PUB_VINS_FOOTPRINT_TF; // 0=끔(기본), 1=vins/base_link·vins/base_footprint 정적 TF
 
+// ===== 도킹 소비용 odom→base_vins TF =====
+//   도킹 앵커(odom 트리)와 전파 오도메트리가 같은 추정기를 써야 드리프트가 상쇄된다.
+//   1이면 VINS body pose에 body→base_footprint 환산(RIO/TIO + 바퀴반지름)을 합성해
+//   odom→base_vins 간선을 발행 — EKF 시절 odom→base_ekf 병행 발행과 같은 패턴.
+//   발행 경로는 map→body와 대칭: HF 켜짐=HF 블록(스무딩 적용), 꺼짐=pubTF 저주기.
+//   같은 sendTransform(vector)로 묶어 패킷 수 불변(08-05 ESP32 무선 이력 참조).
+//   ⚠️ child를 body로 바꾸지 말 것 — map→body와 이중부모가 되어 트리 플리핑.
+extern int PUB_ODOM_BASE_VINS_TF; // 0=끔(기본), 1=odom→base_vins 발행
+
 // ===== 게이지 슬라이드 가드 (SW1-1866) =====
 //   동적 장애물(초근접+화면 점령)이 marg prior를 오염시키면 매 solve 창 전체가 게이지
 //   (불관측) 방향으로 일정량 이동하는 폭주가 발생: yaw 13~16°/solve(-90~-160°/s 연속

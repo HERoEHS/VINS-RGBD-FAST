@@ -70,6 +70,7 @@ int    PUB_HF_BODY_TF = 0;
 double HF_BODY_TF_RATE_HZ = 100.0;
 double HF_BODY_TF_TAU = 0.05;
 int    PUB_VINS_FOOTPRINT_TF = 0;
+int    PUB_ODOM_BASE_VINS_TF = 0;
 int    USE_STILL_MOTION_LOCK = 0;
 double STILL_LOCK_POS_W = 500.0;   // σ_p 2mm
 double STILL_LOCK_YAW_W = 573.0;   // σ_yaw 0.1°
@@ -602,6 +603,14 @@ void readParameters(rclcpp::Node* node)
         RCLCPP_INFO(node->get_logger(),
                     "PUB_VINS_FOOTPRINT_TF: 1 (body에 vins/base_link·vins/base_footprint "
                     "정적 TF 부착 — rviz서 bringup TF와 비교용)");
+
+    // ===== 도킹 소비용 odom→base_vins TF =====
+    PUB_ODOM_BASE_VINS_TF = fsSettings["publish_odom_base_vins_tf"].empty()
+                                ? 0 : (int)fsSettings["publish_odom_base_vins_tf"];
+    if (PUB_ODOM_BASE_VINS_TF)
+        RCLCPP_INFO(node->get_logger(),
+                    "PUB_ODOM_BASE_VINS_TF: 1 (odom→base_vins 발행 — 도킹 앵커·전파가 "
+                    "같은 VINS 추정을 쓰도록 하는 간선. map→body와 묶음 발행)");
 
     // ===== 정지 상대운동 잠금 (SW1-1866) =====
     USE_STILL_MOTION_LOCK = fsSettings["use_still_motion_lock"].empty()

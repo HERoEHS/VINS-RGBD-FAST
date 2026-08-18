@@ -1,6 +1,7 @@
 #include "visualization.h"
 #include <cmath>
 #include "parameters.h"
+#include "odom_base_vins_tf.h"
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -102,12 +103,37 @@ void registerPub(rclcpp::Node* node)
         ts_fp.header.frame_id = "vins/base_link";
         ts_fp.child_frame_id  = "vins/base_footprint";
         // URDF base_joint 역방향: base_link는 바퀴축 높이(base_z=wheel_radius 0.04)에 있음
-        constexpr double kBaseZWheelRadius = 0.04;
-        ts_fp.transform.translation.z = -kBaseZWheelRadius;
+        // (상수는 odom_base_vins_tf.h와 공유 — odom→base_vins 합성과 값이 어긋나면 안 됨)
+        ts_fp.transform.translation.z = -vins_tf::kBaseZWheelRadius;
         ts_fp.transform.rotation.w    = 1.0;
 
         g_static_br->sendTransform(std::vector<geometry_msgs::msg::TransformStamped>{ts, ts_fp});
     }
+}
+
+// [docking] body pose → odom→base_vins TransformStamped 생성.
+//   합성 수식은 odom_base_vins_tf.h 순수 함수(gtest 대상)에 위임하고,
+//   여기서는 메시지 포장만 한다. HF·저주기 두 발행 경로가 공유.
+static geometry_msgs::msg::TransformStamped
+makeOdomBaseVinsTS(const builtin_interfaces::msg::Time &stamp,
+                   const Eigen::Vector3d &P_body, const Eigen::Quaterniond &Q_body)
+{
+    Eigen::Vector3d    P_bfp;
+    Eigen::Quaterniond Q_bfp;
+    vins_tf::composeBaseFootprint(P_body, Q_body, RIO, TIO,
+                                  vins_tf::kBaseZWheelRadius, P_bfp, Q_bfp);
+    geometry_msgs::msg::TransformStamped ts;
+    ts.header.stamp    = stamp;
+    ts.header.frame_id = "odom";       // 도킹 앵커와 같은 트리에서 소비
+    ts.child_frame_id  = "base_vins";  // ⚠️ body 금지 — map→body와 이중부모 플리핑
+    ts.transform.translation.x = P_bfp.x();
+    ts.transform.translation.y = P_bfp.y();
+    ts.transform.translation.z = P_bfp.z();
+    ts.transform.rotation.x    = Q_bfp.x();
+    ts.transform.rotation.y    = Q_bfp.y();
+    ts.transform.rotation.z    = Q_bfp.z();
+    ts.transform.rotation.w    = Q_bfp.w();
+    return ts;
 }
 
 void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
@@ -182,7 +208,14 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
             ts.transform.rotation.y    = hf_Q.y();
             ts.transform.rotation.z    = hf_Q.z();
             ts.transform.rotation.w    = hf_Q.w();
-            g_br->sendTransform(ts);
+            // [docking] odom→base_vins 는 map→body와 같은 TFMessage로 묶어 발행 —
+            //   개별 발행 시 패킷이 2배가 되어 08-05 ESP32 무선 붕괴(496pkt/s) 재현 위험.
+            //   스무딩(hf_P/hf_Q)을 거친 pose를 쓰므로 base_vins도 동일하게 부드럽다.
+            if (PUB_ODOM_BASE_VINS_TF)
+                g_br->sendTransform(std::vector<geometry_msgs::msg::TransformStamped>{
+                    ts, makeOdomBaseVinsTS(ts.header.stamp, hf_P, hf_Q)});
+            else
+                g_br->sendTransform(ts);
         }
     }
 }
@@ -466,8 +499,16 @@ void pubTF(const Estimator &estimator, const std_msgs::msg::Header &header)
     // [SW1-1837] 고주기 body TF 사용 시 저주기 송출 중단 — 같은 프레임을 두 소스가
     //   쏘면 rviz/소비자에서 최적화값(과거)과 예측값(현재) 사이를 널뛰기함.
     //   body→camera(아래)는 extrinsic이라 저주기로 충분, 그대로 유지.
+    // [docking] odom→base_vins 도 map→body와 같은 가드 아래에서만 발행 —
+    //   HF 켜짐이면 HF 블록이 이 간선을 소유한다(단일 소스 보장). 묶음 발행은 패킷 수 유지.
     if (!PUB_HF_BODY_TF)
-        g_br->sendTransform(ts);
+    {
+        if (PUB_ODOM_BASE_VINS_TF)
+            g_br->sendTransform(std::vector<geometry_msgs::msg::TransformStamped>{
+                ts, makeOdomBaseVinsTS(ts.header.stamp, correct_t, correct_q)});
+        else
+            g_br->sendTransform(ts);
+    }
 
     Quaterniond ric_q(estimator.ric[0]);
     ts.header.frame_id = "body";

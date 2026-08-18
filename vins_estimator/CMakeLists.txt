@@ -195,6 +195,12 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
 
+  # [docking] odom→base_vins 합성 수학(Eigen 헤더-only) 단독 검증
+  ament_add_gtest(test_odom_base_vins_tf test/test_odom_base_vins_tf.cpp)
+  target_include_directories(test_odom_base_vins_tf PRIVATE
+    ${EIGEN3_INCLUDE_DIR}
+  )
+
   # Bg_z 잠금 발동 판정 로직 — 헤더-only 단독 검증
   ament_add_gtest(test_bgz_lock test/test_bgz_lock.cpp)
 
