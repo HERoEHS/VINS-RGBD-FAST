@@ -20,16 +20,67 @@
 
 ## 2. HF TF 생성 경로 — 확인된 구조 (정상 부분)
 
-| 단계 | 위치 | 하는 일 |
-|---|---|---|
-| 예측 | `inputIMU :3554-3578` (predict 호출 `:3567`) → `predict :3723-3741` | IMU마다 중점 적분으로 `latest_P/Q/V` 전진. 바이어스·중력 제거 |
-| 발행 | `pubLatestOdometry`(visualization.cpp) | `latest_P/Q` → `map→body`(+`odom→base_vins`) HF TF, 스로틀·LPF(`hf_body_tf_tau`) |
-| 보정 | `updateLatestStates :3629-3649` (호출 `:656` 정상 루프, `:556/:575` init) | `latest_* = Ps/Rs/Vs/Bas/Bgs[frame_count]`로 **최적 해 재기저** 후, `imu_buf`에 남은(창 이후 도착한) IMU를 재적분 |
-| IMU 소비 | `getIMUInterval :3835-3840` | 창에 쓴 IMU를 `imu_buf`에서 pop → 남는 건 "마지막 프레임 이후 ~ 지금" |
+> ⚠️ **순차 파이프라인이 아니다.** 두 스레드가 공유 변수 세 개를 사이에 두고 각자 루프를 돈다.
+> "예측 → 발행 → 보정" 순으로 읽으면 "발행값은 미보정"으로 오독된다 — 실제 HF TF 값은
+> **직전에 끝난 최적화의 해 ⊕ 그 이후 도착한 IMU 적분**이다.
 
-결론: **"IMU 적분 예측 → 매 최적화마다 최적 해로 재기저 → 잔여 IMU 재적분 → 계속 예측"**
-구조는 맞다. HF 블록 주석(visualization.cpp)의 "매 최적화 완료 시 예측이 보정값으로 재기저되며
-mm·0.0x° 미세 점프"가 이 재기저 순간이다.
+### 2.1 등장하는 변수 (제3자용 용어 설명)
+
+| 이름 | 종류 | 뜻 | 선언 |
+|---|---|---|---|
+| `imu_buf` | 큐 | 원시 IMU 샘플(시각, 가속도, 각속도) 대기열. IMU 콜백이 넣고, 프레임 처리가 꺼내 쓴다 | estimator.h:381 |
+| `latest_P / latest_Q / latest_V` | 위치·자세·속도 | **고주기 예측 상태**. IMU마다 전진하고, 최적화 끝날 때마다 최적 해로 덮어써짐. HF TF·`imu_propagate` 토픽·`odom→base_vins`가 이 값을 발행 | estimator.h:399~ |
+| `latest_Ba / latest_Bg` | 바이어스 | 예측 적분에 쓰는 가속도계·자이로 바이어스(최적화 해에서 복사) | estimator.h:399~ |
+| `Ps / Rs / Vs / Bas / Bgs [i]` | 배열 | **슬라이딩 창 최적화 상태**(창 안 각 프레임의 위치·자세·속도·바이어스). `[frame_count]`가 최신 프레임 | estimator.h:167~ |
+| `acc_0 / gyr_0` | 벡터 | 창 프리인테그레이션이 "직전에 소비한 IMU 한 샘플". 중점 적분의 이전 값으로 쓰려고 들고 있음 | estimator.h:297 |
+| `m_imu` | 뮤텍스 | `imu_buf`를 지키는 자물쇠 — 두 스레드가 동시에 큐를 만지지 못하게 함 | estimator.h:376 |
+| `m_propagate` | 뮤텍스 | `latest_*` 를 지키는 자물쇠 — 예측(A)과 재기저(B)가 동시에 덮어쓰지 못하게 함 | estimator.h:376 |
+
+> 뮤텍스(mutex) = "한 번에 한 스레드만 들어갈 수 있는 문". `lock()`으로 잠그고 들어가 작업한 뒤
+> `unlock()`으로 연다. 자물쇠 없이 두 스레드가 같은 변수를 읽고 쓰면 반쯤 갱신된 값을 읽는 사고가 난다.
+
+### 2.2 두 스레드와 공유 변수
+
+```
+[스레드 A — IMU 콜백, ~380Hz]                              [스레드 B — 프레임 처리, ~14Hz]
+inputIMU :3554
+  ├ imu_buf.push :3558 ────(m_imu)──── A→B ────────▶  getIMUInterval :3820   창용 IMU pop(:3835/:3840)
+  ├ predict :3723   latest_* += IMU 1스텝                   processIMU :239        창 프리인테그레이션
+  │     ▲ 읽음: acc_0/gyr_0 ◀──── B→A · 뮤텍스 없음 ──────────┘ :273-274 갱신          ← 결함 ② 원인
+  └ pubLatestOdometry  latest_P/Q → HF TF                  optimization :602      창 최적화 → Ps/Rs/Vs
+        ▲                                                   updateLatestStates :3629
+        │                                                     latest_* = Ps/Rs/Vs/Bas/Bgs[frame_count] :3633-3637  ← 재기저
+        └──────── latest_* (m_propagate :3566/:3631) ◀── B→A ──  + imu_buf 잔여분(m_imu :3641) 재적분         ← 결함 ① 위치
+```
+
+| 공유 변수 | 방향 | 쓰는 쪽 | 읽는 쪽 | 자물쇠 |
+|---|---|---|---|---|
+| `imu_buf` | **A → B** | A: `inputIMU :3558` push | B: `getIMUInterval :3835/:3840` pop(창용) · `updateLatestStates :3641` 잔여분 복사(재적분용) | `m_imu` |
+| `latest_*` | **B → A** (재기저) · A 자체(예측) | B: `updateLatestStates :3633-3637` · A: `predict :3736-3740` | A: `pubLatestOdometry` | `m_propagate` |
+| `acc_0/gyr_0` | **B → A** | B: `processIMU :273-274` | A: `predict :3734-3735` (중점 적분의 이전 값으로) | **없음** |
+
+### 2.3 단계별 역할
+
+| 스레드 | 단계 | 위치 | 하는 일 |
+|---|---|---|---|
+| A | 적재 | `inputIMU :3558` | 원시 IMU를 `imu_buf`에 push (B가 소비) |
+| A | 예측 | `predict :3723-3741` (호출 `:3567`) | IMU마다 중점 적분으로 `latest_P/Q/V` 전진. 바이어스·중력 제거 |
+| A | 발행 | `pubLatestOdometry`(visualization.cpp) | 그 시점 `latest_P/Q` → `map→body`(+`odom→base_vins`) HF TF, 스로틀·LPF(`hf_body_tf_tau`) |
+| B | IMU 소비 | `getIMUInterval :3820` (pop `:3835/:3840`) | 창에 쓸 IMU를 `imu_buf`에서 꺼냄 → 큐에 남는 건 "마지막 프레임 이후 ~ 지금" |
+| B | 창 처리 | `processIMU :239` | 프리인테그레이션. `acc_0/gyr_0 :273-274` 갱신 |
+| B | 최적화 | `optimization :602` (init 경로 `:555/:574`) | 창 최적화 → `Ps/Rs/Vs/Bas/Bgs` |
+| B | 재기저 | `updateLatestStates :3629-3649` (호출 `:656` 정상 루프, `:556/:575` init) | `latest_* = Ps/Rs/Vs/Bas/Bgs[frame_count]`로 **최적 해 덮어쓰기** 후, `imu_buf` 잔여 IMU 재적분 |
+
+### 2.4 동작 요약
+
+A는 B와 무관하게 계속 예측·발행한다. B가 최적화를 끝낼 때마다 `latest_*`를 최적 해로 덮어쓰고,
+그 사이(최적화 대상 마지막 프레임 이후) 쌓인 IMU를 재적분한다. 그 다음 A의 `predict`는 덮어쓰인
+값에서 이어간다. → 임의 시각의 HF TF = **직전 최적 해 ⊕ 그 이후 IMU 적분**. 이것이 "IMU 예측을
+최적화 해로 보정한 값"의 정확한 의미다. HF 블록 주석(visualization.cpp)의 "매 최적화 완료 시 예측이
+보정값으로 재기저되며 mm·0.0x° 미세 점프"가 B의 재기저 순간이다.
+
+결함 ①은 B의 재적분 루프 안(잔여 `imu_buf`를 읽는 방식)에, 결함 ②는 `acc_0/gyr_0`의 자물쇠 없는
+B→A 공유에 각각 위치한다.
 
 ## 3. 결함 ① — 재적분 루프가 acc/gyr을 첫 샘플로 고정
 
