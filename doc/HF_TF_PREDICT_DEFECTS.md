@@ -180,8 +180,9 @@ keyframe·map→body 저주기)는 **무영향**이다.
 
 ## 7. 결정 사항
 
-- [x] 수정을 도킹 태스크 전에 완료 — 실측 선행(§6.5) 후 `15c75b8` (#SW1-1872)
-- [ ] 수정을 upstream(jianhengLiu/VINS-RGBD-FAST)에 issue/PR로 보고할지 (미결 — 사용자 결정)
+- [x] 수정을 도킹 태스크 전에 완료 — 실측 선행(§10) 후 `15c75b8` (#SW1-1872)
+- [x] upstream 보고 완료 — [jianhengLiu/VINS-RGBD-FAST#13](https://github.com/jianhengLiu/VINS-RGBD-FAST/issues/13) (08-19,
+  게시 전 전수 확인: 기존 이슈 11건·PR 1건 중 유사 보고 0건 — 최초 보고. PR은 안 하기로 결정)
 
 ## 8. 이 분석에서 정정한 것
 
