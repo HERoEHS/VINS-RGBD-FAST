@@ -3674,7 +3674,9 @@ void Estimator::updateLatestStates()
         const double jump_p  = (latest_P - diag_P_pre).norm();
         const Eigen::AngleAxisd rel(diag_Q_pre.inverse() * latest_Q);
         const double jump_ang = rel.angle() * 180.0 / M_PI;
-        RCLCPP_INFO(rclcpp::get_logger("vins_hf_rebase"),
+        // A/B 계측(§10) 종료 후 DEBUG 강등 — 평시 무음, 재활성:
+        // --ros-args --log-level vins_hf_rebase:=debug
+        RCLCPP_DEBUG(rclcpp::get_logger("vins_hf_rebase"),
                     "[HF-REBASE-DIAG] t=%.6f jp=%.5f jang=%.4f n=%zu dt_cmp=%.6f",
                     latest_time, jump_p, jump_ang, diag_n_imu, latest_time - diag_t_pre);
     }

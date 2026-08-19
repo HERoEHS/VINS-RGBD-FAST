@@ -244,7 +244,7 @@ keyframe·map→body 저주기)는 **무영향**이다.
 ## 10. 수정 실측 결과 (08-19, v15 bag 3v3 — 빌드 base `adcb2b48` vs fix `5dd1ebf6`)
 
 계측: `updateLatestStates`에 `[HF-REBASE-DIAG]` 로그(직전/직후 `latest_P` 차) — 수정 후에도
-상존(도킹 HF TF 품질 감시용). 재기저 점프 = 최적화 보정 + 재적분 오차(결함①) + 이전샘플
+상존하되 **DEBUG 레벨**(계측 종료 후 강등, 재활성 `--ros-args --log-level vins_hf_rebase:=debug`). 재기저 점프 = 최적화 보정 + 재적분 오차(결함①) + 이전샘플
 오염(결함②)의 합이므로, A/B 차이가 결함 몫이다.
 
 | 지표 (mm) | base 3런 | fix 3런 | 판정(사전 등록 합격선) |
