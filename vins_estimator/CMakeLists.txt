@@ -175,6 +175,12 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
 
+  # [SW1-1872] HF 예측 순수 수학부(hf_predict.h, 헤더-only) — 결함①·② 회귀 방지
+  ament_add_gtest(test_hf_predict test/test_hf_predict.cpp)
+  target_include_directories(test_hf_predict PRIVATE
+    ${EIGEN3_INCLUDE_DIR}
+  )
+
   # [SW1-1866] 정지 상대운동 잠금 factor(AutoDiff, ceres+Eigen 헤더-only) 단독 검증
   ament_add_gtest(test_still_motion_factor test/test_still_motion_factor.cpp)
   target_include_directories(test_still_motion_factor PRIVATE

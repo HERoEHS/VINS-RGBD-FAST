@@ -401,5 +401,10 @@ public:
     Eigen::Vector3d    latest_V  = Eigen::Vector3d::Zero();
     Eigen::Vector3d    latest_Ba = Eigen::Vector3d::Zero();
     Eigen::Vector3d    latest_Bg = Eigen::Vector3d::Zero();
+    // [SW1-1872] 예측(HF) 경로 전용 '직전 IMU 샘플'. 창 처리용 acc_0/gyr_0를 자물쇠 없이
+    //   빌려 쓰던 결함 ②(doc/HF_TF_PREDICT_DEFECTS.md §4)를 VINS-Fusion 방식(전용 멤버)으로 분리.
+    //   위 latest_Bg 교훈(잠복 NaN)대로 명시 초기화 필수.
+    Eigen::Vector3d    latest_acc_0 = Eigen::Vector3d::Zero();
+    Eigen::Vector3d    latest_gyr_0 = Eigen::Vector3d::Zero();
     bool               initFirstPoseFlag{};
 };

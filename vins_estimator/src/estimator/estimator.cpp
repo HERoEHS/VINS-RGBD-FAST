@@ -1,6 +1,7 @@
 #include "estimator.h"
 #include "../utility/visualization.h"
 #include "../utility/reboot_seed.h"
+#include "../utility/hf_predict.h"
 #include "../factor/zero_velocity_factor.h"
 #include "../factor/still_motion_factor.h"
 #include "../factor/acc_bias_prior_factor.h"
@@ -228,6 +229,9 @@ void Estimator::clearState()
     drift_correct_t = Vector3d::Zero();
 
     latest_Q = Eigen::Quaterniond(1, 0, 0, 0);
+    // [SW1-1872] 예측 경로 전용 직전 샘플도 함께 리셋 (재부팅 시 이전 에피소드 값 이월 방지)
+    latest_acc_0 = Eigen::Vector3d::Zero();
+    latest_gyr_0 = Eigen::Vector3d::Zero();
 
     init_imu = true;
 
@@ -3629,6 +3633,15 @@ bool Estimator::isLegGated(double t0, double t1)
 void Estimator::updateLatestStates()
 {
     m_propagate.lock();
+    // [SW1-1872] 재기저 점프 계측 — HF 예측 경로 결함 수정 전/후 A/B의 근거 지표.
+    // '직전' = 예측 경로가 IMU마다 이어온 상태, '직후' = 최적 해 재기저 + 잔여 IMU 재적분 상태.
+    // 두 상태 모두 imu_buf의 최신 샘플 시각에서 끝나므로 직접 비교 가능(t_pre/t_post 로그로 검증).
+    // 자세한 배경: doc/HF_TF_PREDICT_DEFECTS.md §6-1
+    const bool             diag_valid = !init_imu; // 예측이 한 번도 안 돌았으면 비교 무의미
+    const Eigen::Vector3d  diag_P_pre = latest_P;
+    const Eigen::Quaterniond diag_Q_pre = latest_Q;
+    const double           diag_t_pre = latest_time;
+
     latest_time = Headers[frame_count] + td;
     latest_P    = Ps[frame_count];
     latest_Q    = Rs[frame_count];
@@ -3636,14 +3649,34 @@ void Estimator::updateLatestStates()
     latest_Ba   = Bas[frame_count];
     latest_Bg   = Bgs[frame_count];
 
+    size_t diag_n_imu = 0;
     if (USE_IMU)
     {
         m_imu.lock();
-        queue<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> tmp_imu_buf = imu_buf;
-        for (; !tmp_imu_buf.empty(); tmp_imu_buf.pop())
-            predict(tmp_imu_buf.front().first, imu_buf.front().second.first,
-                    imu_buf.front().second.second);
+        diag_n_imu = imu_buf.size();
+        // [SW1-1872 결함② 수정] 재기저 시 예측 경로의 '직전 샘플'을 창 경로가 마지막으로
+        // 소비한 샘플로 재장전 — 재적분 첫 스텝의 중점 적분 이전 값 (VINS-Fusion 준용)
+        latest_acc_0 = acc_0;
+        latest_gyr_0 = gyr_0;
+        // [SW1-1872 결함① 수정] 시각과 값을 "같은 큐 원소"에서 꺼내 재적분한다. 기존 코드는
+        // 값만 imu_buf.front()로 고정되어(upstream 39dcb63d 오타) 지연 창 전체를 IMU 한
+        // 샘플로 zero-order-hold 적분했다 — doc/HF_TF_PREDICT_DEFECTS.md §3
+        hf_predict::forEachSample(
+            imu_buf, [this](double t, const Eigen::Vector3d &acc, const Eigen::Vector3d &gyr)
+            { predict(t, acc, gyr); });
         m_imu.unlock();
+    }
+
+    if (diag_valid)
+    {
+        // 점프 크기: 위치 노름 + 상대회전의 yaw 성분. dt_cmp≠0이면 비교 시각이 어긋난
+        // 표본이므로 분석 단계에서 걸러낸다(스레드 경합 등 드문 케이스 방어).
+        const double jump_p  = (latest_P - diag_P_pre).norm();
+        const Eigen::AngleAxisd rel(diag_Q_pre.inverse() * latest_Q);
+        const double jump_ang = rel.angle() * 180.0 / M_PI;
+        RCLCPP_INFO(rclcpp::get_logger("vins_hf_rebase"),
+                    "[HF-REBASE-DIAG] t=%.6f jp=%.5f jang=%.4f n=%zu dt_cmp=%.6f",
+                    latest_time, jump_p, jump_ang, diag_n_imu, latest_time - diag_t_pre);
     }
     m_propagate.unlock();
 }
@@ -3725,19 +3758,22 @@ void Estimator::predict(double t, const Vector3d &linearAcceleration,
 {
     if (init_imu)
     {
-        latest_time = t;
-        init_imu    = false;
+        latest_time  = t;
+        init_imu     = false;
+        // [SW1-1872] 첫 샘플은 적분 없이 '직전 샘플'로만 장전 (0벡터로 첫 중점을 만들지 않도록)
+        latest_acc_0 = linearAcceleration;
+        latest_gyr_0 = angularVelocity;
         return;
     }
-    double dt                = t - latest_time;
-    latest_time              = t;
-    Eigen::Vector3d un_acc_0 = latest_Q * (acc_0 - latest_Ba) - g;
-    Eigen::Vector3d un_gyr   = 0.5 * (gyr_0 + angularVelocity) - latest_Bg;
-    latest_Q                 = latest_Q * Utility::deltaQ(un_gyr * dt);
-    Eigen::Vector3d un_acc_1 = latest_Q * (linearAcceleration - latest_Ba) - g;
-    Eigen::Vector3d un_acc   = 0.5 * (un_acc_0 + un_acc_1);
-    latest_P                 = latest_P + dt * latest_V + 0.5 * dt * dt * un_acc;
-    latest_V                 = latest_V + dt * un_acc;
+    double dt   = t - latest_time;
+    latest_time = t;
+    // [SW1-1872 결함② 수정] 중점 적분의 '이전 값'을 예측 경로 전용 멤버(latest_acc_0/gyr_0)
+    // 에서 읽는다. 기존 코드는 창 처리용 acc_0/gyr_0를 자물쇠 없이 빌려 써(다른 박자의
+    // 스레드 B가 갱신) 이전 값이 실제 직전 IMU가 아닐 수 있었다 — HF_TF_PREDICT_DEFECTS.md §4
+    hf_predict::midpointStep(latest_P, latest_Q, latest_V, dt, latest_acc_0, latest_gyr_0,
+                             linearAcceleration, angularVelocity, latest_Ba, latest_Bg, g);
+    latest_acc_0 = linearAcceleration;
+    latest_gyr_0 = angularVelocity;
 }
 
 bool Estimator::IMUAvailable(double t)
