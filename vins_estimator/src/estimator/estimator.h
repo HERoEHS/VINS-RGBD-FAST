@@ -68,6 +68,10 @@ public:
 
     void slideWindow();
 
+    // [SW1-1880] static init 발동 시 all_image_frame 전 항목에 창 자세 부여
+    // (processImage에서 분리 — 장부>창 결함의 단위 검증을 위해 메서드화)
+    void assignStaticInitPoses();
+
     void slideWindowNew();
 
     void slideWindowOld();

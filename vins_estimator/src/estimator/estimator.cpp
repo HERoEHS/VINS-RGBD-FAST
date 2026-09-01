@@ -542,13 +542,7 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
                         warmup_fallback_logged_ = true;
                         ROS_WARN("[WARMUP-GATE] 정지 실증 실패(주행 실증/예산 소진) — 저신뢰 init 진행");
                     }
-                    int i = 0;
-                    for (auto &frame_it : all_image_frame)
-                    {
-                        frame_it.second.R = Rs[i];
-                        frame_it.second.T = Ps[i];
-                        i++;
-                    }
+                    assignStaticInitPoses();
                     if (ESTIMATE_EXTRINSIC != 2)
                     {
                         solveGyroscopeBias(all_image_frame, Bgs);
@@ -3342,6 +3336,34 @@ void Estimator::optimization()
     ROS_DEBUG("whole marginalization costs: %f", t_whole_marginalization.toc());
 
     ROS_DEBUG("whole time for ceres: %f", t_whole.toc());
+}
+
+// [SW1-1880] static init 자세 부여 — 스탬프 기반 (업스트림 인덱스 루프 교체).
+// 옛 코드는 장부(all_image_frame)==창 크기를 가정하고 i++로 Rs/Ps[i]를 부여했는데,
+// INITIAL 중 SECOND_NEW 폐기 항목이 장부에 남으면(삭제 경로 부재 — SW1-1879와 같은 뿌리)
+// ①창 항목이 엉뚱한 슬롯 자세를 받고(인덱스 밀림) ②i가 창을 넘어 배열 밖 읽기(UB),
+// 그 쓰레기 R/T가 solveGyroscopeBias의 Bg 추정에 유입됐다.
+// 창 밖 잉여 항목에 '최근접 창 슬롯 자세'를 주는 이유: static init은 정지 전제라 전 프레임
+// 참 자세가 동일하고, 항목을 지우면 인접 쌍의 IMU 사전적분 구간이 어긋나므로 삭제는 부적합.
+void Estimator::assignStaticInitPoses()
+{
+    for (auto &frame_it : all_image_frame)
+    {
+        const double t    = frame_it.first;
+        int          best = 0;
+        double       bestd = std::abs(Headers[0] - t);
+        for (int j = 1; j <= frame_count && j <= WINDOW_SIZE; j++)
+        {
+            const double d = std::abs(Headers[j] - t);
+            if (d < bestd)
+            {
+                bestd = d;
+                best  = j;
+            }
+        }
+        frame_it.second.R = Rs[best];
+        frame_it.second.T = Ps[best];
+    }
 }
 
 void Estimator::slideWindow()

@@ -219,6 +219,10 @@ if(BUILD_TESTING)
   # [08-31] all_image_frame 정지 누수 가지치기 — Estimator 실물 링크 회귀 테스트
   ament_add_gtest(test_all_image_frame_prune test/test_all_image_frame_prune.cpp)
   target_link_libraries(test_all_image_frame_prune vins_lib)
+
+  # [SW1-1880] static init 자세 부여(장부>창 결함) — Estimator 실물 링크 회귀 테스트
+  ament_add_gtest(test_static_init_pose_assign test/test_static_init_pose_assign.cpp)
+  target_link_libraries(test_static_init_pose_assign vins_lib)
 endif()
 
 ament_package()
