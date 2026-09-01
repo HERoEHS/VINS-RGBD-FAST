@@ -215,6 +215,10 @@ if(BUILD_TESTING)
 
   # [SW1-1866] init/출발 워밍업 게이트 판정 로직 — 헤더-only 단독 검증
   ament_add_gtest(test_warmup_init_gate test/test_warmup_init_gate.cpp)
+
+  # [08-31] all_image_frame 정지 누수 가지치기 — Estimator 실물 링크 회귀 테스트
+  ament_add_gtest(test_all_image_frame_prune test/test_all_image_frame_prune.cpp)
+  target_link_libraries(test_all_image_frame_prune vins_lib)
 endif()
 
 ament_package()

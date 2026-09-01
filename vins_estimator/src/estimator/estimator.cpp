@@ -3435,6 +3435,15 @@ void Estimator::slideWindow()
         // WINDOW_SIZE——>0,,1,2...WINDOW_SIZE-2,WINDOW_SIZE, WINDOW_SIZE
         if (frame_count == WINDOW_SIZE)
         {
+            // [08-31 정지 누수 수정] 버려지는 차차신 프레임의 스탬프를 덮어쓰기 전에 캡처.
+            // all_image_frame 삭제는 MARGIN_OLD 분기에만 있어서, 정지 중(키프레임 미생성 →
+            // 이 분기만 반복)엔 삽입만 15Hz로 무한 누적됐다(분당 ~19MB, 실기 실측).
+            // 비선형 단계에서 이 맵은 초기화 전용이라 버려지는 프레임 항목은 즉시 제거해도
+            // 무영향. INITIAL 단계는 게이트로 제외해 업스트림 동작을 보수적으로 유지한다
+            // (IMU 정렬이 비키프레임을 읽는 경로가 있어 이번 수정 범위에서 손대지 않음).
+            // 수사 정본: doc/ALL_IMAGE_FRAME_LEAK.md
+            const double t_drop = Headers[frame_count - 1];
+
             Headers[frame_count - 1] = Headers[frame_count];
             Ps[frame_count - 1]      = Ps[frame_count];
             Rs[frame_count - 1]      = Rs[frame_count];
@@ -3492,9 +3501,29 @@ void Estimator::slideWindow()
                 linear_velocity_buf_wheel[WINDOW_SIZE].clear();
                 angular_velocity_buf_wheel[WINDOW_SIZE].clear();
             }
+
+            // [08-31 정지 누수 수정] 버려진 프레임 항목 즉시 제거 (위 t_drop 주석 참조).
+            // find 가드: 정상 흐름에선 항상 존재하지만, 재초기화 직후 등 경계에서
+            // 없더라도 무해하게 넘어가도록 방어.
+            if (solver_flag == NON_LINEAR)
+            {
+                auto it_drop = all_image_frame.find(t_drop);
+                if (it_drop != all_image_frame.end())
+                {
+                    delete it_drop->second.pre_integration;
+                    it_drop->second.pre_integration = nullptr;
+                    all_image_frame.erase(it_drop);
+                }
+            }
             slideWindowNew();
         }
     }
+
+    // [08-31 정지 누수 수정 검증용] 상한 유지 확인 진단 — 평시 무음(DEBUG에서만 출력).
+    // 정상 상한 ≈ 윈도우(WINDOW_SIZE+1) + 키프레임 사이 비키프레임 소수. 수백 이상이면 재발.
+    static rclcpp::Clock aif_diag_clk;
+    RCLCPP_DEBUG_THROTTLE(rclcpp::get_logger("vins_aif"), aif_diag_clk, 5000,
+                          "[AIF-SIZE] all_image_frame=%zu", all_image_frame.size());
 }
 
 // real marginalization is removed in solve_ceres()
