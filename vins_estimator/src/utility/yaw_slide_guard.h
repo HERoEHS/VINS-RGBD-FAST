@@ -17,6 +17,7 @@
 //   동일 기계, 축만 z 고정). 슬라이드가 게이지 방향이므로 역회전도 창 내 비용 불변.
 #include <Eigen/Dense>
 #include <cmath>
+#include <vector>
 
 namespace yaw_slide_guard
 {
@@ -111,6 +112,18 @@ inline double cumYawDeviationDeg(double yaw_now_deg, double anchor_deg, double n
 inline bool escalationReached(int amputate_streak, int max)
 {
     return max > 0 && amputate_streak >= max;  // max<=0 = 비활성
+}
+
+// [SW1-1883] 창 분단 판정 — 슬롯 i(1..N)의 사전적분 구간 길이 sum_dt[i]가 게이트(max_dt)를
+//   넘으면 최적화·marg가 그 구간의 IMU·휠 factor를 빼므로 창이 i-1|i 에서 전/후 부분창으로 끊긴다.
+//   진단용(MARG-GUARD 로그의 분단 슬롯). 이를 근거로 절제를 보류하는 안은 v16 A/B에서 기각됐다(doc 참조).
+//   반환: 첫 분단 슬롯 인덱스(1..N), 없으면 -1. sum_dts[0]은 미사용 슬롯이라 검사하지 않는다.
+inline int firstGapSlot(const std::vector<double> &sum_dts, double max_dt)
+{
+    for (size_t i = 1; i < sum_dts.size(); i++)
+        if (sum_dts[i] > max_dt)
+            return static_cast<int>(i);
+    return -1;
 }
 
 }  // namespace yaw_slide_guard

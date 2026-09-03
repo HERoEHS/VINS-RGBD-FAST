@@ -231,6 +231,9 @@ extern double POS_SLIDE_GUARD_THRESH;   // [m]   주행 중 solve당 위치 이�
 extern double YAW_SLIDE_GUARD_STILL_THRESH;  // [rad] 정지 확정 시 문턱(기본 0.1° — pose 고정)
 extern double POS_SLIDE_GUARD_STILL_THRESH;  // [m]   정지 확정 시 문턱(기본 0.005)
 extern int    GUARD_ESCALATION_MAX;     // 정화 없는 연속 prior 절제 상한(0=비활성) — 도달 시 조기 재초기화
+// [SW1-1883] IMU·휠 사전적분 구간 최대 길이[s] — 이보다 긴 구간의 factor는 최적화·marg에서 제외(업스트림
+//   하드코딩 10.0의 YAML 노출). 게이트 탈락 = 창 분단이므로 gaugeSlideGuard의 절제 보류 판정도 이 값을 쓴다.
+extern double PREINT_MAX_DT_S;
 
 // ===== failureDetection 문턱 (SW1-1866 08-10, R1) =====
 //   원래 estimator.cpp::failureDetection()에 매직넘버로 박혀 있던 값들(Day-1 규칙 6 위반).

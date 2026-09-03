@@ -178,7 +178,7 @@ void *ThreadsConstructA(void *threadsstruct)
     return threadsstruct;
 }
 
-void MarginalizationInfo::marginalize()
+bool MarginalizationInfo::marginalize()
 {
     int pos = 0;
     for (auto &it : parameter_block_idx)
@@ -199,6 +199,19 @@ void MarginalizationInfo::marginalize()
     }
 
     n = pos - m;
+
+    // [SW1-1883] 빈 행렬 가드 — 실기 크래시 2건(SW1-1881 사람 통과·SW1-1883 도킹 가림)의 abort 지점.
+    //   MARGIN_OLD에서 Pose[0]/SB[0]을 drop하는 factor가 하나도 없으면 m=0, keep 블록도 없으면 n=0이
+    //   되어 아래 SelfAdjointEigenSolver가 0×0 행렬에서 Eigen assert("empty matrix")로 죽었다.
+    //   n==0: 남길 정보가 없으므로 prior를 만들 수 없다 → false(호출부가 prior를 비운다).
+    //   m==0·n>0: drop할 것이 없을 뿐 정보는 있다 → Schur 보완 없이 A·b 그대로 재선형화(정보 보존).
+    //   원인 사슬(10 s 게이트 창 분단 + 가드 절제)은 estimator.cpp gaugeSlideGuard의 [SW1-1883] 주석 참조.
+    if (n == 0)
+    {
+        ROS_WARN("[MARG-GUARD] keep 블록 없음(m=%d n=%d factors=%d) — prior 생성 생략", m, n,
+                 (int)factors.size());
+        return false;
+    }
 
     // ROS_DEBUG("marginalization, pos: %d, m: %d, n: %d, size: %d", pos, m, n,
     // (int)parameter_block_idx.size());
@@ -272,28 +285,35 @@ void MarginalizationInfo::marginalize()
     // ROS_DEBUG("thread summing up costs %f ms", t_thread_summing.toc());
     // ROS_INFO("A diff %f , b diff %f ", (A - tmp_A).sum(), (b - tmp_b).sum());
 
-    // TODO
-    Eigen::MatrixXd Amm = 0.5 * (A.block(0, 0, m, m) + A.block(0, 0, m, m).transpose());
-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(Amm);
+    // [SW1-1883] m==0이면 drop 대상이 없어 Schur 보완이 정의되지 않는다(0×0 고유분해 = abort).
+    //   A·b가 이미 keep 블록만의 정보행렬이므로 그대로 둔다.
+    if (m == 0)
+        ROS_WARN("[MARG-GUARD] drop 블록 없음(m=0 n=%d factors=%d) — Schur 생략 통과(prior에 Pose[0] 미포함 케이스)",
+                 n, (int)factors.size());
+    if (m > 0)
+    {
+        Eigen::MatrixXd Amm = 0.5 * (A.block(0, 0, m, m) + A.block(0, 0, m, m).transpose());
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(Amm);
 
-    // ROS_ASSERT_MSG(saes.eigenvalues().minCoeff() >= -1e-4, "min eigenvalue %f",
-    // saes.eigenvalues().minCoeff());
+        // ROS_ASSERT_MSG(saes.eigenvalues().minCoeff() >= -1e-4, "min eigenvalue %f",
+        // saes.eigenvalues().minCoeff());
 
-    Eigen::MatrixXd Amm_inv =
-        saes.eigenvectors() *
-        Eigen::VectorXd(
-            (saes.eigenvalues().array() > eps).select(saes.eigenvalues().array().inverse(), 0))
-            .asDiagonal() *
-        saes.eigenvectors().transpose();
-    // printf("error1: %f\n", (Amm * Amm_inv - Eigen::MatrixXd::Identity(m, m)).sum());
+        Eigen::MatrixXd Amm_inv =
+            saes.eigenvectors() *
+            Eigen::VectorXd((saes.eigenvalues().array() > eps)
+                                .select(saes.eigenvalues().array().inverse(), 0))
+                .asDiagonal() *
+            saes.eigenvectors().transpose();
+        // printf("error1: %f\n", (Amm * Amm_inv - Eigen::MatrixXd::Identity(m, m)).sum());
 
-    Eigen::VectorXd bmm = b.segment(0, m);
-    Eigen::MatrixXd Amr = A.block(0, m, m, n);
-    Eigen::MatrixXd Arm = A.block(m, 0, n, m);
-    Eigen::MatrixXd Arr = A.block(m, m, n, n);
-    Eigen::VectorXd brr = b.segment(m, n);
-    A                   = Arr - Arm * Amm_inv * Amr;
-    b                   = brr - Arm * Amm_inv * bmm;
+        Eigen::VectorXd bmm = b.segment(0, m);
+        Eigen::MatrixXd Amr = A.block(0, m, m, n);
+        Eigen::MatrixXd Arm = A.block(m, 0, n, m);
+        Eigen::MatrixXd Arr = A.block(m, m, n, n);
+        Eigen::VectorXd brr = b.segment(m, n);
+        A                   = Arr - Arm * Amm_inv * Amr;
+        b                   = brr - Arm * Amm_inv * bmm;
+    }
 
     Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes2(A);
     Eigen::VectorXd                                S =
@@ -312,6 +332,7 @@ void MarginalizationInfo::marginalize()
     // printf("error2: %f %f\n", (linearized_jacobians.transpose() * linearized_jacobians -
     // A).sum(),
     //       (linearized_jacobians.transpose() * linearized_residuals - b).sum());
+    return true;
 }
 
 std::vector<double *>

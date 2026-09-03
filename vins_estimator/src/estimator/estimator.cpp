@@ -2667,8 +2667,7 @@ void Estimator::optimization()
         for (int i = 0; i < frame_count; i++)  //预积分残差，总数目为frame_count
         {
             int j = i + 1;
-            if (pre_integrations[j]->sum_dt >
-                10.0)  //两图像帧之间时间过长，不使用中间的预积分 tzhang
+            if (pre_integrations[j]->sum_dt > PREINT_MAX_DT_S)  // [SW1-1883] 구간 과대 → 미사용(=창 분단)
                 continue;
             IMUFactor *imu_factor = new IMUFactor(pre_integrations[j]);
             //添加残差格式：残差因子，鲁棒核函数，优化变量（i时刻位姿，i时刻速度与偏置，i+1时刻位姿，i+1时刻速度与偏置）
@@ -2683,7 +2682,7 @@ void Estimator::optimization()
         for (int i = 0; i < frame_count; i++)
         {
             int j = i + 1;
-            if (pre_integrations_wheel[j]->sum_dt > 10.0)  // 간격 과대 시 미사용
+            if (pre_integrations_wheel[j]->sum_dt > PREINT_MAX_DT_S)  // 간격 과대 시 미사용
                 continue;
 
             // [SW1-1837] factor-구간 게이팅: 이 키프레임 구간에 비물리 속도 글리치 샘플이
@@ -3122,7 +3121,7 @@ void Estimator::optimization()
         {
             // imu
             // 预积分部分，基于第0帧与第1帧之间的预积分残差，边缘化第0帧状态向量
-            if (pre_integrations[1]->sum_dt < 10.0)
+            if (pre_integrations[1]->sum_dt < PREINT_MAX_DT_S)
             {
                 IMUFactor         *imu_factor          = new IMUFactor(pre_integrations[1]);
                 ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(
@@ -3137,7 +3136,7 @@ void Estimator::optimization()
         // 휠 preintegration 잔차를 marg에 추가 → para_Pose[0]만 drop (extrinsic/intrinsic/td는 보존)
         if (USE_WHEEL)
         {
-            if (pre_integrations_wheel[1]->sum_dt < 10.0)
+            if (pre_integrations_wheel[1]->sum_dt < PREINT_MAX_DT_S)
             {
                 WheelFactor       *wheel_factor        = new WheelFactor(pre_integrations_wheel[1]);
                 ResidualBlockInfo *residual_block_info = new ResidualBlockInfo(
@@ -3218,7 +3217,13 @@ void Estimator::optimization()
         ROS_DEBUG("pre marginalization %f ms", t_pre_margin.toc());
 
         TicToc t_margin;
-        marginalization_info->marginalize();
+        // [SW1-1883] 빈 행렬 가드 — Pose[0]/SB[0]을 drop하는 factor가 0개(prior 절제/미포함 + 슬롯1 구간
+        //   ≥게이트 + frame-0 비전 0)면 m=n=0으로 Eigen assert abort였다. prior를 못 만들면 비우고 복귀.
+        if (!marginalization_info->marginalize())
+        {
+            discardMarginalizationPrior(marginalization_info, "MARGIN_OLD");
+            return;
+        }
         ROS_DEBUG("marginalization %f ms", t_margin.toc());
 
         //仅仅改变滑窗double部分地址映射，具体值的通过slideWindow和vector2double函数完成；记住边缘化仅仅改变A和b，不改变状态向量
@@ -3288,7 +3293,11 @@ void Estimator::optimization()
 
             TicToc t_margin;
             //            ROS_DEBUG("begin marginalization");
-            marginalization_info->marginalize();
+            if (!marginalization_info->marginalize())  // [SW1-1883] 빈 행렬 가드(MARGIN_OLD와 동일)
+            {
+                discardMarginalizationPrior(marginalization_info, "MARGIN_SECOND_NEW");
+                return;
+            }
             ROS_DEBUG("end marginalization, %f ms", t_margin.toc());
 
             std::unordered_map<long, double *> addr_shift;
@@ -3336,6 +3345,32 @@ void Estimator::optimization()
     ROS_DEBUG("whole marginalization costs: %f", t_whole_marginalization.toc());
 
     ROS_DEBUG("whole time for ceres: %f", t_whole.toc());
+}
+
+// [SW1-1883] 창 분단 판정(진단용) — 게이트 초과 슬롯이 있으면 최적화·marg가 그 구간 factor를 빼 창이 끊긴 상태.
+//   MARG-GUARD 발동 시 로그에 실어 '어느 슬롯에서 끊겼는가'를 실기에서 볼 수 있게 한다. 가드 동작에는 쓰지 않는다
+//   (분단 중 절제 보류안은 v16 A/B에서 902 m 폭주 발행 1건·교차 오차 초과로 기각, doc/MARG_EMPTY_MATRIX_CRASH.md).
+int Estimator::preintGapSlot(double max_dt_s) const
+{
+    std::vector<double> sum_dts(frame_count + 1, 0.0);
+    for (int i = 1; i <= frame_count; i++)
+        if (pre_integrations[i])
+            sum_dts[i] = pre_integrations[i]->sum_dt;
+    return yaw_slide_guard::firstGapSlot(sum_dts, max_dt_s);
+}
+
+// [SW1-1883] marginalize()가 prior를 못 만든(n==0) 경우 — 새 info와 옛 prior 모두 폐기.
+//   옛 prior는 새 info의 factor로 이미 소비됐고(그 정보가 전부 drop 대상이었다는 뜻), 살려 두면
+//   다음 solve가 '슬롯 이동 전 주소'에 묶인 prior를 쓰게 된다. 비운 뒤엔 가드 절제 직후와 같은 상태로
+//   다음 MARGIN_OLD가 IMU·비전 factor로 prior를 재건한다(SW1-1866 운용 중 실증된 경로).
+void Estimator::discardMarginalizationPrior(MarginalizationInfo *info, const char *where)
+{
+    ROS_WARN("[MARG-GUARD] %s: prior 생성 불가(keep 블록 없음) → prior 비움. Headers[0]=%.3f "
+             "gap_slot=%d", where, Headers[0], preintGapSlot(PREINT_MAX_DT_S));
+    delete info;
+    delete last_marginalization_info;
+    last_marginalization_info = nullptr;
+    last_marginalization_parameter_blocks.clear();
 }
 
 // [SW1-1880] static init 자세 부여 — 스탬프 기반 (업스트림 인덱스 루프 교체).

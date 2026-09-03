@@ -67,6 +67,11 @@ public:
     bool relativePose(Matrix3d &relative_R, Vector3d &relative_T, int &l);
 
     void slideWindow();
+    // [SW1-1883] 창 분단 판정(진단) — 슬롯 1..frame_count 중 IMU 사전적분 sum_dt가 max_dt_s를 넘는 첫 슬롯(없으면 -1).
+    //   양수면 최적화·marg가 그 구간 factor를 빼서 창이 끊긴 상태. MARG-GUARD 로그 정보용.
+    int  preintGapSlot(double max_dt_s) const;
+    // [SW1-1883] marginalize()가 prior를 못 만든(n==0) 경우의 공통 정리 — 새 info와 옛 prior를 모두 버린다.
+    void discardMarginalizationPrior(MarginalizationInfo *info, const char *where);
 
     // [SW1-1880] static init 발동 시 all_image_frame 전 항목에 창 자세 부여
     // (processImage에서 분리 — 장부>창 결함의 단위 검증을 위해 메서드화)

@@ -56,7 +56,10 @@ public:
     int                   globalSize(int size) const;
     void                  addResidualBlockInfo(ResidualBlockInfo *residual_block_info);
     void                  preMarginalize();
-    void                  marginalize();
+    // [SW1-1883] 반환값 = 유효한 prior가 만들어졌는가(keep 블록 n>0).
+    //   false면 호출부가 이 info를 버리고 prior를 비워야 한다(MarginalizationFactor 생성 금지 —
+    //   n==0이면 잔차 0개 cost function이 되어 ceres CHECK로 다시 abort).
+    bool                  marginalize();
     std::vector<double *> getParameterBlocks(std::unordered_map<long, double *> &addr_shift);
 
     std::vector<ResidualBlockInfo *>   factors;

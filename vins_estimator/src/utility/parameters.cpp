@@ -80,6 +80,7 @@ double STILL_CUM_XY_MAX = 0.03;
 double STILL_CUM_Z_MAX  = 0.0;  // 0=끔 — yaml 키 없는 구형 config에서 동작 불변(보수 기본)
 double YAW_SLIDE_GUARD_THRESH = 3.0 * M_PI / 180.0;
 int    GUARD_ESCALATION_MAX   = 3;  // 정화 없는 연속 절제 상한(0=비활성) — 조기 재초기화 판정
+double PREINT_MAX_DT_S        = 10.0;  // [SW1-1883] 사전적분 구간 게이트(업스트림 10.0 동일 — 동작 불변 기본)
 double POS_SLIDE_GUARD_THRESH = 0.05;
 double YAW_SLIDE_GUARD_STILL_THRESH = 0.1 * M_PI / 180.0;
 double POS_SLIDE_GUARD_STILL_THRESH = 0.005;
@@ -655,6 +656,17 @@ void readParameters(rclcpp::Node* node)
                         "GUARD_ESCALATION_MAX: %d (정화 없는 연속 prior 절제 상한 — 도달 시 "
                         "조기 재초기화로 폭주 발행 차단)", GUARD_ESCALATION_MAX);
     }
+
+    // ===== [SW1-1883] 사전적분 구간 게이트 — 조건문 밖(가드 on/off와 무관하게 최적화·marg가 쓴다) =====
+    PREINT_MAX_DT_S = fsSettings["preint_max_dt_s"].empty() ? 10.0
+                                                             : (double)fsSettings["preint_max_dt_s"];
+    if (PREINT_MAX_DT_S <= 0.0)
+    {
+        RCLCPP_WARN(node->get_logger(), "preint_max_dt_s=%.3f 비정상(<=0) → 기본 10.0 사용", PREINT_MAX_DT_S);
+        PREINT_MAX_DT_S = 10.0;
+    }
+    RCLCPP_INFO(node->get_logger(), "PREINT_MAX_DT_S: %.1f s (사전적분 구간 게이트 — 초과 구간은 IMU·휠 "
+                "factor 제외 = 창 분단; 가드 절제 보류 판정 공용)", PREINT_MAX_DT_S);
 
     // ===== failureDetection 문턱 (SW1-1866 08-10, R1) =====
     //   ⚠️어떤 조건문 안에도 넣지 않는다 — 과거 정지 판정이 조건부 로드되는 남의 파라미터

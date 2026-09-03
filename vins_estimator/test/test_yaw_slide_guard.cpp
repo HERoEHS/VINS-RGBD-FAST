@@ -183,3 +183,15 @@ int main(int argc, char **argv)
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// [SW1-1883] 창 분단 판정 헬퍼 — 슬롯 0 제외, 첫 초과 슬롯 반환, 경계값(=)은 분단 아님
+TEST(YawSlideGuard, FirstGapSlot)
+{
+    EXPECT_EQ(ysg::firstGapSlot({0.0, 0.1, 0.1, 0.1}, 10.0), -1);
+    EXPECT_EQ(ysg::firstGapSlot({99.0, 0.1, 0.1}, 10.0), -1) << "슬롯 0은 미사용";
+    EXPECT_EQ(ysg::firstGapSlot({0.0, 167.0, 0.2}, 10.0), 1);
+    EXPECT_EQ(ysg::firstGapSlot({0.0, 0.2, 0.2, 30.0, 40.0}, 10.0), 3) << "첫 초과 슬롯";
+    EXPECT_EQ(ysg::firstGapSlot({0.0, 10.0}, 10.0), -1) << "경계값은 게이트 통과(> 기준)";
+    EXPECT_EQ(ysg::firstGapSlot({}, 10.0), -1);
+    EXPECT_EQ(ysg::firstGapSlot({5.0}, 10.0), -1);
+}
