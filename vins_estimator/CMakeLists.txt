@@ -227,6 +227,10 @@ if(BUILD_TESTING)
   # [SW1-1883] 마지널라이즈 빈 행렬 가드 + 창 분단 판정 — 회귀 테스트
   ament_add_gtest(test_marginalization_empty test/test_marginalization_empty.cpp)
   target_link_libraries(test_marginalization_empty vins_lib)
+
+  # [SW1-1883 후속] 슬롯 적분 상한 강제 키프레임 — 회귀 테스트
+  ament_add_gtest(test_preint_slot_cap test/test_preint_slot_cap.cpp)
+  target_link_libraries(test_preint_slot_cap vins_lib)
 endif()
 
 ament_package()

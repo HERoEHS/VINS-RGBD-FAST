@@ -1,4 +1,5 @@
 #include "estimator.h"
+#include "../utility/preint_gate.h"
 #include "../utility/visualization.h"
 #include "../utility/reboot_seed.h"
 #include "../utility/hf_predict.h"
@@ -376,6 +377,9 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
         marginalization_flag = MARGIN_OLD;
     else
         marginalization_flag = MARGIN_SECOND_NEW;
+    // [SW1-1883 후속] 슬롯 적분 상한 — 정지 중 SECOND_NEW 누적이 게이트에 닿아 창이 끊기기 전에 키프레임 강제
+    if (marginalization_flag == MARGIN_SECOND_NEW && applyPreintSlotCap())
+        marginalization_flag = MARGIN_OLD;
 
     ROS_DEBUG("%s", marginalization_flag ? "Non-keyframe" : "Keyframe");
     ROS_DEBUG("Solving %d", frame_count);
@@ -3345,6 +3349,30 @@ void Estimator::optimization()
     ROS_DEBUG("whole marginalization costs: %f", t_whole_marginalization.toc());
 
     ROS_DEBUG("whole time for ceres: %f", t_whole.toc());
+}
+
+// [SW1-1883 후속] 슬롯 적분 상한 강제 키프레임 — 판정은 preint_gate::shouldForceKeyframe(순수), 여기는 상태 바인딩.
+//   INITIAL은 미적용(초기화 경로의 키프레임 정책은 업스트림 유지, SW1-1879와 같은 보수 원칙).
+bool Estimator::applyPreintSlotCap()
+{
+    if (solver_flag != NON_LINEAR || frame_count != WINDOW_SIZE)
+        return false;
+    if (!pre_integrations[WINDOW_SIZE - 1])
+        return false;
+    // 이 시점엔 이번 프레임의 IMU 적분이 아직 슬롯 WINDOW_SIZE에 들어오기 전이라 슬롯 9 누적만 본다.
+    const double prev_dt = pre_integrations[WINDOW_SIZE - 1]->sum_dt;
+    if (!preint_gate::shouldForceKeyframe(prev_dt, KEYFRAME_FORCE_PREINT_DT_S))
+        return false;
+    preint_cap_force_cnt_++;
+    const double now = Headers[frame_count];
+    if (now - preint_cap_last_warn_t_ > 1.0)
+    {
+        preint_cap_last_warn_t_ = now;
+        RCLCPP_INFO(rclcpp::get_logger("vins_preint_cap"),
+                    "[PREINT-CAP] t=%.3f 슬롯9 누적 %.1fs > 상한 %.1fs → 키프레임 강제(누적 %ld)",
+                    now, prev_dt, KEYFRAME_FORCE_PREINT_DT_S, preint_cap_force_cnt_);
+    }
+    return true;
 }
 
 // [SW1-1883] 창 분단 판정(진단용) — 게이트 초과 슬롯이 있으면 최적화·marg가 그 구간 factor를 빼 창이 끊긴 상태.

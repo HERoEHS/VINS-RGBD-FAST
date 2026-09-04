@@ -1,6 +1,6 @@
 # 마지널라이즈 빈 행렬 크래시(m=0 abort) — 수사 보고서
 
-> 작성: 2026-09-04 · 상태: **D1+ⓒ 구현·회귀 테스트·음성검증·critic 2회·bag A/B(최종 바이너리) — ⓑ는 A/B 반례로 기각·분리** (TASK-20260904-vins-marg-empty-guard) · 이슈: **SW1-1883 = SW1-1881(동일 결함)** · 귀책: **업스트림 상속**(marginalize() m=0 무가드·10 s 게이트·SECOND_NEW 누적 모두 VINS-Mono 계열 원형) + 우리 gauge guard(SW1-1866)가 방아쇠를 키움
+> 작성: 2026-09-04 · 상태: **D1+ⓒ 머지(bc359e7) → 4번 처방 1순위 '게이트 300 + 슬롯 상한 키프레임' 구현·A/B 완료(TASK-20260904-vins-preint-gate-slot-cap, 머지 대기)** — ⓑ는 A/B 반례로 기각·분리
 
 ## 요약
 
@@ -39,8 +39,9 @@ drop하는 factor가 하나도 없어야 m=0이 되므로, 아래 세 조건이 
 | 증상·필수 | **D1** `marginalize()` m/n 분기 — n==0(keep 없음)이면 `false` 반환, 호출부 `discardMarginalizationPrior()`가 새 info·옛 prior 폐기·`MarginalizationFactor` 생성 금지(n==0 factor는 잔차 0개 → ceres CHECK 재abort). m==0·n>0은 Schur 생략 통과(정보 보존). | `marginalization_factor.{h,cpp}`, `estimator.cpp` MARGIN_OLD/SECOND_NEW 호출부 |
 | 근본 일부(기각) | **ⓑ** 분단 중 비강체 절제 보류 — 구현·A/B했으나 **기각**: 최종 바이너리 v16 3-run에서 교차 xy 0.040 m > B내부 0.027(무손실 미달), r2에서 **902 m 폭주 pose 1회 발행**(보류 → 누적 클램프 0.227 m → 강체 5연속 경로 절제 → 분단 중 prior 소실로 전 부분창 완전 자유 → 폭주 → STILL-DRIFT 재부팅). 보류를 절제 횟수에 안 세니 escalation 백스톱이 늦어진 것이 노출 증가 원인. 분단 중 모든 절제 경로 보류(3-3)와 묶어 별도 태스크. | 코드 제거, `preintGapSlot()`은 진단(MARG-GUARD 로그)용으로만 잔존 |
 | 규약 | **ⓒ** 하드코딩 10.0 4곳 → YAML `preint_max_dt_s`(기본 10.0, 동작 불변) | `parameters.{h,cpp}`, `vio_edie.yaml` |
-| 근본 | ⓐ 게이트 탈락 구간의 체인 대체(휠·still-lock·약한 상대 prior)를 최적화·marg 양쪽에 남겨 m>0 보장 | 별도 설계 |
-| 예방 | D2(i) 슬롯 9 적분 상한 강제 키프레임 / D2(ii) 특징 0개 프레임 전달(NON_LINEAR 한정) — 정지 창 회전 부작용, v16 bag A/B 필수 | 별도 태스크 |
+| **1순위(09-04 실험)** | **게이트 상향 + 슬롯 적분 상한 강제 키프레임** — `preint_max_dt_s` 300 + `keyframe_force_preint_dt_s`(슬롯 9 누적이 상한을 넘은 다음 프레임을 MARGIN_OLD로 강제, NON_LINEAR 한정). 분단 실험(`bag/analysis/sw1883`): 게이트 10→1000만으로 v16 재부팅 3/3→0/3·정지 중 Bg 요동 10~30배↓·무손실(기전: 분단되면 뒤쪽 창 Bg를 잡는 관측이 0.1 s gyro뿐 → 관측 한계 ≈5 mrad/s). 태스크 A/B(같은 바이너리): 게이트 10 그룹 재부팅 5/6(정지 드리프트 2·escalation 1·Ba 폭주 1) vs 300 그룹 0/6, 상한 20 s 강제 발동 4회/런에도 위치 튐 ≤3 mm(잡음 수준). **한계**: 상한은 경로 (a) SECOND_NEW 누적만 묶고 경로 (b) 특징 0개 프레임 미전달 구간(슬롯 10에 통째)은 게이트 300 + D1이 백스톱. 채택 기본값 300/30(사용자 승인 09-04): 30 s 상한은 v16에서 2회/런 실발동(214·351 s, 런 간 동일 시각)·위치 튐 잡음 수준. 미검증 = 60 s 상한(이 bag 최장 누적 ≈28 s라 미발동)·장기 정지(≥167 s)·도킹 가림·오염 진행 중 회전. 판정 규칙: 대조군에 재부팅이 있으면 전 구간 교차 대신 '첫 재부팅 전 구간 교차 ≤ 대조 내부 + 참값 창 동등'으로(재부팅 앵커 재배치 ~0.1 m가 교차를 부풀림). 3-run 쌍별 해상도 ≈2 cm. 1000 s 게이트는 dp/dbg≈g·t³/6 성장으로 금지. | `utility/preint_gate.h`, `applyPreintSlotCap()` |
+| 근본→보강 | ⓐ 게이트 탈락 구간의 체인 대체(휠·still-lock·약한 상대 prior)를 최적화·marg 양쪽에 남겨 m>0 보장 | 별도 설계 — 게이트 300을 넘는 아주 긴 정지용 보강으로 순위 하향 | 별도 설계 |
+| 예방 | D2(i) 슬롯 9 적분 상한 강제 키프레임 → 위 1순위로 구현 / D2(ii) 특징 0개 프레임 전달(NON_LINEAR 한정) — 정지 창 회전 부작용, v16 bag A/B 필수 | 별도 태스크 |
 | 방아쇠 | D3 휠 헛돎 오염원 취급(도킹 제안) — m=0 사슬과 무관. 기준은 dl≫dr이 아니라 휠 yaw vs gyro yaw 불일치 | 도킹 품질 |
 
 **D1의 주장 범위 = "abort → 생존"까지.** D1 후 solve는 prior 없이 돈다. 이것이 무해하다는 증거는 없다 — 반대로 ⓑ A/B의 A3 r2가

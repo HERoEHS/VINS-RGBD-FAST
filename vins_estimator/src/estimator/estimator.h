@@ -70,6 +70,9 @@ public:
     // [SW1-1883] 창 분단 판정(진단) — 슬롯 1..frame_count 중 IMU 사전적분 sum_dt가 max_dt_s를 넘는 첫 슬롯(없으면 -1).
     //   양수면 최적화·marg가 그 구간 factor를 빼서 창이 끊긴 상태. MARG-GUARD 로그 정보용.
     int  preintGapSlot(double max_dt_s) const;
+    // [SW1-1883 후속] 슬롯 적분 상한 강제 키프레임 — SECOND_NEW로 판정된 프레임이 슬롯 WINDOW_SIZE-1 누적을
+    //   KEYFRAME_FORCE_PREINT_DT_S를 이미 넘었으면 true(호출부가 MARGIN_OLD로 전환). NON_LINEAR·창 충만 시만.
+    bool applyPreintSlotCap();
     // [SW1-1883] marginalize()가 prior를 못 만든(n==0) 경우의 공통 정리 — 새 info와 옛 prior를 모두 버린다.
     void discardMarginalizationPrior(MarginalizationInfo *info, const char *where);
 
@@ -197,6 +200,8 @@ public:
     double   yaw_guard_prev_yaw_deg_{0.0};
     Vector3d yaw_guard_prev_pos_{Vector3d::Zero()};
     long     yaw_guard_trigger_cnt_{0};
+    long     preint_cap_force_cnt_{0};  // [SW1-1883 후속] 슬롯 상한 강제 키프레임 누적 횟수(진단)
+    double   preint_cap_last_warn_t_{-1.0};
     int      yaw_guard_consec_{0};      // 연속 발동 solve 수 — 오염 지속 판정(절제 트리거)
     double   yaw_guard_last_warn_t_{-1.0e18};
     int      guard_amputate_streak_{0};      // 정화(무이상 solve) 없는 연속 절제 횟수

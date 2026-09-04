@@ -234,6 +234,9 @@ extern int    GUARD_ESCALATION_MAX;     // 정화 없는 연속 prior 절제 상
 // [SW1-1883] IMU·휠 사전적분 구간 최대 길이[s] — 이보다 긴 구간의 factor는 최적화·marg에서 제외(업스트림
 //   하드코딩 10.0의 YAML 노출). 게이트 탈락 = 창 분단이므로 gaugeSlideGuard의 절제 보류 판정도 이 값을 쓴다.
 extern double PREINT_MAX_DT_S;
+// [SW1-1883 후속] 슬롯 적분 상한[s] — 다음 SECOND_NEW로 슬롯 WINDOW_SIZE-1 누적이 이 값을 넘으면 키프레임 강제.
+//   0=끔(업스트림 동작). 게이트(PREINT_MAX_DT_S)보다 충분히 작게 두어 창 분단을 원천 차단하는 용도.
+extern double KEYFRAME_FORCE_PREINT_DT_S;
 
 // ===== failureDetection 문턱 (SW1-1866 08-10, R1) =====
 //   원래 estimator.cpp::failureDetection()에 매직넘버로 박혀 있던 값들(Day-1 규칙 6 위반).

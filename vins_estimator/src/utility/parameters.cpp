@@ -81,6 +81,7 @@ double STILL_CUM_Z_MAX  = 0.0;  // 0=끔 — yaml 키 없는 구형 config에서
 double YAW_SLIDE_GUARD_THRESH = 3.0 * M_PI / 180.0;
 int    GUARD_ESCALATION_MAX   = 3;  // 정화 없는 연속 절제 상한(0=비활성) — 조기 재초기화 판정
 double PREINT_MAX_DT_S        = 10.0;  // [SW1-1883] 사전적분 구간 게이트(업스트림 10.0 동일 — 동작 불변 기본)
+double KEYFRAME_FORCE_PREINT_DT_S = 0.0;  // [SW1-1883 후속] 슬롯 적분 상한 강제 키프레임(0=끔 — 동작 불변 기본)
 double POS_SLIDE_GUARD_THRESH = 0.05;
 double YAW_SLIDE_GUARD_STILL_THRESH = 0.1 * M_PI / 180.0;
 double POS_SLIDE_GUARD_STILL_THRESH = 0.005;
@@ -666,7 +667,18 @@ void readParameters(rclcpp::Node* node)
         PREINT_MAX_DT_S = 10.0;
     }
     RCLCPP_INFO(node->get_logger(), "PREINT_MAX_DT_S: %.1f s (사전적분 구간 게이트 — 초과 구간은 IMU·휠 "
-                "factor 제외 = 창 분단; 가드 절제 보류 판정 공용)", PREINT_MAX_DT_S);
+                "factor 제외 = 창 분단; MARG-GUARD 진단 공용)", PREINT_MAX_DT_S);
+    // [SW1-1883 후속] 슬롯 적분 상한 — 조건문 밖(가드 on/off 무관)
+    KEYFRAME_FORCE_PREINT_DT_S = fsSettings["keyframe_force_preint_dt_s"].empty()
+                                     ? 0.0 : (double)fsSettings["keyframe_force_preint_dt_s"];
+    if (KEYFRAME_FORCE_PREINT_DT_S < 0.0)
+        KEYFRAME_FORCE_PREINT_DT_S = 0.0;
+    if (KEYFRAME_FORCE_PREINT_DT_S > 0.0 && KEYFRAME_FORCE_PREINT_DT_S >= PREINT_MAX_DT_S)
+        RCLCPP_WARN(node->get_logger(), "keyframe_force_preint_dt_s(%.1f) >= preint_max_dt_s(%.1f) — 상한이 게이트보다 "
+                    "커서 분단 차단 효과 없음(설정 재검토)", KEYFRAME_FORCE_PREINT_DT_S, PREINT_MAX_DT_S);
+    RCLCPP_INFO(node->get_logger(), "KEYFRAME_FORCE_PREINT_DT_S: %.1f s (%s — 슬롯 누적 적분이 이 값을 넘기 전에 "
+                "키프레임 강제, 창 분단 원천 차단)", KEYFRAME_FORCE_PREINT_DT_S,
+                KEYFRAME_FORCE_PREINT_DT_S > 0.0 ? "활성" : "비활성");
 
     // ===== failureDetection 문턱 (SW1-1866 08-10, R1) =====
     //   ⚠️어떤 조건문 안에도 넣지 않는다 — 과거 정지 판정이 조건부 로드되는 남의 파라미터
