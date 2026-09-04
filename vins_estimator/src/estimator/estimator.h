@@ -67,6 +67,10 @@ public:
     bool relativePose(Matrix3d &relative_R, Vector3d &relative_T, int &l);
 
     void slideWindow();
+    // [SW1-1883 후속] 스탬프 간극 재시작 요청 — 콜백 스레드가 세우고(잠금 없음), processImage의 IMU 대기 루프가
+    //   보면 즉시 반환, 백엔드 스레드가 다음 프레임 전에 자기 잠금 아래에서 clearState. 콜백에서 m_backend를 잡으면
+    //   백엔드가 IMU를 기다리며 잠금을 쥔 상태라 교착(09-04 GON 1차 실증).
+    std::atomic<bool> reset_request_{false};
     // [SW1-1883] 창 분단 판정(진단) — 슬롯 1..frame_count 중 IMU 사전적분 sum_dt가 max_dt_s를 넘는 첫 슬롯(없으면 -1).
     //   양수면 최적화·marg가 그 구간 factor를 빼서 창이 끊긴 상태. MARG-GUARD 로그 정보용.
     int  preintGapSlot(double max_dt_s) const;

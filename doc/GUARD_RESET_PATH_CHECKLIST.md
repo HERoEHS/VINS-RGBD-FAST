@@ -95,6 +95,7 @@
 | 가드 | 누적 상태 | 점검 상태 |
 |---|---|---|
 | 4선 에스컬레이션 | 연속 절제 streak, 정화 판정 | ✅ 사례 1로 발견·수정(`179807f`) |
+| IMU/휠 스탬프 간극 가드(09-04) | 콜백 `last_imu_t`/`last_wheel_t`, `estimator.reset_request_`(atomic), `tracker_reset_request_` | 리셋 경로: 콜백은 요청만, 백엔드 `consumeResetRequest()`가 시드 캡처→clearState→feature_buf 비움→트래커 리셋. **한계(Q3)**: 이미지 불연속 경로는 별도 리셋(시드 무캡처·`last_imu_t=0`)이라 이미지·IMU 동시 점프(NTP 스텝) 시 순서 경쟁 — 통일은 이연. **갭(Q7)**: 후방 점프 통합 실증 0건(전방은 GON/GOFF 쌍으로 실증). 휠 가드는 기본 끔. |
 | 누적 변위 가드 (xy/z) | 앵커 위치, 정지 연속 카운터 | ✅ 계승 설계로 선취(사례 4), v13 검증 |
 | bgz_lock | 잠금 상태, 수렴 판정 이력 | ✅ 08-03 점검: clearState가 6상태 전부 리셋(locked·tracker·rest·잠금값·재잠금시각) — 낡은 잠금 생존 없음 |
 | gaugeSlideGuard | 연속 발동 카운터(절제 조건) | 부분 — 사례 1 수정이 이 카운터의 리셋 경로였음, 잔여 경로 전수는 미확인 |

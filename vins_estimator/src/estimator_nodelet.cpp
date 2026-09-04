@@ -1,3 +1,5 @@
+#include <atomic>
+#include "utility/imu_gap.h"
 #include <condition_variable>
 #include <cv_bridge/cv_bridge.h>
 #include <map>
@@ -159,12 +161,47 @@ private:
 
     double last_imu_t   = 0;
     double last_wheel_t = 0;
+    // [SW1-1883 후속] 스탬프 간극 재시작 — 콜백 스레드에서 추정기를 비우고, 트래커 스레드 소유 플래그는
+    //   원자 요청으로 넘겨 그 스레드가 스스로 리셋한다(이미지 불연속 경로와 동일 결과, 데이터 경합 없음).
+    std::atomic<bool> tracker_reset_request_{false};
+    long              gap_restart_cnt_{0};
+    // 콜백 스레드: 잠금 없이 요청만 세운다. 실제 리셋은 백엔드 스레드(consumeResetRequest)가 수행.
+    void restartEstimatorOnGap(const char *src, double prev_t, double now_t, double max_gap)
+    {
+        gap_restart_cnt_++;
+        RCLCPP_WARN(get_logger(), "[%s-GAP] Δt=%+.2fs (prev %.3f → now %.3f, 상한 %.1fs) → 추정기 재시작 요청(누적 %ld)",
+                    src, now_t - prev_t, prev_t, now_t, max_gap, gap_restart_cnt_);
+        estimator.reset_request_ = true;
+    }
+    // 백엔드 스레드: m_backend를 쥔 채 호출. 이미지 불연속 재시작과 같은 정리 + 트래커 리셋 요청.
+    bool consumeResetRequest()
+    {
+        if (!estimator.reset_request_.load()) return false;
+        // 플래그는 clearState '뒤'에 내린다 — 먼저 내리면 clearState까지의 수백 µs~ms 동안 solver_flag가 아직
+        //   NON_LINEAR라 inputIMU 예측 게이트가 열려 점프 샘플 1개가 전파·발행될 수 있다(critic 지적).
+        RCLCPP_WARN(get_logger(), "[GAP-RESET] restart the estimator (seed capture + clearState)");
+        // failureDetection 재부팅과 동일하게 clearState '전'에 시드(앵커·정화 pose)를 캡처해 재init 착지를 계승한다.
+        //   GON 1차 실측: 시드 없이 clearState만 하면 재init 착지가 직전 위치에서 0.21 m 어긋남.
+        if (USE_REBOOT_POSE_SEED && estimator.solver_flag == Estimator::NON_LINEAR)
+            estimator.captureRebootSeed(estimator.Headers[estimator.frame_count]);
+        estimator.clearState();
+        estimator.setParameter();
+        m_feature.lock();
+        while (!feature_buf.empty()) feature_buf.pop();
+        m_feature.unlock();
+        estimator.reset_request_ = false;  // clearState 뒤 → 이후는 INITIAL이 예측 게이트를 막는다
+        tracker_reset_request_ = true;
+        return true;
+    }
 
     void imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr &imu_msg)
     {
         if (!imu_msg) return;
         double t = rclcpp::Time(imu_msg->header.stamp).seconds();
-        if (t <= last_imu_t)
+        const auto v = imu_gap::classify(last_imu_t, t, IMU_GAP_MAX_S);
+        if (imu_gap::needsRestart(v))
+            restartEstimatorOnGap("IMU", last_imu_t, t, IMU_GAP_MAX_S);  // 이 샘플부터 새로 시작
+        else if (v == imu_gap::Verdict::kDisorder)
         {
             RCLCPP_WARN(get_logger(), "imu message in disorder! %f", t);
             return;
@@ -184,7 +221,10 @@ private:
     {
         if (!wheel_msg) return;
         double t = rclcpp::Time(wheel_msg->header.stamp).seconds();
-        if (t <= last_wheel_t)
+        const auto v = imu_gap::classify(last_wheel_t, t, WHEEL_GAP_MAX_S);
+        if (imu_gap::needsRestart(v))
+            restartEstimatorOnGap("WHEEL", last_wheel_t, t, WHEEL_GAP_MAX_S);
+        else if (v == imu_gap::Verdict::kDisorder)
         {
             RCLCPP_WARN(get_logger(), "wheel message in disorder! %f", t);
             return;
@@ -325,6 +365,14 @@ private:
                     continue;
                 }
 
+                // [SW1-1883 후속] 스탬프 간극 재시작 요청 소비 — 이미지 불연속과 같은 트래커 리셋
+                if (tracker_reset_request_.exchange(false))
+                {
+                    RCLCPP_WARN(get_logger(), "스탬프 간극 재시작 → reset the feature tracker!");
+                    first_image_flag = true;
+                    last_image_time  = 0;
+                    pub_count        = 1;
+                }
                 if (first_image_flag)
                 {
                     first_image_flag = false;
@@ -522,6 +570,11 @@ private:
 
             TicToc t_backend;
             m_backend.lock();
+            if (consumeResetRequest())  // [SW1-1883 후속] 스탬프 간극 재시작 — 이 프레임은 버림
+            {
+                m_backend.unlock();
+                continue;
+            }
 
             sensor_msgs::msg::PointCloud::ConstSharedPtr relo_msg = nullptr;
             while (!relo_buf.empty())

@@ -237,6 +237,10 @@ extern double PREINT_MAX_DT_S;
 // [SW1-1883 후속] 슬롯 적분 상한[s] — 다음 SECOND_NEW로 슬롯 WINDOW_SIZE-1 누적이 이 값을 넘으면 키프레임 강제.
 //   0=끔(업스트림 동작). 게이트(PREINT_MAX_DT_S)보다 충분히 작게 두어 창 분단을 원천 차단하는 용도.
 extern double KEYFRAME_FORCE_PREINT_DT_S;
+// [SW1-1883 후속] IMU/휠 스탬프 간극 상한[s] — 직전 샘플 대비 Δt가 이 값을 넘거나(전방 점프) −이 값 미만이면(후방 점프)
+//   이미지 불연속과 같은 경로로 추정기 재시작. 0=끔(기존: 역행 샘플만 폐기). 휠은 녹화 중 CM 정지(0.8~1.5 s)가 있어 기본 끔.
+extern double IMU_GAP_MAX_S;
+extern double WHEEL_GAP_MAX_S;
 
 // ===== failureDetection 문턱 (SW1-1866 08-10, R1) =====
 //   원래 estimator.cpp::failureDetection()에 매직넘버로 박혀 있던 값들(Day-1 규칙 6 위반).

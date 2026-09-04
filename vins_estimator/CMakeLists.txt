@@ -231,6 +231,9 @@ if(BUILD_TESTING)
   # [SW1-1883 후속] 슬롯 적분 상한 강제 키프레임 — 회귀 테스트
   ament_add_gtest(test_preint_slot_cap test/test_preint_slot_cap.cpp)
   target_link_libraries(test_preint_slot_cap vins_lib)
+
+  # [SW1-1883 후속] IMU/휠 스탬프 간극 판정 — 헤더 단독 순수 함수 테스트
+  ament_add_gtest(test_imu_gap test/test_imu_gap.cpp)
 endif()
 
 ament_package()

@@ -392,6 +392,14 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
 
         while (!IMUAvailable(curTime))
         {
+            // [SW1-1883 후속] 스탬프 간극 재시작 요청 — 이 프레임은 버리고 즉시 반환(백엔드가 clearState 수행).
+            //   전방 점프는 push된 점프 샘플로 IMUAvailable이 참이 되어 이 검사를 거치지 않고(경계 샘플 1개만 적분, 무해)
+            //   다음 프레임의 consumeResetRequest가 막는다. 이 검사가 실제로 필요한 건 **후방 점프**(IMUAvailable 영구 거짓)다.
+            if (reset_request_.load())
+            {
+                ROS_WARN("[IMU-GAP] 재시작 요청 수신 — 프레임 %.3f 처리 중단", curTime);
+                return;
+            }
             printf("waiting for imu ... \r");
             std::chrono::milliseconds dura(2);
             std::this_thread::sleep_for(dura);
@@ -423,6 +431,11 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
 
         while (!WheelAvailable(curTime_w))
         {
+            if (reset_request_.load())  // [SW1-1883 후속] 휠 후방 점프 시 영구 대기 방지(IMU와 미러)
+            {
+                ROS_WARN("[WHEEL-GAP] 재시작 요청 수신 — 프레임 %.3f 처리 중단", curTime_w);
+                return;
+            }
             printf("waiting for wheel ... \r");
             std::chrono::milliseconds dura(2);
             std::this_thread::sleep_for(dura);
@@ -3678,7 +3691,9 @@ void Estimator::inputIMU(double t, const Vector3d &linearAcceleration,
     //     make_pair(t, make_pair(linearAcceleration, angularVelocity)));
     m_imu.unlock();
 
-    if (solver_flag == Estimator::SolverFlag::NON_LINEAR)
+    // [SW1-1883 후속] 스탬프 간극 재시작 요청 중엔 HF 예측·발행 차단 — 점프 샘플로 predict하면 dt=점프폭(5~37 s)의
+    //   전파 pose가 imu_propagate/HF TF로 그대로 나가 도킹 컨트롤러에 닿는다(critic B-3). clearState 뒤엔 INITIAL이라 자동 차단.
+    if (solver_flag == Estimator::SolverFlag::NON_LINEAR && !reset_request_.load())
     {
         // predict imu (no residual error)
         m_propagate.lock();
