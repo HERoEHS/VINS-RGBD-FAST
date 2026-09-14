@@ -47,7 +47,7 @@ TEST(DepthAdoptProbe, ObsHasDepthRange)
     EXPECT_FALSE(obsHasDepth(-1.0, 2.5));
 }
 
-// 행 형식이 오프라인 파서 규약(공백 구분, 접두 S/A/O, O 끝에 verified 0/1)과 일치한다.
+// 행 형식이 오프라인 파서 규약(공백 구분, 접두 S/A/O, O 끝에 verified 통과 횟수)과 일치한다.
 TEST(DepthAdoptProbe, RowFormats)
 {
     Counts c;
@@ -58,9 +58,9 @@ TEST(DepthAdoptProbe, RowFormats)
     c.flag1 = 3;
     EXPECT_EQ(formatSummary(1.5, c), "S 1.500000 3 4 5 12 3");
     EXPECT_EQ(formatAdopt(1.5, 7, 1.23456), "A 1.500000 7 1.2346");
-    EXPECT_EQ(formatObs(1.5, 7, 1.25, 10.04, 20.06, 0.5, true),
-              "O 1.500000 7 1.250000 10.0 20.1 0.5000 1");
-    EXPECT_EQ(formatObs(1.5, 7, 1.25, 10.04, 20.06, 0.5, false),
+    EXPECT_EQ(formatObs(1.5, 7, 1.25, 10.04, 20.06, 0.5, 3),
+              "O 1.500000 7 1.250000 10.0 20.1 0.5000 3");
+    EXPECT_EQ(formatObs(1.5, 7, 1.25, 10.04, 20.06, 0.5, 0),
               "O 1.500000 7 1.250000 10.0 20.1 0.5000 0");
 }
 
@@ -72,7 +72,7 @@ TEST(DepthAdoptProbe, LoggerWritesOncePerIdAndResets)
         Logger lg(path);
         ASSERT_TRUE(lg.enabled());
         EXPECT_TRUE(lg.adopt(1.0, 7, 0.9));
-        lg.obs(1.0, 7, 0.9, 1.0, 2.0, 0.9, true);
+        lg.obs(1.0, 7, 0.9, 1.0, 2.0, 0.9, 2);
         EXPECT_FALSE(lg.adopt(1.1, 7, 0.9));  // 중복 억제
         lg.reset();
         EXPECT_TRUE(lg.adopt(1.2, 7, 0.9));

@@ -3029,7 +3029,7 @@ void Estimator::optimization()
                     if (depth_adopt_probe::obsHasDepth(obs.depth, DEPTH_MAX_DIST))
                         depth_adopt_log_.obs(Headers[WINDOW_SIZE], it_per_id.feature_id,
                                              Headers[imu_i + static_cast<int>(k)], obs.uv.x(),
-                                             obs.uv.y(), obs.depth, obs.depth_verified);
+                                             obs.uv.y(), obs.depth, obs.depth_verified_cnt);
                 }
             }
         }

@@ -11,8 +11,9 @@
 //   S <t> <fixed> <tri> <rough> <total> <flag1>            최적화 1회 요약: 잔차 참여 특징 중 depth 고정(flag 1 && FIX_DEPTH) /
 //                                                          삼각측량(flag 2) / 그 외 수, flag1 = FIX_DEPTH 와 무관한 flag 1 수
 //   A <t> <id> <depth_m>                                    처음 고정 채택된 특징(한 번만). depth_m 은 앵커 프레임으로 옮긴 verified 평균
-//   O <t> <id> <frame_stamp> <u> <v> <depth_m> <verified>   그 특징의 관측 중 0 < depth ≤ max_dist 인 것. verified=1 이면
-//                                                          재투영 교차검증을 통과해 채택값(A 의 depth_m)에 실제로 기여한 관측
+//   O <t> <id> <frame_stamp> <u> <v> <depth_m> <verified>   그 특징의 관측 중 0 < depth ≤ max_dist 인 것. verified = 재투영
+//                                                          교차검증 통과 횟수(0 = 후보였을 뿐). 채택값은 이 횟수로 가중된 평균이므로
+//                                                          나이도 이 값을 가중치로 집계한다
 #include <cstdio>
 #include <fstream>
 #include <set>
@@ -65,11 +66,11 @@ inline std::string formatAdopt(double t, int id, double depth_m)
 }
 
 inline std::string formatObs(double t, int id, double frame_stamp, double u, double v,
-                             double depth_m, bool verified)
+                             double depth_m, int verified_cnt)
 {
     char buf[160];
     std::snprintf(buf, sizeof(buf), "O %.6f %d %.6f %.1f %.1f %.4f %d", t, id, frame_stamp, u, v,
-                  depth_m, verified ? 1 : 0);
+                  depth_m, verified_cnt);
     return buf;
 }
 
@@ -99,10 +100,10 @@ public:
         return true;
     }
     void obs(double t, int id, double frame_stamp, double u, double v, double depth_m,
-             bool verified)
+             int verified_cnt)
     {
         if (enabled())
-            out_ << formatObs(t, id, frame_stamp, u, v, depth_m, verified) << '\n';
+            out_ << formatObs(t, id, frame_stamp, u, v, depth_m, verified_cnt) << '\n';
     }
     void summary(double t, const Counts &c)
     {

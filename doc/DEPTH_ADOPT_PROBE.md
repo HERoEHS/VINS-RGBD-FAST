@@ -10,13 +10,13 @@ VINS 닫힌루프 오차는 SGBM과 구분되지 않았다(0.91 vs 0.89 %, edie_
 환경변수 `VINS_DEPTH_ADOPT_LOG=<파일경로>` 가 있으면 최적화(`Estimator::optimization`)마다 파일에 기록한다. 없으면 완전 no-op(기본).
 로직 변경은 없고 기록만 한다. 구현: `vins_estimator/src/utility/depth_adopt_probe.h`(순수 함수 + `Logger`),
 훅은 `estimator.cpp` 재투영 잔차 루프(`estimate_flag == 1 && FIX_DEPTH` 가 파라미터 블록을 상수로 고정하는 바로 그 조건),
-`FeaturePerFrame::depth_verified`(triangulateWithDepth 가 교차검증 통과 관측에 표시, 프로브만 읽음).
+`FeaturePerFrame::depth_verified_cnt`(triangulateWithDepth 가 교차검증 통과 횟수를 세어 둠, 프로브만 읽음).
 
 | 행 | 형식 | 뜻 |
 |---|---|---|
 | `S` | `S <t> <fixed> <tri> <rough> <total> <flag1>` | 최적화 1회 요약. 잔차에 참여한 특징 중 depth 고정(flag 1 && FIX_DEPTH) / 삼각측량(flag 2, 상한만) / 그 외 수. `flag1` 은 `fix_depth` 설정과 무관한 flag 1 수 |
 | `A` | `A <t> <id> <depth_m>` | 처음 고정 채택된 특징(창에서 사라질 때까지 flag가 유지되므로 한 번만). `depth_m` 은 원시 화소 depth 가 아니라 **앵커 프레임으로 옮긴 verified 관측의 평균**(`feature_manager.cpp` triangulateWithDepth) |
-| `O` | `O <t> <id> <frame_stamp> <u> <v> <depth_m> <verified>` | 그 특징의 관측 중 `0 < depth ≤ depth_max_dist` 인 것. `verified=1` 이면 다른 프레임과의 재투영 교차검증(residual < 10/460)을 통과해 채택값에 실제로 기여한 관측. **나이는 verified=1 만으로 계산**한다(0 은 후보였을 뿐) |
+| `O` | `O <t> <id> <frame_stamp> <u> <v> <depth_m> <verified>` | 그 특징의 관측 중 `0 < depth ≤ depth_max_dist` 인 것. `verified` = 다른 프레임 j 와의 재투영 교차검증(residual < 10/460)을 통과한 **횟수**(0 = 후보였을 뿐). 같은 관측값이 통과 횟수만큼 verified 평균에 들어가므로 채택값은 이 횟수로 가중된 평균이다. **나이도 이 횟수를 가중치로 집계**한다(비가중 평균은 한두 프레임만 통과한 묵은 값을 과대 대표해 "더 묵은 것처럼" 편향, critic 09-14) |
 
 - `t` = 창 최신 프레임 스탬프(`Headers[WINDOW_SIZE]`), `frame_stamp` = 관측 프레임 스탬프(`Headers[start_frame + k]`).
 - `(u, v)` = 왜곡 보정 전 좌영상 화소(= depth 이미지 화소). VINS 는 `(int)` **절사**로 depth 를 샘플링하므로(`feature_manager.cpp` `depth_img.at(v, u)`)
@@ -29,7 +29,7 @@ VINS 닫힌루프 오차는 SGBM과 구분되지 않았다(0.91 vs 0.89 %, edie_
 VINS_DEPTH_ADOPT_LOG=/dev/shm/run1.adopt ros2 launch vins_estimator edie_vslam.launch.py use_sim_time:=true
 ```
 - 로봇에서는 `/dev/shm` 아래를 쓴다(디스크 기록이 제어 루프를 0.8~1.5 s 멈춘 사례가 있음). 로컬 재생은 아무 경로나 된다.
-- 채택률 = Σfixed / Σtotal (S 행). 나이 = O 행(verified=1)의 `(frame_stamp, u, v)` 를 edie_vision `scripts/depth_ab` 계열이 만든 age 맵
+- 채택률 = Σfixed / Σtotal (S 행). 나이 = O 행(verified ≥ 1, 가중치 = verified)의 `(frame_stamp, u, v)` 를 edie_vision `scripts/depth_ab` 계열이 만든 age 맵
   (프레임별 uint16 PNG, 값 = 마지막 신선 유효 이후 프레임 수)에서 조회.
 - 경로를 열 수 없으면 stderr 에 `[depth_adopt_probe] cannot open …` 한 줄을 내고 비활성으로 떨어진다.
 
@@ -40,5 +40,5 @@ VINS_DEPTH_ADOPT_LOG=/dev/shm/run1.adopt ros2 launch vins_estimator edie_vslam.l
 - S 행마다 flush 한 번(최적화당 1회). 관측 행은 특징당 한 번만 나오므로 정상 상태에서 부하는 작다.
 
 ## 검증
-- gtest `test_depth_adopt_probe` 6건: 분류(flag×FIX_DEPTH, flag1), 관측 범위(0 제외·상한 포함), 행 형식(verified 0/1), id당 1회·reset, 비활성 no-op, 열기 실패 무크래시.
-- 로직 무변경: 환경변수 없는 기본 경로는 `enabled()` 검사와 `depth_verified` bool 쓰기 외 추가 연산 없음. 추정 결과에 쓰이는 값은 읽기만 한다.
+- gtest `test_depth_adopt_probe` 6건: 분류(flag×FIX_DEPTH, flag1), 관측 범위(0 제외·상한 포함), 행 형식(verified 횟수), id당 1회·reset, 비활성 no-op, 열기 실패 무크래시.
+- 로직 무변경: 환경변수 없는 기본 경로는 `enabled()` 검사와 `depth_verified_cnt` 정수 증가 외 추가 연산 없음. 추정 결과에 쓰이는 값은 읽기만 한다.

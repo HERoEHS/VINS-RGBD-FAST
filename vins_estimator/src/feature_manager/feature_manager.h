@@ -59,9 +59,10 @@ public:
     MatrixXd A;
     VectorXd b;
     double   depth;
-    // [SW1-1889] 이 관측의 depth 가 triangulateWithDepth 재투영 교차검증(다른 프레임과 residual < 10/460)을
-    //   통과해 verified 평균(=채택값)에 기여했는가. 프로브 기록 전용(로직은 읽지 않음).
-    bool     depth_verified{false};
+    // [SW1-1889] 이 관측의 depth 가 triangulateWithDepth 재투영 교차검증(다른 프레임 j 와 residual < 10/460)을
+    //   통과한 횟수. 같은 값이 통과 횟수만큼 verified 평균에 들어가므로 이 수가 곧 채택값 가중치다.
+    //   프로브 기록 전용(로직은 읽지 않음).
+    int      depth_verified_cnt{0};
 };
 
 class FeaturePerId

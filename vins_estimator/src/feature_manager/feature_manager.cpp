@@ -453,7 +453,7 @@ void FeatureManager::triangulateWithDepth(Vector3d _Ps[], Vector3d _tic[], Matri
                     else
                     {
                         verified_depths.push_back(point_r.z());
-                        it_per_id.feature_per_frame[k].depth_verified = true;  // [SW1-1889] 프로브용 표시
+                        it_per_id.feature_per_frame[k].depth_verified_cnt++;  // [SW1-1889] 프로브용 가중치(통과 횟수)
                     }
                 }
             }
