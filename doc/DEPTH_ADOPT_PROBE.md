@@ -38,6 +38,7 @@ VINS_DEPTH_ADOPT_LOG=/dev/shm/run1.adopt ros2 launch vins_estimator edie_vslam.l
 - `use_yaw_gating: 1` 이면 모든 관측이 게이트된 특징은 problem 에 들어가지 않는데도 `fixed` 로 세어 과대 계수될 수 있다(edie 설정은 0).
 - 중복 억제 집합(`std::set<int>`)은 채택 id 수만큼 프로세스 수명 동안 단조 증가한다. 프로브 전용·기본 off 라 허용하되 장시간 운용 로그 용도로는 쓰지 않는다.
 - S 행마다 flush 한 번(최적화당 1회). 관측 행은 특징당 한 번만 나오므로 정상 상태에서 부하는 작다.
+- `depth_verified_cnt` 는 리셋되지 않고 `triangulateWithDepth` 호출마다 누적된다(특징은 보통 한 번만 평가되지만, 평가가 미뤄진 특징은 여러 번 더해질 수 있음). 따라서 가중치는 "채택값을 만든 한 번의 통과 횟수"의 근사다. 09-15 20런 실측에서 가중/비가중 나이는 중앙 28/28·p90 452/450 으로 사실상 같았다(critic).
 
 ## 검증
 - gtest `test_depth_adopt_probe` 6건: 분류(flag×FIX_DEPTH, flag1), 관측 범위(0 제외·상한 포함), 행 형식(verified 횟수), id당 1회·reset, 비활성 no-op, 열기 실패 무크래시.
