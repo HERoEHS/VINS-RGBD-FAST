@@ -123,6 +123,9 @@ if(BUILD_TESTING)
   # [SW1-1837] LegEventDetector(순수 STL 헤더-only) — 이벤트 게이팅 구간 마킹 단위검증
   ament_add_gtest(test_leg_event_detector test/test_leg_event_detector.cpp)
 
+  # [SW1-1889] depth 채택 프로브(순수 STL 헤더-only) — 분류·행 형식·중복 억제 단위검증
+  ament_add_gtest(test_depth_adopt_probe test/test_depth_adopt_probe.cpp)
+
   # AccBiasPriorFactor도 헤더-only(ceres+Eigen)라 vins_lib 링크 없이 단독 검증 가능
   ament_add_gtest(test_acc_bias_prior_factor test/test_acc_bias_prior_factor.cpp)
   target_include_directories(test_acc_bias_prior_factor PRIVATE

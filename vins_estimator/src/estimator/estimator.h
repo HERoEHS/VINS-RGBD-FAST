@@ -26,6 +26,8 @@
 #include "../utility/leg_event_detector.h"
 #include "../utility/bgz_lock.h"
 #include "../utility/warmup_init_gate.h"
+#include "../utility/depth_adopt_probe.h"
+#include <cstdlib>
 #include "../factor/marginalization_factor.h"
 #include "../factor/pose_local_parameterization.h"
 #include "../factor/projection_factor.h"
@@ -199,6 +201,11 @@ public:
 
     // [SW1-1837] 고속 회전 비전 게이팅 — skip한 관측 수(A/B 진단 로그용)
     long     yaw_gated_obs_{0};
+
+    // [SW1-1889] depth 채택 프로브 — 환경변수 VINS_DEPTH_ADOPT_LOG=<파일> 일 때만 활성(기본 off).
+    //   최적화마다 depth 고정 채택 특징 수(S)와 처음 채택된 특징의 관측(A/O)을 파일로 남긴다.
+    depth_adopt_probe::Logger depth_adopt_log_{
+        std::getenv("VINS_DEPTH_ADOPT_LOG") ? std::getenv("VINS_DEPTH_ADOPT_LOG") : ""};
 
     // [SW1-1866] 게이지 슬라이드 가드 상태 — 직전 solve의 최신 프레임 스탬프/yaw/위치
     double   yaw_guard_prev_stamp_{-1.0};

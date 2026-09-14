@@ -94,6 +94,7 @@ void Estimator::clearState()
     while (!imu_buf.empty())
         imu_buf.pop();
     m_imu.unlock();
+    depth_adopt_log_.reset();  // [SW1-1889] 재시작 후 특징은 전부 새로 채택되므로 A/O 중복 억제 집합 초기화
 
     // 휠 비동기 버퍼 초기화
     m_wheel.lock();
@@ -2985,6 +2986,7 @@ void Estimator::optimization()
     //重投影残差相关，此时使用了Huber损失核函数
     int f_m_cnt       = 0;
     int feature_index = -1;
+    depth_adopt_probe::Counts depth_adopt_counts;  // [SW1-1889] 이번 최적화의 depth 채택 분류
     // [SW1-1837] 프레임별 고속 회전 플래그 사전계산 — 관측마다 재계산 방지.
     //   게이트는 끝점(imu_j)만 검사한다. 앵커(imu_i)까지 확장하는 변형은 A/B로 기각됨:
     //   v7 yaw엔 무효과였고 v5에서 z범위를 2배 이상 악화시켰다(게이트량 2배의 비용만 확인).
@@ -3008,6 +3010,27 @@ void Estimator::optimization()
         ++feature_index;
 
         int imu_i = it_per_id.start_frame, imu_j = imu_i - 1;
+
+        // [SW1-1889] depth 채택 프로브(환경변수 게이트, 기본 off): 잔차에 참여하는 특징을 분류하고,
+        //   depth 고정 채택(flag 1 && FIX_DEPTH)이 처음인 특징은 관측별 (프레임 스탬프, u, v, depth) 를
+        //   남겨 오프라인 age 맵과 결합한다. FIX_DEPTH 는 아래 factor 분기와 같은 조건이다.
+        if (depth_adopt_log_.enabled())
+        {
+            depth_adopt_probe::count(it_per_id.estimate_flag, FIX_DEPTH, depth_adopt_counts);
+            if (it_per_id.estimate_flag == 1 && FIX_DEPTH &&
+                depth_adopt_log_.adopt(Headers[WINDOW_SIZE], it_per_id.feature_id,
+                                       it_per_id.estimated_depth))
+            {
+                for (size_t k = 0; k < it_per_id.feature_per_frame.size(); k++)
+                {
+                    const auto &obs = it_per_id.feature_per_frame[k];
+                    if (depth_adopt_probe::obsHasDepth(obs.depth, DEPTH_MAX_DIST))
+                        depth_adopt_log_.obs(Headers[WINDOW_SIZE], it_per_id.feature_id,
+                                             Headers[imu_i + static_cast<int>(k)], obs.uv.x(),
+                                             obs.uv.y(), obs.depth);
+                }
+            }
+        }
 
         Vector3d pts_i = it_per_id.feature_per_frame[0].point;
 
@@ -3061,6 +3084,7 @@ void Estimator::optimization()
     }
     ROS_DEBUG("visual measurement count: %d", f_m_cnt);
     ROS_DEBUG("prepare for ceres: %f", t_prepare.toc());
+    depth_adopt_log_.summary(Headers[WINDOW_SIZE], depth_adopt_counts);  // [SW1-1889] 비활성이면 no-op
     // [SW1-1837] 고속 회전 게이팅 진단 — 이번 최적화 채택 관측 vs 누적 skip 관측.
     //   A/B 분석용이라 환경변수로만 활성(기본 off, BG 로그와 동일 방식): 최적화마다
     //   찍혀 운영 콘솔을 덮고 [BGZ-LOCK] 같은 중요 로그를 가린다.
