@@ -8,9 +8,11 @@
 // 관측 행(O)을 결합해 구한다. 환경변수 VINS_DEPTH_ADOPT_LOG=<파일경로> 로만 켜진다(기본 off).
 //
 // 행 형식(공백 구분, 한 줄 한 레코드):
-//   S <t> <fixed> <tri> <rough> <total>          최적화 1회 요약: 잔차 참여 특징 중 depth 고정/삼각측량/초기값 수
-//   A <t> <id> <depth_m>                          처음 고정 채택된 특징(한 번만)
-//   O <t> <id> <frame_stamp> <u> <v> <depth_m>    그 특징의 관측 중 0 < depth ≤ max_dist 인 것
+//   S <t> <fixed> <tri> <rough> <total> <flag1>            최적화 1회 요약: 잔차 참여 특징 중 depth 고정(flag 1 && FIX_DEPTH) /
+//                                                          삼각측량(flag 2) / 그 외 수, flag1 = FIX_DEPTH 와 무관한 flag 1 수
+//   A <t> <id> <depth_m>                                    처음 고정 채택된 특징(한 번만). depth_m 은 앵커 프레임으로 옮긴 verified 평균
+//   O <t> <id> <frame_stamp> <u> <v> <depth_m> <verified>   그 특징의 관측 중 0 < depth ≤ max_dist 인 것. verified=1 이면
+//                                                          재투영 교차검증을 통과해 채택값(A 의 depth_m)에 실제로 기여한 관측
 #include <cstdio>
 #include <fstream>
 #include <set>
@@ -22,14 +24,17 @@ struct Counts
 {
     int fixed = 0;  // estimate_flag 1 && FIX_DEPTH → 파라미터 블록 상수 고정
     int tri   = 0;  // estimate_flag 2 → 삼각측량(상한만)
-    int rough = 0;  // 그 외(초기값·평균)
+    int rough = 0;  // 그 외(초기값·평균, FIX_DEPTH=0 인 flag 1 포함)
     int total = 0;
+    int flag1 = 0;  // estimate_flag 1 (FIX_DEPTH 무관) — fix_depth 설정과 분리해 세는 히스토그램
 };
 
 // 잔차에 참여한 특징 하나를 분류에 더한다.
 inline void count(int estimate_flag, bool fix_depth, Counts &c)
 {
     c.total++;
+    if (estimate_flag == 1)
+        c.flag1++;
     if (estimate_flag == 1 && fix_depth)
         c.fixed++;
     else if (estimate_flag == 2)
@@ -38,7 +43,7 @@ inline void count(int estimate_flag, bool fix_depth, Counts &c)
         c.rough++;
 }
 
-// depth 이미지 관측이 "검증 depth" 후보인가(triangulateWithDepth 의 verified 기준과 동일 범위).
+// depth 이미지 관측이 "검증 depth" 후보인가(triangulateWithDepth 의 verified 범위와 동일; 교차검증은 verified 플래그가 담당).
 inline bool obsHasDepth(double depth_m, double max_dist)
 {
     return depth_m > 0.0 && depth_m <= max_dist;
@@ -46,8 +51,9 @@ inline bool obsHasDepth(double depth_m, double max_dist)
 
 inline std::string formatSummary(double t, const Counts &c)
 {
-    char buf[128];
-    std::snprintf(buf, sizeof(buf), "S %.6f %d %d %d %d", t, c.fixed, c.tri, c.rough, c.total);
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "S %.6f %d %d %d %d %d", t, c.fixed, c.tri, c.rough, c.total,
+                  c.flag1);
     return buf;
 }
 
@@ -59,23 +65,28 @@ inline std::string formatAdopt(double t, int id, double depth_m)
 }
 
 inline std::string formatObs(double t, int id, double frame_stamp, double u, double v,
-                             double depth_m)
+                             double depth_m, bool verified)
 {
     char buf[160];
-    std::snprintf(buf, sizeof(buf), "O %.6f %d %.6f %.1f %.1f %.4f", t, id, frame_stamp, u, v,
-                  depth_m);
+    std::snprintf(buf, sizeof(buf), "O %.6f %d %.6f %.1f %.1f %.4f %d", t, id, frame_stamp, u, v,
+                  depth_m, verified ? 1 : 0);
     return buf;
 }
 
 // 파일 기록기. 특징 id 는 창에서 사라질 때까지 flag 가 유지되므로 한 번만 A/O 를 남긴다.
+// 메모리: 채택 id 집합이 프로세스 수명 동안 단조 증가한다(프로브 전용·기본 off 라 허용).
 class Logger
 {
 public:
-    // path 가 비어 있으면 비활성(모든 호출 no-op).
+    // path 가 비어 있으면 비활성(모든 호출 no-op). 열기 실패는 stderr 로 알린다(오타로 조용히 꺼지는 것 방지).
     explicit Logger(const std::string &path)
     {
-        if (!path.empty())
-            out_.open(path, std::ios::out | std::ios::trunc);
+        if (path.empty())
+            return;
+        out_.open(path, std::ios::out | std::ios::trunc);
+        if (!out_.is_open())
+            std::fprintf(stderr, "[depth_adopt_probe] cannot open VINS_DEPTH_ADOPT_LOG=%s — probe disabled\n",
+                         path.c_str());
     }
     bool enabled() const { return out_.is_open(); }
 
@@ -87,17 +98,19 @@ public:
         out_ << formatAdopt(t, id, depth_m) << '\n';
         return true;
     }
-    void obs(double t, int id, double frame_stamp, double u, double v, double depth_m)
+    void obs(double t, int id, double frame_stamp, double u, double v, double depth_m,
+             bool verified)
     {
         if (enabled())
-            out_ << formatObs(t, id, frame_stamp, u, v, depth_m) << '\n';
+            out_ << formatObs(t, id, frame_stamp, u, v, depth_m, verified) << '\n';
     }
     void summary(double t, const Counts &c)
     {
         if (enabled())
             out_ << formatSummary(t, c) << '\n' << std::flush;
     }
-    // 재시작(추정기 clearState) 시 id 카운터가 0 부터 다시 시작하므로 집합을 비운다.
+    // 추정기 재시작(clearState) 시 호출. id 는 프로세스 안에서 재사용되지 않지만, 재시작 후에도 추적이
+    // 이어진 특징이 다시 채택되는 것을 새 이벤트로 남기기 위해 집합을 비운다.
     void reset() { logged_.clear(); }
 
 private:

@@ -94,7 +94,9 @@ void Estimator::clearState()
     while (!imu_buf.empty())
         imu_buf.pop();
     m_imu.unlock();
-    depth_adopt_log_.reset();  // [SW1-1889] 재시작 후 특징은 전부 새로 채택되므로 A/O 중복 억제 집합 초기화
+    // [SW1-1889] 특징 id 는 프로세스 안에서 재사용되지 않지만(n_id 는 tracker 생성자에서만 0), 재시작 후에도
+    //   추적이 이어진 특징의 재채택을 새 이벤트로 남기기 위해 A/O 중복 억제 집합을 비운다.
+    depth_adopt_log_.reset();
 
     // 휠 비동기 버퍼 초기화
     m_wheel.lock();
@@ -3027,7 +3029,7 @@ void Estimator::optimization()
                     if (depth_adopt_probe::obsHasDepth(obs.depth, DEPTH_MAX_DIST))
                         depth_adopt_log_.obs(Headers[WINDOW_SIZE], it_per_id.feature_id,
                                              Headers[imu_i + static_cast<int>(k)], obs.uv.x(),
-                                             obs.uv.y(), obs.depth);
+                                             obs.uv.y(), obs.depth, obs.depth_verified);
                 }
             }
         }
