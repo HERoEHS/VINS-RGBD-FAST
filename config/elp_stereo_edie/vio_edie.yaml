@@ -44,23 +44,29 @@ keyframe_parallax: 3.5
 num_grid_rows: 7
 num_grid_cols: 8
 
-#camera calibration (cam0 = left, pinhole-radtan)
+#camera calibration (cam0 = left, pinhole)
+# ⚠️ image_topic(image_gray)은 edie_vision SbsUndistorter가 이미 펴서(정류) 발행한 영상이다.
+#   정류 영상의 카메라 모델 = pinhole_left_calib.yaml 의 projection_matrix(P), 왜곡 0.
+#   camera_matrix(K)+distortion(D)은 '정류 전 원본' 모델이라 여기에 넣으면 이미 편 영상을
+#   한 번 더 펴게 된다(이중 보정). edie_vision camera_v4l2.yaml use_undistort:false 로 바꿀
+#   때만 K+D 를 쓴다. 두 파일이 어긋나면 vins_estimator/test/test_camera_intrinsics_consistency.cpp 가 잡는다.
+#   (SW1-1828, 2026-09-23: 06-18 0aaa324 에서 raw 값이 들어가 있던 것을 정정)
 model_type: PINHOLE
 camera_name: camera
 image_width: 640
 image_height: 480
 
 distortion_parameters:
-   k1: -0.3693579897
-   k2:  0.1036239626
-   p1:  0.0026066921
-   p2:  0.0011778818
+   k1: 0.0
+   k2: 0.0
+   p1: 0.0
+   p2: 0.0
 
 projection_parameters:
-   fx: 438.3070880664
-   fy: 436.7964460490
-   cx: 310.3360344030
-   cy: 262.3331851983
+   fx: 397.6397398893
+   fy: 397.6397398893
+   cx: 339.3548507690
+   cy: 270.8526687622
 
 # Extrinsic: IMU(body) ← camera
 # R_imu_cam = R_cam_imu^T  (Kalibr T_cam_imu 상단 3x3 전치)

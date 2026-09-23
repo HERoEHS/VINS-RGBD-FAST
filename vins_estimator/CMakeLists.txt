@@ -234,6 +234,13 @@ if(BUILD_TESTING)
 
   # [SW1-1883 후속] IMU/휠 스탬프 간극 판정 — 헤더 단독 순수 함수 테스트
   ament_add_gtest(test_imu_gap test/test_imu_gap.cpp)
+
+  # [SW1-1828] vio_edie.yaml 카메라 모델 ↔ 정류 영상(edie_vision P) 일치 — 이중 보정 재발 방지
+  ament_add_gtest(test_camera_intrinsics_consistency test/test_camera_intrinsics_consistency.cpp)
+  target_compile_definitions(test_camera_intrinsics_consistency PRIVATE
+    VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+  target_include_directories(test_camera_intrinsics_consistency PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(test_camera_intrinsics_consistency ${OpenCV_LIBS})
 endif()
 
 ament_package()
