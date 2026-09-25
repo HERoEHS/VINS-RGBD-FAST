@@ -110,6 +110,9 @@ double STILL_CHECK_DURATION_SEC = 2.0;
 double STILL_CHECK_XY_TOL = 0.005;
 double STILL_CHECK_YAW_TOL_DEG = 2.0;
 int    STILL_DRIFT_CONSEC    = 3;
+// [SW1-1922] 몸체 운동 검사(폴백값 = yaml 기본값과 동일). 키 부재 시에도 검사가 켜지도록 양수.
+double STILL_DRIFT_GYRO_BUSY           = 0.05;
+double STILL_DRIFT_LEG_GATE_EXTEND_SEC = 0.5;
 
 // ===== 출력 map 핀 (SW1-1866 vins-output-map-anchor) =====
 int    USE_OUTPUT_MAP_ANCHOR;
@@ -764,8 +767,26 @@ void readParameters(rclcpp::Node* node)
         STILL_CHECK_YAW_TOL_DEG = (double)fsSettings["still_check_yaw_tol_deg"];
     if (!fsSettings["still_drift_consec_solves"].empty())
         STILL_DRIFT_CONSEC = (int)fsSettings["still_drift_consec_solves"];
+    // [SW1-1922] 몸체 운동 검사 키 2개 — 조건부 블록 밖에서 로드(위와 같은 이유)
+    if (!fsSettings["still_drift_gyro_busy_rad_s"].empty())
+        STILL_DRIFT_GYRO_BUSY = (double)fsSettings["still_drift_gyro_busy_rad_s"];
+    if (!fsSettings["still_drift_leg_gate_extend_sec"].empty())
+        STILL_DRIFT_LEG_GATE_EXTEND_SEC = (double)fsSettings["still_drift_leg_gate_extend_sec"];
     if (USE_STILL_DRIFT_GUARD)
     {
+        // 몸체 운동 검사가 둘 다 꺼져 있으면 옛 결함(다리 동작 중 오발동)이 그대로다 — 조용히 넘기지 않는다
+        if (STILL_DRIFT_GYRO_BUSY <= 0.0 && STILL_DRIFT_LEG_GATE_EXTEND_SEC < 0.0)
+            RCLCPP_WARN(node->get_logger(),
+                        "STILL_DRIFT: 자이로·다리 게이트 검사가 모두 꺼짐 — 다리 동작 중 몸체 기울어짐을 "
+                        "정지로 오판할 수 있음(SW1-1922 v15 217s 재현 조건)");
+        // 다리 경로는 이벤트 게이팅(use_event_gating·gate_leg)이 꺼져 있으면 실효로 꺼진다 — 안내에 드러낸다
+        const bool leg_path_effective = STILL_DRIFT_LEG_GATE_EXTEND_SEC >= 0.0 && USE_EVENT_GATING && GATE_LEG;
+        RCLCPP_INFO(node->get_logger(),
+                    "STILL_DRIFT_GUARD 몸체 운동 검사: 자이로 노름 평균 상한 %.3f rad/s(%s), "
+                    "다리 게이트 구간 겹침 연장 %.2fs(%s)",   // ⚠️안내문에 이벤트 판별 문구 금지
+                    STILL_DRIFT_GYRO_BUSY, STILL_DRIFT_GYRO_BUSY > 0.0 ? "켬" : "≤0 꺼짐",
+                    STILL_DRIFT_LEG_GATE_EXTEND_SEC,
+                    leg_path_effective ? "켬" : (STILL_DRIFT_LEG_GATE_EXTEND_SEC < 0.0 ? "<0 꺼짐" : "gate_leg=0 이라 실효 꺼짐"));
         // 설계 전제: 측정 창은 지속 정지 창보다 짧아야 한다(같으면 정지 진입 전환 구간을
         //   물어 v14서 3/3 오탐 재현됨). 어긋나면 조용히 틀리지 말고 시작 시 경고.
         if (STILL_DRIFT_WINDOW_SEC >= STILL_CHECK_DURATION_SEC)

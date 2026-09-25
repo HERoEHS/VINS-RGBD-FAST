@@ -151,7 +151,8 @@ public:
     // ===== [SW1-1837] 이벤트 게이팅 (Phase 1: 다리각) =====
     void inputLegState(double t, double theta_l, double theta_r);  // joint_states 실측
     void inputLegCommand(double t, double target, bool left);      // 위치 명령(선행 트리거)
-    bool isLegGated(double t0, double t1);                         // factor skip 판정
+    // factor skip 판정. extend_forced_sec>0 은 [SW1-1922] STILL-DRIFT 전용(강제 종료 구간 끝 연장)
+    bool isLegGated(double t0, double t1, double extend_forced_sec = 0.0);
 
     // ===== [SW1-1837] 정지 시 중력 재정렬 v2: 창 전체 자세 보정 (use_gravity_align: 2) =====
     void gravityRealignWindow();  // optimization() 직후 호출 — 정지 확정 시 1회 ΔR 일괄 보정

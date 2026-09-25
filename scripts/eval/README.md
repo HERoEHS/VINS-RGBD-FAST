@@ -42,6 +42,30 @@ python3 scripts/eval/bias_separation.py ~/ros2_ws/bag/<bag> gv_r1.tum gv_r2.tum 
   --yaml <icm20948_ros2>/config/imu_offsets.yaml
 ```
 
+### STILL-DRIFT 가드 재생 검증 절차 (SW1-1922)
+
+가드 관련 변경은 로그 토큰을 **정확히** 세어 판정한다(안내문·유사 토큰 오집계 방지).
+
+| 토큰 | 뜻 |
+|---|---|
+| `[STILL-DRIFT]` | 가드 발동(조기 재초기화 요청). v15·v14 에서는 0 이어야 한다 |
+| `[STILL-DRIFT-SKIP-OVER]` | **스로틀 없음.** 건너뛰지 않았으면 셌을 solve(변위 > 상한인데 몸체 운동으로 건너뜀) — 이 줄 수가 "수정이 막은 계수" 라 인과 증거다 |
+| `[STILL-DRIFT-SKIP] … 사유=gyro` | 휠은 정지지만 창 안 자이로 노름 평균 ≥ `still_drift_gyro_busy_rad_s` → 판정 건너뜀·카운터 리셋. **1 s 스로틀 표본**이라 개수는 solve 수가 아니다 |
+| `[STILL-DRIFT-SKIP] … 사유=leg` | 가드 창이 다리 게이팅 구간(강제 종료 끝 +`still_drift_leg_gate_extend_sec`)과 겹치고 창 안 0.1 s 블록에 운동 증거가 있음. 같은 스로틀을 gyro 와 공유한다 |
+| `system reboot` | 재초기화 횟수(`replay_one.sh` meta 의 reboots) |
+
+```bash
+# 로그에 줄바꿈 없는 printf 가 섞여 한 줄에 레코드 둘이 붙을 수 있다 → grep -c(줄 수) 대신 -o | wc -l
+grep -o '\[STILL-DRIFT\]' <label>.log | wc -l            # 발동
+grep -o '\[STILL-DRIFT-SKIP-OVER\]' <label>.log | wc -l  # 막은 계수(창별)
+grep -o '\[STILL-DRIFT-SKIP\]' <label>.log | wc -l       # 건너뜀 표본(1 s 스로틀)
+```
+
+결함 재현 조건(v15 + 옛 카메라 설정 `vio_A_head.yaml`, 수정 전 +219.605 s 발동 3/3)에서 발동 0 인지,
+현행 설정으로 v15·v14 KPI(`gt_xy_eval.py`)가 종전 대비 악화 없는지, v16_play 에서 대조군(수정 전 바이너리)과
+같은 런 수로 >1 m 폭주가 늘지 않는지를 본다. 09-25 캠페인 스크립트와 결과:
+`~/ros2_ws/bag/analysis/sw1_1922_still_drift_20260925/campaign.sh`, `summary.tsv`.
+
 ## VIO 출력 녹화 (분석 대상 만들기)
 ```bash
 ros2 bag record -o /tmp/vio_out /vins_estimator/odometry /vins_estimator/extrinsic

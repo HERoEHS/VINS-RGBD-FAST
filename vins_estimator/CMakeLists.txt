@@ -169,6 +169,12 @@ if(BUILD_TESTING)
     ${EIGEN3_INCLUDE_DIR}
   )
 
+  # [SW1-1922] STILL-DRIFT 가드 몸체 운동 판정(still_drift_guard.h) + 다리 게이트 구간 연장 — 헤더-only
+  ament_add_gtest(test_still_drift_guard test/test_still_drift_guard.cpp)
+  target_include_directories(test_still_drift_guard PRIVATE
+    ${EIGEN3_INCLUDE_DIR}
+  )
+
   # [SW1-1866 reboot-pose-seed] 재초기화 시드 계승 순수 수학(Eigen 헤더-only) 단독 검증
   ament_add_gtest(test_reboot_seed test/test_reboot_seed.cpp)
   target_include_directories(test_reboot_seed PRIVATE

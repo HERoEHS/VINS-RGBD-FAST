@@ -77,7 +77,7 @@ public:
                 // 상한 초과 강제 종료 — 휠 factor를 무한정 빼면 스케일 앵커 상실로 발산(07-01 실측 70m).
                 // 기준점을 현재 위치로 재고정해 잔여 변위가 즉시 재트리거하는 것을 막고,
                 // 정착(rate 조용 post_margin) 관측 전엔 재무장하지 않는다.
-                close(open_t_ - p_.pre_margin, open_t_ + p_.max_duration);
+                close(open_t_ - p_.pre_margin, open_t_ + p_.max_duration, /*forced=*/true);
                 active_ = false;
                 force_closed_ = true;
                 cooldown_ = true;
@@ -141,13 +141,21 @@ public:
     }
 
     // [t0, t1] 구간이 게이팅 구간(마진 포함)과 겹치는가 — factor skip 판정용
-    bool overlaps(double t0, double t1) const
+    //   extend_forced_sec: **강제 종료(max_duration 상한)** 구간의 끝만 이만큼 늘려 본다.
+    //   [SW1-1922] STILL-DRIFT 가드 전용. 강제 종료는 다리가 아직 움직이는 중에 게이트를 끊는
+    //   것이라(v15 217 s: 게이트 끝 219.524 vs 몸체 정온 219.638) 정지 판정에는 post_margin
+    //   만큼 여유를 더 준다. 정착 종료 구간은 이미 post_margin을 품고 있어 늘리지 않는다.
+    //   factor skip(기본 0.0)에는 쓰지 않는다 — 휠 앵커를 더 오래 빼면 발산 위험(07-01 실측).
+    bool overlaps(double t0, double t1, double extend_forced_sec = 0.0) const
     {
         if (active_ && t1 >= open_t_ - p_.pre_margin)
             return true;  // 진행 중 이벤트: [open-pre, 현재진행형)
         for (const auto &iv : closed_)
-            if (t1 >= iv.first && t0 <= iv.second)
+        {
+            const double end = iv.b + (iv.forced ? extend_forced_sec : 0.0);
+            if (t1 >= iv.a && t0 <= end)
                 return true;
+        }
         return false;
     }
 
@@ -155,11 +163,19 @@ public:
     bool everForceClosed() const { return force_closed_; }
 
 private:
-    void close(double a, double b) { closed_.emplace_back(a, b); }
+    // 종료된 게이팅 구간 [a, b]. forced = max_duration 상한으로 강제 종료된 구간(연장 질의 대상)
+    struct Closed
+    {
+        double a;
+        double b;
+        bool   forced;
+    };
+
+    void close(double a, double b, bool forced = false) { closed_.push_back({a, b, forced}); }
 
     void prune(double t)
     {
-        while (!closed_.empty() && closed_.front().second < t - p_.history)
+        while (!closed_.empty() && closed_.front().b < t - p_.history)
             closed_.pop_front();
     }
 
@@ -171,6 +187,6 @@ private:
     double ref_l_ = 0.0, ref_r_ = 0.0;      // 정착 기준점(변위 시작 판정의 원점)
     double last_rate_move_t_ = 0.0;         // 마지막으로 순간 변화율이 임계를 넘은 시각
     double open_t_ = 0.0, last_move_t_ = 0.0;
-    std::deque<std::pair<double, double>> closed_;  // 종료된 [시작-pre, 종료+post] 구간들
+    std::deque<Closed> closed_;  // 종료된 [시작-pre, 종료+post(또는 상한)] 구간들
     int activations_ = 0;
 };

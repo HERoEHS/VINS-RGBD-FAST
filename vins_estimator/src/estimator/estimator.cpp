@@ -12,6 +12,7 @@
 #include "../factor/gravity_align_factor.h"
 #include "../utility/gravity_window_realign.h"
 #include "../utility/yaw_slide_guard.h"
+#include "../utility/still_drift_guard.h"
 #include "../utility/yaw_gating.h"
 #include <map>
 #include "../utility/bgz_lock.h"
@@ -1811,36 +1812,92 @@ void Estimator::gaugeSlideGuard()
                     break;
                 }
             }
-            if (sustained && p_win)
+            // [SW1-1922 09-25] 휠이 조용해도 **몸체가 움직였으면 정지가 아니다** — 다리 동작으로
+            //   몸체가 기울었다 복귀하는 동안(v15 +217.5~219.6 s) 휠 xy 는 3 mm 이하지만 IMU 는
+            //   창에서 2~3 cm 실제로 이동해 "정지 중 폭주"로 오판 → 재초기화 → 0.4~2 m 오차(3/3).
+            //   같은 파일의 정지 확정(gravityRealignWindow)·clamp 정지 판정처럼 자이로와 다리 게이트를
+            //   본다. 자이로는 **노름의 시간 가중 평균**(벡터 평균은 왕복 운동에서 상쇄), 창은 이 가드의
+            //   비교 창 [t_win, now] 와 같은 길이를 pre_integration 조각들 뒤에서부터 채운다. 다리 게이트는
+            //   창 **구간**으로 묻고 강제 종료 구간 끝을 연장하되(현재 시각만 보면 W3 가 게이트 밖),
+            //   창 안에 운동 증거(0.1 s 블록 최대)가 있을 때만 성립한다 — 게이트만으로 끄면 다리 명령
+            //   직후·정착 직후의 조용한 몸체에서도 가드가 꺼진다(v15 오프라인 5.4 s 중 4.2 s 가 조용).
+            //   건너뛴 solve 는 연속 카운터를 0 으로 되돌린다(이력 기록은 계속 — 다음 창의 기준점).
+            //   ⚠️그 밖의 판정식(끝점·문턱)은 손대지 않는다 — v16 폭주 검출 근거를 보존한다.
+            //   변위(div)는 건너뛸 때도 계산해 로그에 남긴다 — "건너뛰지 않았으면 셌을 solve" 를
+            //   [STILL-DRIFT-SKIP-OVER](스로틀 없음)로 구분해야 수정의 인과를 재생 로그로 확인할 수 있다.
+            const bool have_win = sustained && (p_win != nullptr);
+            const double div    = have_win ? (Ps[frame_count] - *p_win).head<2>().norm() : 0.0;
+            const bool   over   = have_win && div > STILL_DRIFT_MAX;
+            bool body_moving = false;
+            if (have_win)
             {
-                const double div = (Ps[frame_count] - *p_win).head<2>().norm();
-                if (div > STILL_DRIFT_MAX)
+                const double win_len = std::max(stamp_now - t_win, 1e-3);
+                still_drift_guard::GyroWindow gw;
+                for (int j = frame_count; j >= 1; j--)
                 {
-                    // [08-12] 오염 시작 시각을 남긴다 — 시드 분기 선택자가 이 재부팅을
-                    //   '무절제=건강'으로 오판해 오염된 정화pose를 물지 않게 하기 위함
-                    //   (근거는 reboot_seed.h contaminationOnset 주석).
-                    //   기준은 **창 시작 시각**이다: 그 시점 pose가 비교 기준이었으니
-                    //   "여기까지는 건강했다"고 말할 수 있는 마지막 시각이다.
-                    //   ⚠️**미설정일 때만** 기록한다(amputate_first_t_와 같은 관행).
-                    //     해제는 정화 solve 한 곳에서만 — 근거는 recordOnsetOnce 주석.
-                    reboot_seed::recordOnsetOnce(still_drift_first_t_, t_win);
-                    ++still_drift_consec_;
+                    if (!pre_integrations[j])
+                        break;
+                    if (still_drift_guard::accumulateTail(pre_integrations[j]->dt_buf,
+                                                          pre_integrations[j]->gyr_buf, Bgs[j],
+                                                          win_len, gw))
+                        break;
                 }
-                else
-                    still_drift_consec_ = 0;   // 오염 시작 시각은 정화 solve에서만 해제
-                if (still_drift_consec_ >= STILL_DRIFT_CONSEC)
+                const double min_cover = still_drift_guard::kMinCoverFrac * win_len;
+                const bool gyro_busy = still_drift_guard::gyroBusy(gw, STILL_DRIFT_GYRO_BUSY, min_cover);
+                const bool leg_gated = STILL_DRIFT_LEG_GATE_EXTEND_SEC >= 0.0 &&
+                                       isLegGated(t_win, stamp_now, STILL_DRIFT_LEG_GATE_EXTEND_SEC);
+                const bool leg_skip  = leg_gated && still_drift_guard::motionEvidence(
+                                                        gw, STILL_DRIFT_GYRO_BUSY, min_cover);
+                const auto why = still_drift_guard::skipReason(gyro_busy, leg_skip);
+                body_moving = (why != still_drift_guard::SkipReason::None);
+                if (body_moving && over)
                 {
-                    guard_escalation_fire_ = true;
-                    RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
-                                "[STILL-DRIFT] t=%.3f 정지 확정인데 VINS가 %.3fs 창에서 %.3fm "
-                                "이동(연속 %d회, 상한 %.3fm) — 클램프로 못 끊는 폭주 → "
-                                "조기 재초기화 요청",
-                                stamp_now, STILL_DRIFT_WINDOW_SEC, div, still_drift_consec_,
-                                STILL_DRIFT_MAX);
+                    // 스로틀 없음 — 이 줄의 수가 "수정이 막은 계수" 다(창별 인과 증거)
+                    RCLCPP_INFO(rclcpp::get_logger("vins_gauge_guard"),
+                                "[STILL-DRIFT-SKIP-OVER] t=%.3f 사유=%s 변위 %.3fm(상한 %.3f) 창 %.2fs "
+                                "자이로 노름 평균 %.3f/원시 %.3f 블록최대 %.3f rad/s(상한 %.3f, 표본 %zu·%.2fs) "
+                                "다리게이트=%d 연속(리셋 전)=%d",
+                                stamp_now, still_drift_guard::skipReasonName(why), div, STILL_DRIFT_MAX,
+                                win_len, gw.meanNorm(), gw.meanRaw(), gw.maxBlockNorm(),
+                                STILL_DRIFT_GYRO_BUSY, gw.n, gw.covered_sec, leg_gated ? 1 : 0,
+                                still_drift_consec_);
+                }
+                else if (body_moving)
+                {
+                    static rclcpp::Clock skip_clk;
+                    RCLCPP_INFO_THROTTLE(rclcpp::get_logger("vins_gauge_guard"), skip_clk, 1000,
+                                         "[STILL-DRIFT-SKIP] t=%.3f 사유=%s 휠은 정지지만 몸체 운동 — 변위 %.3fm "
+                                         "창 %.2fs 자이로 노름 평균 %.3f/원시 %.3f 블록최대 %.3f rad/s(상한 %.3f, "
+                                         "표본 %zu·%.2fs) 다리게이트=%d",
+                                         stamp_now, still_drift_guard::skipReasonName(why), div, win_len,
+                                         gw.meanNorm(), gw.meanRaw(), gw.maxBlockNorm(), STILL_DRIFT_GYRO_BUSY,
+                                         gw.n, gw.covered_sec, leg_gated ? 1 : 0);
                 }
             }
-            else
-                still_drift_consec_ = 0;
+            if (have_win && !body_moving && over)
+            {
+                // [08-12] 오염 시작 시각을 남긴다 — 시드 분기 선택자가 이 재부팅을
+                //   '무절제=건강'으로 오판해 오염된 정화pose를 물지 않게 하기 위함
+                //   (근거는 reboot_seed.h contaminationOnset 주석).
+                //   기준은 **창 시작 시각**이다: 그 시점 pose가 비교 기준이었으니
+                //   "여기까지는 건강했다"고 말할 수 있는 마지막 시각이다.
+                //   ⚠️**미설정일 때만** 기록한다(amputate_first_t_와 같은 관행).
+                //     해제는 정화 solve 한 곳에서만 — 근거는 recordOnsetOnce 주석.
+                reboot_seed::recordOnsetOnce(still_drift_first_t_, t_win);
+            }
+            // 카운터 전이는 순수 함수(still_drift_guard.h nextConsec, gtest) — 오염 시작 시각은 정화 solve에서만 해제
+            still_drift_consec_ = still_drift_guard::nextConsec(still_drift_consec_, have_win, body_moving, over);
+            if (have_win && !body_moving &&
+                still_drift_guard::shouldFire(still_drift_consec_, STILL_DRIFT_CONSEC))
+            {
+                guard_escalation_fire_ = true;
+                RCLCPP_WARN(rclcpp::get_logger("vins_gauge_guard"),
+                            "[STILL-DRIFT] t=%.3f 정지 확정인데 VINS가 %.3fs 창에서 %.3fm "
+                            "이동(연속 %d회, 상한 %.3fm) — 클램프로 못 끊는 폭주 → "
+                            "조기 재초기화 요청",
+                            stamp_now, STILL_DRIFT_WINDOW_SEC, div, still_drift_consec_,
+                            STILL_DRIFT_MAX);
+            }
         }
 
         // 진단: 문턱 무관 slide 분포(정상 마진 실측용, 환경변수 게이트·read-only)
@@ -3751,12 +3808,12 @@ void Estimator::inputLegCommand(double t, double target, bool left)
 }
 
 // [SW1-1837] [t0,t1]이 다리 이벤트 구간(마진 포함)과 겹치는가 — optimization()의 factor skip 판정
-bool Estimator::isLegGated(double t0, double t1)
+bool Estimator::isLegGated(double t0, double t1, double extend_forced_sec)
 {
     if (!USE_EVENT_GATING || !GATE_LEG)
         return false;
     std::lock_guard<std::mutex> lk(m_leg_gate);
-    return leg_gate.overlaps(t0, t1);
+    return leg_gate.overlaps(t0, t1, extend_forced_sec);
 }
 
 void Estimator::updateLatestStates()

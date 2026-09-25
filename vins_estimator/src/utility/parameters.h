@@ -278,6 +278,10 @@ extern double STILL_CHECK_DURATION_SEC;    // [s]  지속 정지 요구 (주행 
 extern double STILL_CHECK_XY_TOL;    // [m]  그 구간 휠 병진 허용치
 extern double STILL_CHECK_YAW_TOL_DEG;// [deg] 그 구간 휠 회전 허용치 — 제자리 회전 배제
 extern int    STILL_DRIFT_CONSEC;       //      연속 초과 solve 수 (단발 노이즈 배제)
+// [SW1-1922 09-25] '지속 정지'에 몸체 운동 검사 추가 — 휠은 조용해도 다리 동작·외란으로 몸체가
+//   움직이면(v15 217 s 기울었다 복귀, IMU 2~3 cm 실이동) 판정을 건너뛰고 연속 카운터를 되돌린다.
+extern double STILL_DRIFT_GYRO_BUSY;          // [rad/s] 창 안 자이로 노름 평균 상한. ≤0 = 검사 안 함
+extern double STILL_DRIFT_LEG_GATE_EXTEND_SEC; // [s] 다리 게이트 '구간' 겹침 검사 + 강제 종료 구간 끝 연장. <0 = 검사 안 함
 
 // ===== 출력 map 핀 (SW1-1866 vins-output-map-anchor) — 표시 전용, 추정기 무접촉 =====
 extern int    USE_OUTPUT_MAP_ANCHOR;  // 0=세션 프레임 발행(현행), 1=map 핀 합성
