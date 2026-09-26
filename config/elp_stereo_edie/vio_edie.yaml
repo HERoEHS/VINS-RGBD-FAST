@@ -126,7 +126,7 @@ rolling_shutter: 0
 rolling_shutter_tr: 0.0
 
 #loop closure
-loop_closure: 1
+loop_closure: 0
 fast_relocalization: 0
 load_previous_pose_graph: 0
 pose_graph_save_path: "/tmp/vins_edie_output/pose_graph"
