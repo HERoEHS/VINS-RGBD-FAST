@@ -1,6 +1,8 @@
 #!/bin/bash
 # VINS 1런 재생: 깨끗한 환경(env -i)에서 task 설치본 바이너리 + 지정 설정으로 bag 재생 → TUM 기록
-# 사용: TASK_WS=<작업공간> [RECORD_TF=1] replay_one.sh <label> <config_yaml> <bag_dir> <out_dir>
+# 사용: TASK_WS=<작업공간> [RECORD_TF=1] [REPLAY_DOMAIN=<id>] replay_one.sh <label> <config_yaml> <bag_dir> <out_dir>
+#   REPLAY_DOMAIN: 전용 ROS 도메인(기본 77). 여러 세션이 동시에 재생할 수 있으면 세션마다 다른 값을 쓴다 —
+#   같은 도메인이면 토픽이 섞여 서로의 검증을 오염시킨다(09-29 세션 간 격리 규칙).
 #   VINS 소스 위치가 다르면 VINS_ROOT=<.../VINS-RGBD-FAST/> 로 덮어쓴다(메인 ws: src/edie9/edie_localization/VINS-RGBD-FAST/).
 #   평가: gt_xy_eval.py <bag_dir> <out_dir>/*.tum (08-10 REPORT 핀 규약, 휠 대조군 RMS 0.475 로 평가기 검증됨)
 # 규약(VINS 메모리): 최종 바이너리, env -i, 바이너리 md5 기록, 정리는 PID kill 만(pkill -f 금지)
@@ -20,7 +22,8 @@ mkdir -p "$OUT"
 LOG=$OUT/$LABEL.log; TUM=$OUT/$LABEL.tum; META=$OUT/$LABEL.meta
 
 # 다른 ROS 노드와 섞이지 않게 전용 도메인 + localhost 전용
-ENVSETUP="source /opt/ros/humble/setup.bash; source /home/higony/ros2_ws/install/setup.bash; source $TASK_WS/install/setup.bash; export ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1"
+DOMAIN=${REPLAY_DOMAIN:-77}
+ENVSETUP="source /opt/ros/humble/setup.bash; source /home/higony/ros2_ws/install/setup.bash; source $TASK_WS/install/setup.bash; export ROS_DOMAIN_ID=$DOMAIN ROS_LOCALHOST_ONLY=1"
 CLEAN=(env -i HOME=$HOME PATH=/usr/bin:/bin USER=$USER bash -c)
 PYWRAP="import signal,runpy,sys; signal.signal(signal.SIGINT, signal.default_int_handler); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')"
 
@@ -28,11 +31,11 @@ PYWRAP="import signal,runpy,sys; signal.signal(signal.SIGINT, signal.default_int
 # (09-23 사고: 대기 상태로 남은 이전 추정기가 새 런과 같은 도메인에서 함께 발행)
 LEFT=$("${CLEAN[@]}" "$ENVSETUP; timeout 10 ros2 node list --no-daemon 2>/dev/null")
 if [ -n "$LEFT" ]; then
-  echo "ABORT $LABEL: 도메인 77 에 잔존 노드: $LEFT" | tee "$META"; exit 3
+  echo "ABORT $LABEL: 도메인 $DOMAIN 에 잔존 노드: $LEFT" | tee "$META"; exit 3
 fi
 
 {
-  echo "label=$LABEL"; echo "config=$CFG"; echo "config_md5=$(md5sum < "$CFG" | cut -d' ' -f1)"
+  echo "label=$LABEL"; echo "domain=$DOMAIN"; echo "config=$CFG"; echo "config_md5=$(md5sum < "$CFG" | cut -d' ' -f1)"
   echo "binary=$BIN"; echo "binary_md5=$(md5sum < "$BIN" | cut -d' ' -f1)"
   echo "vins_head=$(git -C "$VINS_ROOT" rev-parse HEAD) dirty=$(git -C "$VINS_ROOT" status --porcelain | wc -l)"
   echo "bag=$BAG"; echo "start=$(date -Is)"

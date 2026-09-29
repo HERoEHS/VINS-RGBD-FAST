@@ -19,7 +19,7 @@ source /opt/ros/humble/setup.bash
 | `bias_separation.py <bag> <tum...> [--yaml]` | 입력 bag + VINS camera_pose TUM(들) | **정지 자세 오차를 p(캘리브 bias 아티팩트, QC)와 진짜 자세 드리프트로 분리** (SW1-1837) |
 | `dynobs_eval.sh <bag이름>` | 정지+동적 장애물 bag (프로토콜: `scratchpad/dynobs_protocol.md`) | 재생 3run + 무운동 기준 판정 원버튼 (SW1-1837) |
 | `gt_xy_eval.py <bag> [vins.tum ...]` | GT 포함 bag(v13~v15) + VINS `/vins_estimator/odometry` TUM(들) | **핀 규약 xy 오차**(08-10 REPORT 재현): GT=`map→apriltag_gt_camera`∘정적 `gt/base_footprint`, 휠 대조군, 창별 RMS/med/p95/max. 휠만 돌려 RMS 0.475 m가 나오면 평가기 정상 (SW1-1828) |
-| `replay_one.sh <label> <cfg> <bag> <out>` | `TASK_WS`(설치본 위치), 선택 `RECORD_TF=1` | 1런 재생: `env -i` + 도메인 77(잔존 노드 있으면 중단) + 바이너리·설정 md5 기록 → TUM·로그·meta(reboot/crash 수). 백그라운드 SIGINT 무시 함정을 피해 실제 PID로 정상 종료 (SW1-1828) |
+| `replay_one.sh <label> <cfg> <bag> <out>` | `TASK_WS`(설치본 위치), 선택 `RECORD_TF=1`·`REPLAY_DOMAIN`(기본 77 — 다른 세션과 동시 재생이면 세션마다 다른 값) | 1런 재생: `env -i` + 전용 도메인(잔존 노드 있으면 중단) + 바이너리·설정 md5 기록 → TUM·로그·meta(reboot/crash 수). 백그라운드 SIGINT 무시 함정을 피해 실제 PID로 정상 종료 (SW1-1828) |
 | `tf_kpi_check.py <gt_bag> <out> <label...>` | `RECORD_TF=1`로 녹화한 `<label>.tfbag` | `map→body`∘정적 `vins/base_footprint` TF 경로와 odometry+레버 경로 비교, GT RMS, 시작 오차 대 R·LEVER. ⚠️원시 KPI에는 표시 앵커 레버 편향 약 9.3 cm가 공통으로 얹혀 있음(SW1-1828 critic) |
 | `dynobs_stationary_eval.py <tum...>` | 정지 녹화의 VINS camera_pose TUM(들) | 2s 버킷 \|Δyaw\|·\|Δxy\|·\|Δz\| 타임라인 + 피크/종점 + 합격/취약 판정 (참값=무운동, 노이즈 바닥 0.003m/0.04° 실측) |
 
