@@ -156,5 +156,74 @@ inline void computeDisplayAnchor(double map_odom_yaw, const Eigen::Vector3d &map
                              w_p.z() - p_s.z());
 }
 
+// ── 다리(bridge) 시작점 정렬 (SW1-1936 reboot-seed-bridge-align) ──
+//
+// [고친 결함] 옛 다리는 **캡처 시각부터** 회전·휠 병진을 얹었다. 그런데 시드 재료(앵커 pose,
+//   정화 pose)는 캡처보다 이른 시각의 자세다. 앵커를 잡은 뒤 로봇을 들어 돌리고 내려놓으면
+//   가드가 발동해 앵커를 시드로 쓰는데, 그 사이 회전이 다리에서 통째로 빠져 발행 yaw 가
+//   들리기 전 방향으로 되돌아갔다(실기 vpr4 79.5°·kidnap_0922 약 68° 상실, SW1-1936).
+//   해법: 재료마다 "그 자세의 시각"에 다리 누적기 값과 휠 pose 를 스냅샷해 두고, 다리를
+//   '시드 자세 시각 → 확정'으로 얹는다. 진짜 정지 폭주(앵커 뒤 회전 ≈0)에서는 얹을 것이
+//   없으므로 앵커의 원래 목적(폭주 전 자세 복귀)은 그대로다.
+
+// 시드 재료 하나의 다리 시작점 — 그 자세를 잡은 순간의 누적기 값과 휠 pose.
+struct BridgeSnap
+{
+    double t{-1.0};          // 스냅샷 시각(진단용, <0 = 없음)
+    double gyro_yaw{0.0};    // MotionGatedYaw::value()
+    double wheel_x{0.0}, wheel_y{0.0}, wheel_yaw{0.0};
+};
+
+// 운동 구간만 적분하는 다리 yaw 누적기.
+//   왜 운동 구간만: 앵커는 몇 분씩 묵을 수 있다. 원시 적분이면 bias 가 경과 시간만큼
+//   쌓이고(−0.00035 rad/s × 600 s ≈ 12°), 정지 bias 를 빼도 그 값이 틀리면 같은 문제다
+//   (BGZ-LOCK 잠금값은 수백 초 갱신이 없을 수 있고 vpr4 에서 정지 실측과 1.35e-4 차).
+//   유휴 동안의 기여를 0 으로 만들면 bias 오차는 실제로 움직인 몇 초에만 곱해진다.
+//   게이트는 **원시 자이로와 휠만** 본다 — VINS 상태(Vs·Bgs)는 재초기화 직전에 오염돼
+//   있을 수 있어 판정 근거로 쓰지 않는다.
+//   한계: 블록 평균 노름 0.02 rad/s(약 1.1°/s) 미만의 느린 외부 회전은 휠이 멈춰 있으면
+//   버려진다.
+class MotionGatedYaw
+{
+public:
+    static constexpr double kBlockSec   = 0.1;   // 판정 블록 길이
+    static constexpr double kGateRadps  = 0.02;  // 블록 평균 원시 자이로 노름 문턱
+    static constexpr double kDtSaneMax  = 0.1;   // 세션 경계 epoch dt 제외(기존 dt 위생과 동일)
+
+    // IMU 표본 1개. gyr_raw = 원시 각속도(bias 미차감), wheel_moving = 이 표본 시점 휠 이동,
+    //   bias_z = 차감할 z bias(정지 실측 스냅샷, 없으면 0).
+    void add(double dt, const Eigen::Vector3d &gyr_raw, bool wheel_moving, double bias_z)
+    {
+        if (!(dt > 0.0 && dt < kDtSaneMax))
+            return;
+        blk_dt_ += dt;
+        blk_norm_dt_ += gyr_raw.norm() * dt;
+        blk_dyaw_ += (gyr_raw.z() - bias_z) * dt;
+        blk_wheel_ = blk_wheel_ || wheel_moving;
+        if (blk_dt_ >= kBlockSec)
+        {
+            if (blk_wheel_ || blk_norm_dt_ / blk_dt_ >= kGateRadps)
+                total_ += blk_dyaw_;
+            blk_dt_ = blk_norm_dt_ = blk_dyaw_ = 0.0;
+            blk_wheel_ = false;
+        }
+    }
+
+    // 반영분 + 진행 중 블록(게이트 전). 두 스냅샷의 차가 다리 회전이다. 진행 중 블록을
+    //   게이트 없이 더하므로 스냅샷 경계 오차는 블록 1개(0.1 s)분 이하다.
+    double value() const { return total_ + blk_dyaw_; }
+
+private:
+    double total_{0.0};
+    double blk_dt_{0.0}, blk_norm_dt_{0.0}, blk_dyaw_{0.0};
+    bool   blk_wheel_{false};
+};
+
+// 다리 시작점 선택 — align 이면 재료 스냅샷(시드 자세 시각), 아니면 옛 동작(캡처 시각).
+//   now 는 캡처 순간의 값(옛 동작의 기준). 재료 스냅샷이 없으면(t<0) 캡처 시각으로 폴백.
+inline BridgeSnap bridgeStart(bool align, const BridgeSnap &material, const BridgeSnap &now)
+{
+    return (align && material.t >= 0.0) ? material : now;
+}
 
 }  // namespace reboot_seed

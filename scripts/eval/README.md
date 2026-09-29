@@ -66,6 +66,18 @@ grep -o '\[STILL-DRIFT-SKIP\]' <label>.log | wc -l       # 건너뜀 표본(1 s 
 같은 런 수로 >1 m 폭주가 늘지 않는지를 본다. 09-25 캠페인 스크립트와 결과:
 `~/ros2_ws/bag/analysis/sw1_1922_still_drift_20260925/campaign.sh`, `summary.tsv`.
 
+### 재초기화 시드 다리 정렬 확인 (SW1-1936)
+
+재초기화가 난 런에서는 시드 3줄을 함께 본다(이름 로거 `vins_reboot_seed` — `/rosout` 이 아니라 콘솔·`~/.ros/log` 에만 남는다).
+
+| 토큰 | 뜻 |
+|---|---|
+| `[REBOOT-SEED] … 시드 캡처(앵커\|정화pose)` | 고른 시드 재료와 그 자세(발행 프레임) |
+| `[REBOOT-SEED-BRIDGE] … 방식=시드자세시각 다리시작 t=… 캡처까지 다리회전=…deg` | 다리 시작 시각(= 시드 자세 시각)과 그때부터 캡처까지 운동 구간 회전. 앵커를 잡은 뒤 들어 돌렸다면 여기 그 회전이 보여야 한다. `방식=캡처시각(옛)` 이면 `reboot_seed_bridge_align: 0` |
+| `[REBOOT-SEED] T_seed 확정 … (다리 …m / …deg, 다리시작 t=…)` | 확정된 시드. yaw = 재료 yaw + 다리 회전 |
+
+합격 판정은 발행 yaw 로 한다: 재초기화 직전·직후 발행 yaw 차(계단)가 사라지고, 재초기화 뒤 발행 yaw − bag 자이로 방위가 몇 도 이내.
+
 ## VIO 출력 녹화 (분석 대상 만들기)
 ```bash
 ros2 bag record -o /tmp/vio_out /vins_estimator/odometry /vins_estimator/extrinsic

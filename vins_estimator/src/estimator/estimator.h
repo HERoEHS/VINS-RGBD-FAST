@@ -27,6 +27,7 @@
 #include "../utility/bgz_lock.h"
 #include "../utility/warmup_init_gate.h"
 #include "../utility/depth_adopt_probe.h"
+#include "../utility/reboot_seed.h"   // [SW1-1936] BridgeSnap·MotionGatedYaw 멤버
 #include <cstdlib>
 #include "../factor/marginalization_factor.h"
 #include "../factor/pose_local_parameterization.h"
@@ -271,8 +272,19 @@ public:
     double   seed_cap_yaw_{0.0};
     double   seed_cap_gyro_yaw_{0.0};    // 캡처 시점 다리 적분 스냅샷
     double   seed_cap_wheel_x_{0.0}, seed_cap_wheel_y_{0.0}, seed_cap_wheel_yaw_{0.0};
-    double   bridge_gyro_yaw_rad_{0.0};  // raw gyro z 상시 적분(리셋 금지 — 다리 yaw)
+    double   bridge_gyro_yaw_rad_{0.0};  // raw gyro z 상시 적분(리셋 금지 — 옛 다리 yaw, align 0 전용)
     long     seed_apply_cnt_{0};         // 텔레메트리
+    // [SW1-1936 bridge-align] 다리를 '시드 자세 시각 → 확정'으로 얹기 위한 상태.
+    //   누적기·bias 스냅샷은 clearState 에서 지우지 않는다(Q6: 캡처→clearState→재init 관통).
+    //   재료 스냅샷(anchor/clean)은 재료와 같은 시점에 함께 갱신 — 재료가 clearState 로
+    //   무효화되면(anchor_history_valid_=false·clean_pose_t_=-1) 선택 자체가 안 돼 stale 읽기 없음.
+    reboot_seed::MotionGatedYaw seed_motion_yaw_;  // 운동 구간만 적분한 다리 yaw
+    double   seed_bias_z_{0.0};          // 정지 실측 z bias 스냅샷(bgz_rest_ ready 때 갱신, 없으면 0)
+    int      seed_bias_cnt_{0};          // 스냅샷 갱신 주기 카운터(IMU 표본 수)
+    reboot_seed::BridgeSnap anchor_bridge_;  // 앵커 xy 가 새로 잡힌 순간(계승 재래치엔 불변)
+    reboot_seed::BridgeSnap clean_bridge_;   // 정화 pose 저장 순간
+    bool     seed_cap_align_{false};     // 이번 캡처가 bridge-align 방식인가(확정 때 같은 누적기 사용)
+    double   seed_cap_bridge_t_{-1.0};   // 다리 시작 시각(진단)
     // [SW1-1866 vins-output-map-anchor] 출력 map 핀 — 표시 전용, 추정기 무접촉.
     //   published = T(map→odom)[GT 스크립트 1회 핀, static TF 수신] ∘
     //               T(odom←세션)[init 순간 휠 pose 스냅샷 — 부팅 정렬 가정 불요] ∘ ...

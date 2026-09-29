@@ -183,6 +183,9 @@ if(BUILD_TESTING)
   target_include_directories(test_reboot_seed PRIVATE
     ${EIGEN3_INCLUDE_DIR}
   )
+  # [SW1-1936] vpr4 실기 IMU 발췌(앵커 pose → 시드 캡처)로 다리 회전 재현
+  target_compile_definitions(test_reboot_seed PRIVATE
+    VINS_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test/data")
 
   # [SW1-1872] HF 예측 순수 수학부(hf_predict.h, 헤더-only) — 결함①·② 회귀 방지
   ament_add_gtest(test_hf_predict test/test_hf_predict.cpp)

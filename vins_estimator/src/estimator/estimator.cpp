@@ -213,8 +213,10 @@ void Estimator::clearState()
     still_cum_yaw_elapsed_     = 0.0;
     still_cum_yaw_last_warn_t_ = -1.0e18;
     // [reboot-pose-seed] 시드 '재료'는 세션 스코프 → 리셋. T_seed(seed_active_/R/P)·
-    //   다리 적분(bridge_gyro_yaw_rad_)·캡처 스냅샷(seed_cap_*)·seed_pending_은
-    //   의도적으로 리셋하지 않는다(Q6: 캡처→clearState→재init을 관통해야 함).
+    //   다리 적분(bridge_gyro_yaw_rad_, [SW1-1936] seed_motion_yaw_·seed_bias_z_)·캡처 스냅샷
+    //   (seed_cap_*)·seed_pending_은 의도적으로 리셋하지 않는다(Q6: 캡처→clearState→재init을
+    //   관통해야 함). 재료 스냅샷(anchor_bridge_·clean_bridge_)도 두지만, 재료 자체가 아래에서
+    //   무효화되므로(anchor_history_valid_·clean_pose_t_) 새로 찍히기 전에는 선택되지 않는다.
     clean_pose_t_     = -1.0;
     anchor_latch_t_   = -1.0;
     amputate_first_t_ = -1.0;
@@ -310,6 +312,10 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
         // [reboot-pose-seed] 다리 yaw 적분 — 상시·무리셋(clearState 생존). 시드 캡처~재init
         //   완료 구간의 실회전을 스냅샷 차분으로 복원한다. 수 초 구간이라 bias 오차 무시.
         bridge_gyro_yaw_rad_ += angular_velocity.z() * dt;
+        // [SW1-1936] 다리 yaw(새 방식) — 운동 구간만 적분(원시 자이로·휠만 보고 VINS 상태는
+        //   안 봄). 앵커가 몇 분 묵어도 유휴 동안의 bias 누적이 다리에 섞이지 않는다.
+        seed_motion_yaw_.add(dt, angular_velocity,
+                             last_wheel_speed_.load() >= bgz_lock::kStillWheelMax, seed_bias_z_);
     }
 
     // [SW1-1866] 워밍업 게이트 표본 공급 — IMU 표본 1개당 1회(게이트 계약).
@@ -329,6 +335,18 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
             last_wheel_speed_.load() < bgz_lock::kStillWheelMax;
         // 보관 창은 재잠금 창(10s) 기준 — 초기 잠금은 ready/median(2s)로 접미 판독
         bgz_rest_.update(bgz_rest_t_, angular_velocity.z(), still_now, BGZ_RELOCK_WIN_SEC);
+        // [SW1-1936] 다리용 z bias 스냅샷 — bgz_rest_ 는 정지가 한 번 깨지면 비워지고
+        //   clearState 에서 리셋돼, 들림 직후 캡처·재init 시점에는 읽을 수 없다. 정지 실측이
+        //   준비됐을 때 중앙값을 보존해 둔다(clearState 무리셋). 중앙값 계산은 약 0.5 s 마다만.
+        //   물리 상한(kRestPhysMaxRadps)을 넘는 값은 센서 이상·미정지 의심이라 버린다.
+        constexpr int kSeedBiasEverySamples = 200;  // IMU 약 380 Hz 기준 약 0.5 s
+        if (++seed_bias_cnt_ >= kSeedBiasEverySamples && bgz_rest_.ready(1.5))
+        {
+            seed_bias_cnt_ = 0;
+            const double m = bgz_rest_.median(BGZ_RELOCK_WIN_SEC);
+            if (std::fabs(m) < bgz_lock::kRestPhysMaxRadps)
+                seed_bias_z_ = m;
+        }
     }
 }
 
@@ -1613,6 +1631,12 @@ void Estimator::gaugeSlideGuard()
                     {
                         still_cum_anchor_ = Ps[frame_count];
                         anchor_yaw_deg_   = yaw_now;
+                        // [SW1-1936] 앵커 pose 가 실제로 바뀌는 유일한 지점 — 다리 시작점도 여기서
+                        //   함께 찍는다. 계승 재래치(latch_t 만 갱신)에선 pose·스냅샷 모두 그대로라
+                        //   연쇄 계승이 그 사이 운동을 숨기지 못한다.
+                        anchor_bridge_ = reboot_seed::BridgeSnap{
+                            stamp_now, seed_motion_yaw_.value(), latest_wheel_x_.load(),
+                            latest_wheel_y_.load(), latest_wheel_yaw_.load()};
                     }
                     if (!base_inherit)
                     {
@@ -2029,6 +2053,10 @@ void Estimator::gaugeSlideGuard()
                 clean_pose_t_ = stamp_now;
                 clean_P_      = Ps[frame_count];
                 clean_yaw_    = Utility::R2ypr(Rs[frame_count]).x() * M_PI / 180.0;
+                // [SW1-1936] 정화 pose 의 다리 시작점 — 발동보다 이른 정화 pose 도 그 사이 회전을 잃지 않게
+                clean_bridge_ = reboot_seed::BridgeSnap{
+                    stamp_now, seed_motion_yaw_.value(), latest_wheel_x_.load(),
+                    latest_wheel_y_.load(), latest_wheel_yaw_.load()};
             }
         }
     }
@@ -2316,6 +2344,7 @@ void Estimator::captureRebootSeed(double stamp)
     Vector3d p_session;
     double   yaw_session_rad;
     const char *src;
+    const reboot_seed::BridgeSnap *material = nullptr;  // [SW1-1936] 고른 재료의 다리 시작점
     // 앵커 1순위의 전제 = "현재 상태가 오염됐다"(절제 실증 존재). 절제가 없는
     //   failure(big bias 등)는 직전 상태가 건강하므로 신선한 정화 pose가 우월 —
     //   강제 reboot A/B 실증: 무절제 상태서 앵커 시드는 0.56m 낡아 GT 오차 2.2배.
@@ -2333,12 +2362,14 @@ void Estimator::captureRebootSeed(double stamp)
         p_session.z()  = still_cum_z_anchor_;
         yaw_session_rad = anchor_yaw_deg_ * M_PI / 180.0;
         src = "앵커";
+        material = &anchor_bridge_;
     }
     else if (clean_pose_t_ >= 0.0)
     {
         p_session      = clean_P_;
         yaw_session_rad = clean_yaw_;
         src = "정화pose";
+        material = &clean_bridge_;
     }
     else
     {
@@ -2351,10 +2382,19 @@ void Estimator::captureRebootSeed(double stamp)
         seed_active_ ? std::atan2(seed_R_(1, 0), seed_R_(0, 0)) : 0.0;
     seed_cap_P_   = seed_active_ ? Vector3d(seed_R_ * p_session + seed_P_) : p_session;
     seed_cap_yaw_ = yaw_session_rad + prev_seed_yaw;
-    seed_cap_gyro_yaw_  = bridge_gyro_yaw_rad_;
-    seed_cap_wheel_x_   = latest_wheel_x_.load();
-    seed_cap_wheel_y_   = latest_wheel_y_.load();
-    seed_cap_wheel_yaw_ = latest_wheel_yaw_.load();
+    // [SW1-1936] 다리 시작점 — align 이면 '시드 자세 시각'(재료 스냅샷), 아니면 옛 동작(캡처
+    //   시각·원시 적분). 옛 동작은 앵커를 잡은 뒤 들어 돌린 회전을 통째로 버렸다(vpr4 79.5°).
+    //   확정(finalize)도 같은 누적기를 써야 차분이 맞으므로 방식을 캡처 때 고정해 둔다.
+    seed_cap_align_ = (REBOOT_SEED_BRIDGE_ALIGN != 0);
+    const reboot_seed::BridgeSnap now{
+        stamp, seed_cap_align_ ? seed_motion_yaw_.value() : bridge_gyro_yaw_rad_,
+        latest_wheel_x_.load(), latest_wheel_y_.load(), latest_wheel_yaw_.load()};
+    const reboot_seed::BridgeSnap start = reboot_seed::bridgeStart(seed_cap_align_, *material, now);
+    seed_cap_gyro_yaw_  = start.gyro_yaw;
+    seed_cap_wheel_x_   = start.wheel_x;
+    seed_cap_wheel_y_   = start.wheel_y;
+    seed_cap_wheel_yaw_ = start.wheel_yaw;
+    seed_cap_bridge_t_  = start.t;
     seed_pending_ = true;
     RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
                 "[REBOOT-SEED] t=%.3f 시드 캡처(%s): (%.3f, %.3f, %.3f) yaw=%.1fdeg",
@@ -2369,6 +2409,12 @@ void Estimator::captureRebootSeed(double stamp)
                 "hist=%d clean_t=%.3f",
                 anchor_latch_t_, amputate_first_t_, still_drift_first_t_,
                 anchor_history_valid_ ? 1 : 0, clean_pose_t_);
+    // [SW1-1936] 다리 시작점과 그때부터 캡처까지의 다리 회전 — 앵커 뒤 들어 돌린 회전이 여기 보인다
+    RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
+                "[REBOOT-SEED-BRIDGE] t=%.3f 방식=%s 다리시작 t=%.3f 캡처까지 다리회전=%.1fdeg "
+                "bias_z=%.6f",
+                stamp, seed_cap_align_ ? "시드자세시각" : "캡처시각(옛)", seed_cap_bridge_t_,
+                (now.gyro_yaw - seed_cap_gyro_yaw_) * 180.0 / M_PI, seed_bias_z_);
 }
 
 // 재init 완료 후 첫 solve에서 호출 — 캡처~지금 사이 이동(휠 병진+gyro yaw)을 얹어
@@ -2381,7 +2427,9 @@ void Estimator::finalizeRebootSeed()
         snapshotOutputAnchor();
     if (!seed_pending_)
         return;
-    const double d_yaw = bridge_gyro_yaw_rad_ - seed_cap_gyro_yaw_;
+    // [SW1-1936] 캡처 때 고른 누적기와 같은 것으로 차분(방식이 섞이면 차분이 무의미)
+    const double gyro_now = seed_cap_align_ ? seed_motion_yaw_.value() : bridge_gyro_yaw_rad_;
+    const double d_yaw    = gyro_now - seed_cap_gyro_yaw_;
     const Eigen::Vector2d wheel_delta(latest_wheel_x_.load() - seed_cap_wheel_x_,
                                       latest_wheel_y_.load() - seed_cap_wheel_y_);
     const Vector3d d_p =
@@ -2392,10 +2440,10 @@ void Estimator::finalizeRebootSeed()
     seed_apply_cnt_++;
     RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
                 "[REBOOT-SEED] T_seed 확정(누적 %ld회): (%.3f, %.3f, %.3f) yaw=%.1fdeg "
-                "(다리 %.3fm / %.2fdeg)",
+                "(다리 %.3fm / %.2fdeg, 다리시작 t=%.3f)",
                 seed_apply_cnt_, seed_P_.x(), seed_P_.y(), seed_P_.z(),
                 std::atan2(seed_R_(1, 0), seed_R_(0, 0)) * 180.0 / M_PI,
-                d_p.norm(), d_yaw * 180.0 / M_PI);
+                d_p.norm(), d_yaw * 180.0 / M_PI, seed_cap_bridge_t_);
 }
 
 void Estimator::seedTransform(Vector3d &p, Matrix3d &R) const

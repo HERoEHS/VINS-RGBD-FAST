@@ -1,6 +1,10 @@
 // [SW1-1866 reboot-pose-seed] 재초기화 pose 시드 계승 — 순수 수학부 gtest (Q7)
 #include <gtest/gtest.h>
 #include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <string>
+#include <vector>
 #include "../src/utility/reboot_seed.h"
 
 namespace rs = reboot_seed;
@@ -270,6 +274,165 @@ TEST(DtHygiene, RejectsEpochScaleDt)
     EXPECT_FALSE(sane(-1.0));
     EXPECT_TRUE(sane(1.0 / 376.0));  // IMU 주기 ~2.66ms
     EXPECT_TRUE(sane(0.099));
+}
+
+// ── [SW1-1936] 다리 시작점 정렬 · 운동 구간 적분 ──
+namespace
+{
+constexpr double kDeg   = M_PI / 180.0;
+constexpr double kImuDt = 1.0 / 380.0;  // 실기 IMU 약 380 Hz
+
+// 간단한 결정적 의사난수(시드 고정) — 표준편차 sigma 근사 가우시안(균등 12개 합)
+struct Lcg
+{
+    unsigned long long s{12345ULL};
+    double uni() { s = s * 6364136223846793005ULL + 1442695040888963407ULL; return (s >> 11) * (1.0 / 9007199254740992.0); }
+    double gauss(double sigma) { double a = 0; for (int i = 0; i < 12; ++i) a += uni(); return (a - 6.0) * sigma; }
+};
+
+// 정지 구간을 흘린다: 원시 자이로 = 참 bias + 노이즈(3축)
+void feedIdle(rs::MotionGatedYaw &m, double sec, double true_bias_z, double bias_used, Lcg &rng,
+              double sigma = 0.004)
+{
+    for (int i = 0; i < static_cast<int>(sec / kImuDt); ++i)
+        m.add(kImuDt, Eigen::Vector3d(rng.gauss(sigma), rng.gauss(sigma), true_bias_z + rng.gauss(sigma)),
+              false, bias_used);
+}
+}  // namespace
+
+// (a) 유휴 600 s — bias 스냅샷이 1.35e-4 틀려도(vpr4 실측 잠금값 괴리) 다리에 거의 안 쌓인다.
+//     원시 적분이면 0.0005×600 s ≈ 17°, 틀린 bias 를 빼도 1.35e-4×600 ≈ 4.6° 가 쌓였을 것.
+TEST(BridgeAlign, IdleDoesNotAccumulateBias)
+{
+    rs::MotionGatedYaw m;
+    Lcg rng;
+    feedIdle(m, 600.0, 0.0005, 0.0005 - 1.35e-4, rng);
+    EXPECT_LT(std::fabs(m.value()) / kDeg, 0.2);
+}
+
+// (b) 실제 회전은 그대로 반영된다 — 1 rad/s × 1.5 s. 과도가 섞여 bias 가 2e-3 틀려도
+//     오차는 운동 시간(여기선 5 s)에만 곱해진다(≤ 0.6°).
+TEST(BridgeAlign, MotionIsIntegratedAndBiasErrorBoundedByMotionTime)
+{
+    rs::MotionGatedYaw m;
+    Lcg rng;
+    feedIdle(m, 10.0, 0.0, 0.0, rng);
+    const double v0 = m.value();
+    for (int i = 0; i < static_cast<int>(1.5 / kImuDt); ++i)
+        m.add(kImuDt, Eigen::Vector3d(0.0, 0.0, -1.0), false, 0.0);
+    feedIdle(m, 10.0, 0.0, 0.0, rng);
+    EXPECT_NEAR((m.value() - v0) / kDeg, -1.5 / kDeg, 0.5);
+
+    rs::MotionGatedYaw w;  // 틀린 bias(2e-3) + 운동 5 s(0.3 rad/s 흔들기 왕복, 순회전 0)
+    feedIdle(w, 60.0, 0.0, 2e-3, rng);
+    const double w0 = w.value();
+    for (int i = 0; i < static_cast<int>(5.0 / kImuDt); ++i)
+        w.add(kImuDt, Eigen::Vector3d(0.0, 0.0, 0.3 * std::sin(2.0 * M_PI * i * kImuDt)), false, 2e-3);
+    feedIdle(w, 60.0, 0.0, 2e-3, rng);
+    EXPECT_LE(std::fabs(w.value() - w0) / kDeg, 0.6);
+}
+
+// (c) 느린 회전(0.01 rad/s)은 휠이 움직이면 반영, 휠이 멈춰 있으면 버려진다(알려진 한계 고정).
+TEST(BridgeAlign, SlowRotationNeedsWheelMotion)
+{
+    rs::MotionGatedYaw with_wheel, without_wheel;
+    for (int i = 0; i < static_cast<int>(10.0 / kImuDt); ++i)
+    {
+        const Eigen::Vector3d g(0.0, 0.0, 0.01);
+        with_wheel.add(kImuDt, g, true, 0.0);
+        without_wheel.add(kImuDt, g, false, 0.0);
+    }
+    EXPECT_NEAR(with_wheel.value(), 0.1, 0.005);          // 0.01 rad/s × 10 s
+    EXPECT_LT(std::fabs(without_wheel.value()), 0.0011);  // 진행 중 블록(≤0.1 s)분만 남는다
+}
+
+// (d) 블록 경계 — 진행 중 블록은 value() 에 게이트 없이 포함, 비정상 dt 는 무시.
+TEST(BridgeAlign, PendingBlockAndInsaneDt)
+{
+    rs::MotionGatedYaw m;
+    for (int i = 0; i < 10; ++i)  // 0.1 s 미만 → 아직 블록 미완
+        m.add(kImuDt, Eigen::Vector3d(0.0, 0.0, 1.0), false, 0.0);
+    EXPECT_NEAR(m.value(), 10 * kImuDt, 1e-12);
+    const double before = m.value();
+    m.add(1.786e9, Eigen::Vector3d(0.0, 0.0, 1.0), false, 0.0);  // 세션 경계 epoch dt
+    m.add(0.0, Eigen::Vector3d(0.0, 0.0, 1.0), false, 0.0);
+    EXPECT_DOUBLE_EQ(m.value(), before);
+}
+
+// (e) 다리 시작점 정렬 — vpr4 형태(앵커 yaw 170.5°, 앵커 뒤 들어서 −79° 회전, 내려놓은 뒤 발동).
+//     새 방식은 앵커 시각부터 얹어 91.5°(참값), 옛 방식(캡처 시각부터)은 170.5° 로 되돌아간다.
+TEST(BridgeAlign, SeedYawKeepsRotationSinceAnchorPose)
+{
+    rs::MotionGatedYaw m;
+    Lcg rng;
+    feedIdle(m, 15.0, 0.0, 0.0, rng);
+    const rs::BridgeSnap anchor{100.0, m.value(), 0.0, 0.0, 0.0};  // 앵커 pose 시각 스냅샷
+    feedIdle(m, 5.0, 0.0, 0.0, rng);
+    for (int i = 0; i < static_cast<int>(1.0 / kImuDt); ++i)      // 들어서 −79°
+        m.add(kImuDt, Eigen::Vector3d(0.0, 0.0, -79.0 * kDeg), false, 0.0);
+    feedIdle(m, 1.0, 0.0, 0.0, rng);                                // 내려놓고 조용 → 발동·캡처
+    const rs::BridgeSnap now{122.0, m.value(), 0.0, 0.0, 0.0};
+    feedIdle(m, 1.3, 0.0, 0.0, rng);                                // 재init 동안 정지
+    const double yaw_anchor = 170.5 * kDeg;
+
+    const rs::BridgeSnap s_new = rs::bridgeStart(true, anchor, now);
+    const rs::BridgeSnap s_old = rs::bridgeStart(false, anchor, now);
+    Eigen::Matrix3d R;
+    Eigen::Vector3d t;
+    rs::finalizeSeed(Eigen::Vector3d::Zero(), yaw_anchor, Eigen::Vector3d::Zero(),
+                     m.value() - s_new.gyro_yaw, R, t);
+    EXPECT_NEAR(std::atan2(R(1, 0), R(0, 0)) / kDeg, 91.5, 0.5);
+    rs::finalizeSeed(Eigen::Vector3d::Zero(), yaw_anchor, Eigen::Vector3d::Zero(),
+                     m.value() - s_old.gyro_yaw, R, t);
+    EXPECT_NEAR(std::atan2(R(1, 0), R(0, 0)) / kDeg, 170.5, 0.5);  // 옛 결함(대조)
+}
+
+// (e') 재료 스냅샷이 없으면(t<0) 캡처 시각으로 폴백, align 끄면 항상 캡처 시각.
+TEST(BridgeAlign, BridgeStartFallbacks)
+{
+    const rs::BridgeSnap none;  // t = -1
+    const rs::BridgeSnap mat{5.0, 1.0, 2.0, 3.0, 0.4};
+    const rs::BridgeSnap now{9.0, 7.0, 8.0, 9.0, 1.2};
+    EXPECT_DOUBLE_EQ(rs::bridgeStart(true, none, now).t, 9.0);
+    EXPECT_DOUBLE_EQ(rs::bridgeStart(true, mat, now).gyro_yaw, 1.0);
+    EXPECT_DOUBLE_EQ(rs::bridgeStart(true, mat, now).wheel_yaw, 0.4);
+    EXPECT_DOUBLE_EQ(rs::bridgeStart(false, mat, now).t, 9.0);
+}
+
+// (f) 실기 vpr4 발췌(앵커 pose 259.342 → 캡처 280.870, bag IMU 원시 + 휠 이동 플래그)를 흘리면
+//     들림 회전 약 −79° 가 재현되고, 들리기 전 유휴 15.66 s 의 기여는 거의 0 이다.
+//     bias 는 스냅샷 없음(0)·래치 부근 정지 실측(−0.000128)·잠금 실측 괴리(−0.00035) 셋 다 같은 결론.
+TEST(BridgeAlign, Vpr4FixtureReproducesLiftRotation)
+{
+    const std::string path = std::string(VINS_TEST_DATA_DIR) + "/vpr4_anchor_to_capture_imu.csv";
+    std::ifstream f(path);
+    ASSERT_TRUE(f.good()) << path;
+    struct S { double t, gx, gy, gz; int wm; };
+    std::vector<S> rows;
+    std::string line;
+    while (std::getline(f, line))
+    {
+        if (line.empty() || line[0] == '#')
+            continue;
+        S s{};
+        ASSERT_EQ(std::sscanf(line.c_str(), "%lf,%lf,%lf,%lf,%d", &s.t, &s.gx, &s.gy, &s.gz, &s.wm), 5);
+        rows.push_back(s);
+    }
+    ASSERT_GT(rows.size(), 8000u);
+    for (const double bias : {0.0, -0.000128, -0.00035})
+    {
+        rs::MotionGatedYaw m;
+        double idle_part = 0.0;
+        for (size_t i = 1; i < rows.size(); ++i)
+        {
+            m.add(rows[i].t - rows[i - 1].t, Eigen::Vector3d(rows[i].gx, rows[i].gy, rows[i].gz),
+                  rows[i].wm != 0, bias);
+            if (rows[i].t <= 15.66)
+                idle_part = m.value();
+        }
+        EXPECT_NEAR(m.value() / kDeg, -79.0, 1.0) << "bias " << bias;
+        EXPECT_LT(std::fabs(idle_part) / kDeg, 0.6) << "bias " << bias;
+    }
 }
 
 int main(int argc, char **argv)
