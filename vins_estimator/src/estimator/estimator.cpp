@@ -338,13 +338,15 @@ void Estimator::processIMU(double dt, const Vector3d &linear_acceleration,
         // [SW1-1936] 다리용 z bias 스냅샷 — bgz_rest_ 는 정지가 한 번 깨지면 비워지고
         //   clearState 에서 리셋돼, 들림 직후 캡처·재init 시점에는 읽을 수 없다. 정지 실측이
         //   준비됐을 때 중앙값을 보존해 둔다(clearState 무리셋). 중앙값 계산은 약 0.5 s 마다만.
-        //   물리 상한(kRestPhysMaxRadps)을 넘는 값은 센서 이상·미정지 의심이라 버린다.
-        constexpr int kSeedBiasEverySamples = 200;  // IMU 약 380 Hz 기준 약 0.5 s
+        //   상한은 잠금용 kRestPhysMaxRadps(0.02)보다 좁은 전용 값 — 실측 |b_z| ≤ 2.3e-3 이라
+        //   0.005 를 넘으면 느린 회전이 정지로 잘못 섞인(Bgs 오염) 창으로 보고 버린다(critic 경미 6).
+        constexpr int    kSeedBiasEverySamples = 200;    // IMU 약 380 Hz 기준 약 0.5 s
+        constexpr double kSeedBiasMaxRadps     = 0.005;  // 다리용 bias 스냅샷 허용 상한
         if (++seed_bias_cnt_ >= kSeedBiasEverySamples && bgz_rest_.ready(1.5))
         {
             seed_bias_cnt_ = 0;
             const double m = bgz_rest_.median(BGZ_RELOCK_WIN_SEC);
-            if (std::fabs(m) < bgz_lock::kRestPhysMaxRadps)
+            if (std::fabs(m) < kSeedBiasMaxRadps)
                 seed_bias_z_ = m;
         }
     }
