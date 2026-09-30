@@ -2486,7 +2486,7 @@ void Estimator::finalizeRebootSeed()
     // [SW1-1938] 다리 끝 — origin 방식이면 새 세션 원점 시각. 새 세션은 원점에서 yaw 0 으로 출발해 원점 이후
     //   회전을 스스로 세므로, 다리가 확정 시각까지 가면 [원점, 확정] 을 두 번 센다. 원점 값을 이력에서 못 찾으면
     //   확정 시각으로 물러나고(옛 동작과 같은 크기의 오차로 퇴화) 어느 조회가 실패했는지 경고한다.
-    const double yaw_now = seed_cap_origin_ ? seed_timed_yaw_.value()
+    const double yaw_now = seed_cap_origin_ ? seed_frame_yaw_  // 폴백도 시작과 같은 프레임 시각 규약
                          : (seed_cap_align_ ? seed_motion_yaw_.value() : bridge_gyro_yaw_rad_);
     const reboot_seed::BridgeEnd be = reboot_seed::bridgeEnd(
         seed_cap_origin_, seed_origin_t_, seed_timed_yaw_, seed_wheel_hist_, yaw_now,
