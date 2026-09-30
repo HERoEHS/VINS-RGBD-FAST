@@ -111,8 +111,9 @@ void Estimator::clearState()
     m_imu.unlock();
     if (feed_disc)
     {
-        seed_disc_n_    = disc_n;
-        seed_disc_dyaw_ = seed_timed_yaw_.value() - disc_before;
+        // 캡처 한 번에 clearState 가 여러 번 불려도(드묾) 다 더한다 — 캡처 때 0 으로 되돌린다
+        seed_disc_n_    += disc_n;
+        seed_disc_dyaw_ += seed_timed_yaw_.value() - disc_before;
     }
     // [SW1-1889] 특징 id 는 프로세스 안에서 재사용되지 않지만(n_id 는 tracker 생성자에서만 0), 재시작 후에도
     //   추적이 이어진 특징의 재채택을 새 이벤트로 남기기 위해 A/O 중복 억제 집합을 비운다.
@@ -476,6 +477,9 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
                                 last_wheel_speed_.load() >= bgz_lock::kStillWheelMax, seed_bias_z_);
         }
         prevTime = curTime;
+        // [SW1-1938] 프레임 시각의 누적기 값 — imu_vector 끝의 lookahead 표본(curTime 너머)은 빼고 잰다.
+        if (!seed_timed_yaw_.valueAt(curTime, &seed_frame_yaw_))
+            seed_frame_yaw_ = seed_timed_yaw_.value();
     }
 
     // ===== 휠 오도메트리 적분 (IMU 루프 미러, SW1-1829) =====
@@ -1101,6 +1105,9 @@ bool Estimator::visualInitialAlign()
  */
 bool Estimator::staticInitialAlignWithDepth()
 {
+    // [SW1-1938] 동적 경로의 폴백 — 중력만으로 R0 를 잡아 세션 yaw 0 이 어느 프레임인지 보장되지 않는다
+    //   (운영 static init 은 이 함수를 안 쓴다). 원점을 모름으로 두어 다리는 확정 시각으로 물러나게 한다.
+    seed_origin_t_ = -1.0;
     // 利用加速度平均值估计Bgs, Bas, g
     map<double, ImageFrame>::iterator frame_it;
     Vector3d                          sum_a(0, 0, 0);
@@ -2476,35 +2483,22 @@ void Estimator::finalizeRebootSeed()
     if (!seed_pending_)
         return;
     // [SW1-1936] 캡처 때 고른 누적기와 같은 것으로 차분(방식이 섞이면 차분이 무의미)
-    double gyro_end = seed_cap_align_ ? seed_motion_yaw_.value() : bridge_gyro_yaw_rad_;
-    double wheel_x_end = latest_wheel_x_.load(), wheel_y_end = latest_wheel_y_.load();
-    const char *end_kind = "확정(옛)";
-    double      end_t    = -1.0;
-    if (seed_cap_origin_)
-    {
-        // [SW1-1938] 다리 끝 = 새 세션 원점 시각. 새 세션은 원점에서 yaw 0 으로 출발해 원점 이후 회전을
-        //   스스로 세므로, 다리가 확정 시각까지 가면 [원점, 확정] 을 두 번 센다. 원점 값이 이력에 없으면
-        //   (원점 모름·이력 밖) 확정 시각으로 물러나고 경고한다 — 옛 동작과 같은 크기의 오차로 퇴화.
-        double                  v = 0.0;
-        reboot_seed::BridgeSnap w;
-        if (seed_origin_t_ >= 0.0 && seed_timed_yaw_.valueAt(seed_origin_t_, &v) &&
-            seed_wheel_hist_.at(seed_origin_t_, &w))
-        {
-            gyro_end    = v;
-            wheel_x_end = w.wheel_x;
-            wheel_y_end = w.wheel_y;
-            end_kind    = "새세션원점";
-            end_t       = seed_origin_t_;
-        }
-        else
-        {
-            gyro_end = seed_timed_yaw_.value();
-            end_kind = "확정(원점 이력 없음)";
-            RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
-                        "[REBOOT-SEED] 새 세션 원점(t=%.3f) 값을 이력에서 못 찾음 — 다리를 확정 시각까지 얹는다",
-                        seed_origin_t_);
-        }
-    }
+    // [SW1-1938] 다리 끝 — origin 방식이면 새 세션 원점 시각. 새 세션은 원점에서 yaw 0 으로 출발해 원점 이후
+    //   회전을 스스로 세므로, 다리가 확정 시각까지 가면 [원점, 확정] 을 두 번 센다. 원점 값을 이력에서 못 찾으면
+    //   확정 시각으로 물러나고(옛 동작과 같은 크기의 오차로 퇴화) 어느 조회가 실패했는지 경고한다.
+    const double yaw_now = seed_cap_origin_ ? seed_timed_yaw_.value()
+                         : (seed_cap_align_ ? seed_motion_yaw_.value() : bridge_gyro_yaw_rad_);
+    const reboot_seed::BridgeEnd be = reboot_seed::bridgeEnd(
+        seed_cap_origin_, seed_origin_t_, seed_timed_yaw_, seed_wheel_hist_, yaw_now,
+        latest_wheel_x_.load(), latest_wheel_y_.load());
+    if (seed_cap_origin_ && be.kind != reboot_seed::BridgeEndKind::Origin)
+        RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
+                    "[REBOOT-SEED] 새 세션 원점(t=%.3f) 다리 끝을 못 잡음 — %s", seed_origin_t_,
+                    reboot_seed::bridgeEndName(be.kind));
+    const double gyro_end    = be.gyro_yaw;
+    const double wheel_x_end = be.wheel_x, wheel_y_end = be.wheel_y;
+    const char  *end_kind    = reboot_seed::bridgeEndName(be.kind);
+    const double end_t       = (be.kind == reboot_seed::BridgeEndKind::Origin) ? seed_origin_t_ : -1.0;
     const double d_yaw = gyro_end - seed_cap_gyro_yaw_;
     const Eigen::Vector2d wheel_delta(wheel_x_end - seed_cap_wheel_x_, wheel_y_end - seed_cap_wheel_y_);
     const Vector3d d_p =
@@ -2525,7 +2519,8 @@ void Estimator::finalizeRebootSeed()
 double Estimator::seedBridgeYawNow() const
 {
     // [SW1-1938] 다리 시작 스냅샷·캡처·확정이 모두 같은 누적기를 써야 차분이 맞다(방식은 기동 때 고정).
-    return (REBOOT_SEED_BRIDGE_ALIGN && REBOOT_SEED_BRIDGE_ORIGIN) ? seed_timed_yaw_.value()
+    //   origin 방식은 프레임 시각 값(끝의 원점 보간과 같은 규약), 아니면 SW1-1936 누적기 처리 순간 값.
+    return (REBOOT_SEED_BRIDGE_ALIGN && REBOOT_SEED_BRIDGE_ORIGIN) ? seed_frame_yaw_
                                                                   : seed_motion_yaw_.value();
 }
 

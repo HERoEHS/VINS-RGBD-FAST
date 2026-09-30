@@ -294,6 +294,8 @@ public:
     bool     seed_cap_origin_{false};    // 이번 캡처가 bridge-origin 방식인가(캡처 때 고정)
     int      seed_disc_n_{0};            // 마지막 재부팅 때 비우기 전에 누적기에 먹인 표본 수(진단)
     double   seed_disc_dyaw_{0.0};       // 그 표본들의 회전(진단)
+    double   seed_frame_yaw_{0.0};       // 현재 프레임 시각(curTime)의 누적기 값 — 다리 시작 스냅샷을 끝(원점 보간)과
+                                         //   같은 규약으로(처리 순간 value() 는 lookahead 표본 1개만큼 앞선다)
     // 다리 누적기 현재값 — bridge-origin 이면 표본 시각 기준 누적기, 아니면 SW1-1936 누적기
     double seedBridgeYawNow() const;
     // [SW1-1866 vins-output-map-anchor] 출력 map 핀 — 표시 전용, 추정기 무접촉.

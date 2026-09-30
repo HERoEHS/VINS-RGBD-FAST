@@ -250,11 +250,22 @@ class TimedSeedYaw
 {
 public:
     static constexpr double kHistSec = 60.0;  // 이력 보존 길이 — 재부팅~확정(워밍업 대기 포함)을 덮게
+    static constexpr double kBackJumpSec = 0.5;  // 이만큼 넘게 뒤로 가면 시간축이 새로 시작된 것으로 본다
 
     // 표본 1개(시각 t, 원시 각속도). last_t 이하 시각은 무시한다. 간격이 비정상(>= 0.1 s,
     //   세션 경계·시계 계단)이면 MotionGatedYaw 가 버리고 시각만 이어 받는다.
+    //   후방 시계 점프(t < last − 0.5 s, 예: IMU 스탬프가 1 s 넘게 뒤로 가 GAP-RESET 이 난 경우)는
+    //   시간축이 새로 시작된 것이다 — 이력을 비우고 시각만 새로 잡는다(값은 이어 간다). 그러지 않으면
+    //   새 표본이 옛 최대 시각을 넘을 때까지 전부 버려지고, 새 원점 조회가 옛 시간축 값을 돌려준다.
     void add(double t, const Eigen::Vector3d &gyr_raw, bool wheel_moving, double bias_z)
     {
+        if (last_t_ >= 0.0 && t < last_t_ - kBackJumpSec)
+        {
+            hist_.clear();
+            last_t_ = t;
+            hist_.emplace_back(t, acc_.value());
+            return;
+        }
         if (last_t_ >= 0.0 && !(t > last_t_))
             return;
         const double dt = (last_t_ >= 0.0) ? t - last_t_ : 0.0;
@@ -304,9 +315,12 @@ class FrameWheelHistory
 public:
     static constexpr double kHistSec = 60.0;
     static constexpr double kTolSec  = 0.02;  // 원점 시각과 프레임 키의 허용 차(td 추정 흔들림)
+    static constexpr double kBackJumpSec = 0.5;  // TimedSeedYaw 와 같은 규약 — 후방 점프면 이력 새로 시작
 
     void add(double t, double wx, double wy, double wyaw)
     {
+        if (!hist_.empty() && t < hist_.back().t - kBackJumpSec)
+            hist_.clear();
         if (!hist_.empty() && !(t > hist_.back().t))
             return;
         hist_.push_back(BridgeSnap{t, 0.0, wx, wy, wyaw});
@@ -337,5 +351,43 @@ public:
 private:
     std::deque<BridgeSnap> hist_;
 };
+
+// 다리 끝값 선택(finalize) — origin 방식이면 새 세션 원점 시각의 누적기·휠 값, 조회가 안 되면 지금 값으로
+//   물러난다(옛 동작과 같은 크기의 오차로 퇴화). kind 는 어느 경로였는지(로그·테스트용).
+enum class BridgeEndKind { Off, Origin, NoOriginTime, YawHistMiss, WheelHistMiss };
+struct BridgeEnd
+{
+    double gyro_yaw, wheel_x, wheel_y;
+    BridgeEndKind kind;
+};
+inline BridgeEnd bridgeEnd(bool origin_mode, double origin_t, const TimedSeedYaw &yaw_hist,
+                           const FrameWheelHistory &wheel_hist, double yaw_now, double wx_now,
+                           double wy_now)
+{
+    if (!origin_mode)
+        return {yaw_now, wx_now, wy_now, BridgeEndKind::Off};
+    if (origin_t < 0.0)
+        return {yaw_now, wx_now, wy_now, BridgeEndKind::NoOriginTime};
+    double v = 0.0;
+    if (!yaw_hist.valueAt(origin_t, &v))
+        return {yaw_now, wx_now, wy_now, BridgeEndKind::YawHistMiss};
+    BridgeSnap w;
+    if (!wheel_hist.at(origin_t, &w))
+        return {yaw_now, wx_now, wy_now, BridgeEndKind::WheelHistMiss};
+    return {v, w.wheel_x, w.wheel_y, BridgeEndKind::Origin};
+}
+
+inline const char *bridgeEndName(BridgeEndKind k)
+{
+    switch (k)
+    {
+        case BridgeEndKind::Off: return "확정(옛)";
+        case BridgeEndKind::Origin: return "새세션원점";
+        case BridgeEndKind::NoOriginTime: return "확정(원점 시각 모름)";
+        case BridgeEndKind::YawHistMiss: return "확정(yaw 이력에 원점 없음)";
+        case BridgeEndKind::WheelHistMiss: return "확정(휠 이력에 원점 프레임 없음)";
+    }
+    return "?";
+}
 
 }  // namespace reboot_seed

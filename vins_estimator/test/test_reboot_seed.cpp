@@ -461,7 +461,7 @@ TEST(BridgeOrigin, EachSampleCountedOnce)
     EXPECT_NEAR(v1, 1.0, 0.01);
     for (int k = 0; k < 5; ++k)
         m.add(last, Eigen::Vector3d(0.0, 0.0, wz), false, 0.0);   // 같은 시각 되풀이
-    m.add(last - 0.5, Eigen::Vector3d(0.0, 0.0, wz), false, 0.0);  // 더 이른 시각
+    m.add(last - 0.3, Eigen::Vector3d(0.0, 0.0, wz), false, 0.0);  // 조금 이른 시각(후방 점프 문턱 0.5 s 안)
     EXPECT_DOUBLE_EQ(m.value(), v1);
     EXPECT_DOUBLE_EQ(m.lastT(), last);
 }
@@ -496,7 +496,7 @@ TEST(BridgeOrigin, FrameWheelHistoryLookup)
     rs::FrameWheelHistory h;
     for (int k = 0; k < 20; ++k)
         h.add(100.0 + 0.1 * k, 0.01 * k, -0.02 * k, 0.0);
-    h.add(100.05, 9.0, 9.0, 9.0);  // 뒤로 간 시각 — 무시
+    h.add(101.7, 9.0, 9.0, 9.0);   // 조금 뒤로 간 시각(후방 점프 문턱 0.5 s 안) — 무시
     rs::BridgeSnap w;
     ASSERT_TRUE(h.at(100.505, &w));  // 100.5 와 5 ms 차
     EXPECT_NEAR(w.wheel_x, 0.05, 1e-12);
@@ -544,18 +544,76 @@ TEST(BridgeOrigin, ReinitWhileRotatingHasNoDoubleCountOrGap)
     EXPECT_LT(std::fabs(new_err) / kDeg, 0.5);
 }
 
-// 가만히 있을 때의 재초기화는 옛 방식·새 방식이 같다(회전이 없으면 이중·미계산도 0)
+// 가만히 있을 때의 재초기화는 옛 방식·새 방식이 같다 — 참 bias 가 있고 스냅샷이 틀려도 정지 블록은
+//   게이트에 걸려 누적되지 않으므로 원점에서 끊든 확정까지 가든 다리는 0 이다.
 TEST(BridgeOrigin, ReinitWhileStillIsUnchanged)
 {
     rs::TimedSeedYaw m;
-    feedRotation(m, 0.0, 1.0, 0.0);
-    double start = 0.0;
+    Lcg rng;
+    double t = 0.0;
+    for (; t < 2.5; t += kImuDt)
+        m.add(t, Eigen::Vector3d(rng.gauss(0.004), rng.gauss(0.004), 0.0005 + rng.gauss(0.004)), false,
+              0.00036);
+    double start = 0.0, at_origin = 0.0;
     ASSERT_TRUE(m.valueAt(0.5, &start));
-    feedRotation(m, 1.0, 2.5, 0.0);
-    double at_origin = 0.0;
     ASSERT_TRUE(m.valueAt(1.1, &at_origin));
-    EXPECT_NEAR((at_origin - start) / kDeg, 0.0, 1e-9);
-    EXPECT_NEAR((m.value() - start) / kDeg, 0.0, 1e-9);
+    EXPECT_LT(std::fabs(at_origin - start) / kDeg, 0.01);
+    EXPECT_LT(std::fabs(m.value() - start) / kDeg, 0.01);
+}
+
+// [critic r1 D1] 후방 시계 점프(GAP-RESET 경로) — 새 시간축 표본이 옛 최대 시각보다 작아도 누적이 이어지고,
+//   새 원점 조회가 옛 시간축 값을 돌려주지 않는다.
+TEST(BridgeOrigin, BackwardClockJumpRestartsTimeline)
+{
+    rs::TimedSeedYaw m;
+    feedRotation(m, 100.0, 110.0, 0.0);
+    const double before = m.value();
+    // 20 s 뒤로 점프한 시간축에서 8 s 동안 0.5 rad/s 회전
+    feedRotation(m, 80.0, 88.0, 0.5);
+    EXPECT_NEAR(m.value() - before, 4.0, 0.05);  // 4 rad 가 그대로 쌓인다(옛 구현은 0)
+    double v = 0.0;
+    ASSERT_TRUE(m.valueAt(84.0, &v));             // 새 시간축 시각 조회는 새 값
+    EXPECT_NEAR(v - before, 2.0, 0.05);
+    EXPECT_FALSE(m.valueAt(105.0, &v));           // 옛 시간축 값은 이력에서 사라졌다
+}
+
+TEST(BridgeOrigin, FrameWheelHistoryBackwardJump)
+{
+    rs::FrameWheelHistory h;
+    for (int k = 0; k < 10; ++k)
+        h.add(100.0 + 0.1 * k, 1.0, 1.0, 0.0);
+    for (int k = 0; k < 10; ++k)
+        h.add(80.0 + 0.1 * k, 2.0 + k, 0.0, 0.0);
+    rs::BridgeSnap w;
+    ASSERT_TRUE(h.at(80.5, &w));
+    EXPECT_DOUBLE_EQ(w.wheel_x, 7.0);
+    EXPECT_FALSE(h.at(100.5, &w));
+}
+
+// finalize 끝값 선택 — origin 이 아니면 지금 값, 원점을 잡으면 원점 값, 조회 실패는 이유를 남기고 지금 값
+TEST(BridgeOrigin, BridgeEndSelection)
+{
+    rs::TimedSeedYaw y;
+    feedRotation(y, 10.0, 12.0, 1.0);
+    rs::FrameWheelHistory w;
+    for (int k = 0; k <= 20; ++k)
+        w.add(10.0 + 0.1 * k, 0.1 * k, 0.0, 0.0);
+    const double yaw_now = y.value();
+    auto e = rs::bridgeEnd(false, 11.0, y, w, yaw_now, 9.0, 9.0);
+    EXPECT_EQ(e.kind, rs::BridgeEndKind::Off);
+    EXPECT_DOUBLE_EQ(e.gyro_yaw, yaw_now);
+    e = rs::bridgeEnd(true, 11.0, y, w, yaw_now, 9.0, 9.0);
+    EXPECT_EQ(e.kind, rs::BridgeEndKind::Origin);
+    EXPECT_NEAR(e.gyro_yaw, 1.0, 0.02);
+    EXPECT_NEAR(e.wheel_x, 1.0, 1e-9);
+    e = rs::bridgeEnd(true, -1.0, y, w, yaw_now, 9.0, 9.0);
+    EXPECT_EQ(e.kind, rs::BridgeEndKind::NoOriginTime);
+    EXPECT_DOUBLE_EQ(e.wheel_x, 9.0);
+    e = rs::bridgeEnd(true, 5.0, y, w, yaw_now, 9.0, 9.0);
+    EXPECT_EQ(e.kind, rs::BridgeEndKind::YawHistMiss);
+    e = rs::bridgeEnd(true, 11.05, y, w, yaw_now, 9.0, 9.0);  // 프레임 키와 50 ms 차
+    EXPECT_EQ(e.kind, rs::BridgeEndKind::WheelHistMiss);
+    EXPECT_DOUBLE_EQ(e.gyro_yaw, yaw_now);
 }
 
 int main(int argc, char **argv)

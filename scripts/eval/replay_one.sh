@@ -1,6 +1,6 @@
 #!/bin/bash
 # VINS 1런 재생: 깨끗한 환경(env -i)에서 task 설치본 바이너리 + 지정 설정으로 bag 재생 → TUM 기록
-# 사용: TASK_WS=<작업공간> [RECORD_TF=1] [REPLAY_DOMAIN=<id>] replay_one.sh <label> <config_yaml> <bag_dir> <out_dir>
+# 사용: TASK_WS=<작업공간> [RECORD_TF=1] [REPLAY_DOMAIN=<id>] [REPLAY_TOPICS="<토픽 ...>"] replay_one.sh <label> <config_yaml> <bag_dir> <out_dir>
 #   REPLAY_DOMAIN: 전용 ROS 도메인(기본 77). 여러 세션이 동시에 재생할 수 있으면 세션마다 다른 값을 쓴다 —
 #   같은 도메인이면 토픽이 섞여 서로의 검증을 오염시킨다(09-29 세션 간 격리 규칙).
 #   REPLAY_TOPICS: 재생할 토픽만(공백 구분). 비우면 bag 전체. 라이브 /vins_estimator/odometry 가 녹화된 실기 bag
