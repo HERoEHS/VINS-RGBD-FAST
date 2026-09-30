@@ -11,8 +11,10 @@
 // 이 파일은 상태 없는 순수 함수만 둔다(gtest 대상, Q7). 시드 선택·저장은 estimator.
 
 #include <Eigen/Dense>
-#include <algorithm>   // std::min — contaminationOnset
+#include <algorithm>   // std::min — contaminationOnset, std::upper_bound
 #include <cmath>
+#include <deque>       // [SW1-1938] 시각 기준 다리 누적기 이력
+#include <utility>
 
 namespace reboot_seed
 {
@@ -225,5 +227,115 @@ inline BridgeSnap bridgeStart(bool align, const BridgeSnap &material, const Brid
 {
     return (align && material.t >= 0.0) ? material : now;
 }
+
+// ============================================================================
+// [SW1-1938] 재초기화 경계 — 다리 끝을 '새 세션 원점 시각'에 맞추기
+// ============================================================================
+//
+// [고친 결함] 다리를 확정(finalize, 새 세션 초기화 완료) 시각까지 얹으면 두 가지가 어긋난다.
+//   ① 미계산: clearState 가 imu_buf 를 비워, 캡처 프레임 ~ 비우는 순간 사이 이미 받아 둔
+//      IMU 표본(재생 0.15~0.22 s)이 다리에도 새 세션에도 안 들어간다.
+//   ② 이중 계산: 새 세션의 yaw 원점(운영 static init = 재부팅 뒤 첫 프레임, 동적 = 초기화
+//      성공 때 창의 첫 프레임)은 확정보다 이르다. [원점, 확정] 회전을 다리와 새 세션이 두 번 센다.
+//   남는 yaw = 이중 − 미계산 + 세션 추정 오차 → 로봇이 도는 중에 재초기화되면 수 도(재생
+//   kidnap −7.3°·+3.1°, 실기 공중 연쇄 −2.2°). 가만히 있을 때의 재초기화는 0 이라 모르고 지나갔다.
+//   해법: 누적기를 **표본 시각 기준**으로 한 번씩만 먹이고 값의 이력을 남겨, 다리를
+//   '시드 자세 시각 → 새 세션 원점 시각'으로 얹는다. 비우는 표본도 버리기 전에 먹인다.
+//
+// 왜 표본 시각 기준인가: 재부팅 뒤 새 세션은 비운 표본보다 이른 시각의 프레임부터 다시
+//   처리한다(프레임은 처리 지연만큼 뒤처져 있다). 그 프레임들에는 IMU 가 없어 VINS 는 첫 새
+//   표본 하나를 거짓 dt 로 되풀이 적분한다. VINS 가 넘겨 주는 dt 를 그대로 쓰면 누적기도
+//   그 구간을 두 번 센다. 표본 시각이 앞으로 갈 때만 더하면 표본 하나는 딱 한 번만 들어간다.
+class TimedSeedYaw
+{
+public:
+    static constexpr double kHistSec = 60.0;  // 이력 보존 길이 — 재부팅~확정(워밍업 대기 포함)을 덮게
+
+    // 표본 1개(시각 t, 원시 각속도). last_t 이하 시각은 무시한다. 간격이 비정상(>= 0.1 s,
+    //   세션 경계·시계 계단)이면 MotionGatedYaw 가 버리고 시각만 이어 받는다.
+    void add(double t, const Eigen::Vector3d &gyr_raw, bool wheel_moving, double bias_z)
+    {
+        if (last_t_ >= 0.0 && !(t > last_t_))
+            return;
+        const double dt = (last_t_ >= 0.0) ? t - last_t_ : 0.0;
+        last_t_ = t;
+        acc_.add(dt, gyr_raw, wheel_moving, bias_z);
+        hist_.emplace_back(t, acc_.value());
+        while (!hist_.empty() && hist_.front().first < t - kHistSec)
+            hist_.pop_front();
+    }
+
+    double value() const { return acc_.value(); }
+    double lastT() const { return last_t_; }
+
+    // 시각 t 의 누적기 값(이웃 두 표본 사이 선형 보간). 이력 범위 밖이면 false.
+    bool valueAt(double t, double *out) const
+    {
+        if (hist_.empty() || t < hist_.front().first || t > hist_.back().first)
+            return false;
+        auto hi = std::upper_bound(hist_.begin(), hist_.end(), t,
+                                   [](double v, const std::pair<double, double> &e) { return v < e.first; });
+        if (hi == hist_.begin())
+        {
+            *out = hist_.front().second;
+            return true;
+        }
+        auto lo = hi - 1;
+        if (hi == hist_.end() || hi->first <= lo->first)
+        {
+            *out = lo->second;
+            return true;
+        }
+        const double a = (t - lo->first) / (hi->first - lo->first);
+        *out = lo->second + a * (hi->second - lo->second);
+        return true;
+    }
+
+private:
+    MotionGatedYaw acc_;
+    double         last_t_{-1.0};
+    std::deque<std::pair<double, double>> hist_;  // (표본 시각, 그 표본까지의 누적기 값)
+};
+
+// 프레임별 휠 pose 이력 — 다리 병진을 원점 프레임에서 끊기 위해. 휠 pose 는 받은 최신값이라
+//   프레임 처리 순간의 값을 그 프레임 시각 키로 남긴다(다리 시작 스냅샷과 같은 규약).
+class FrameWheelHistory
+{
+public:
+    static constexpr double kHistSec = 60.0;
+    static constexpr double kTolSec  = 0.02;  // 원점 시각과 프레임 키의 허용 차(td 추정 흔들림)
+
+    void add(double t, double wx, double wy, double wyaw)
+    {
+        if (!hist_.empty() && !(t > hist_.back().t))
+            return;
+        hist_.push_back(BridgeSnap{t, 0.0, wx, wy, wyaw});
+        while (!hist_.empty() && hist_.front().t < t - kHistSec)
+            hist_.pop_front();
+    }
+
+    // 시각 t 에 가장 가까운 프레임 기록(차 <= kTolSec). 없으면 false.
+    bool at(double t, BridgeSnap *out) const
+    {
+        const BridgeSnap *best = nullptr;
+        double best_d = kTolSec;
+        for (const auto &e : hist_)
+        {
+            const double d = std::abs(e.t - t);
+            if (d <= best_d)
+            {
+                best_d = d;
+                best = &e;
+            }
+        }
+        if (!best)
+            return false;
+        *out = *best;
+        return true;
+    }
+
+private:
+    std::deque<BridgeSnap> hist_;
+};
 
 }  // namespace reboot_seed

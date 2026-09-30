@@ -90,10 +90,30 @@ void Estimator::setParameter()
 
 void Estimator::clearState()
 {
+    // [SW1-1938] 시드를 방금 캡처했으면 버리는 IMU 표본을 먼저 다리 누적기에 먹인다. 새 세션은
+    //   비운 뒤에 받은 표본부터 적분하므로, 여기서 세지 않으면 캡처 프레임 ~ 지금 사이 회전이
+    //   다리에서도 새 세션에서도 빠진다(재생 0.15~0.22 s). 표본 시각이 누적기보다 앞선 것만 먹여
+    //   같은 표본을 두 번 세지 않는다. 옛 동작(스위치 0)이면 비우기만 한다.
+    const bool   feed_disc   = REBOOT_SEED_BRIDGE_ALIGN && REBOOT_SEED_BRIDGE_ORIGIN && seed_pending_;
+    const double disc_before = seed_timed_yaw_.value();
+    int          disc_n      = 0;
     m_imu.lock();
     while (!imu_buf.empty())
+    {
+        if (feed_disc && imu_buf.front().first > seed_timed_yaw_.lastT())
+        {
+            seed_timed_yaw_.add(imu_buf.front().first, imu_buf.front().second.second,
+                                last_wheel_speed_.load() >= bgz_lock::kStillWheelMax, seed_bias_z_);
+            ++disc_n;
+        }
         imu_buf.pop();
+    }
     m_imu.unlock();
+    if (feed_disc)
+    {
+        seed_disc_n_    = disc_n;
+        seed_disc_dyaw_ = seed_timed_yaw_.value() - disc_before;
+    }
     // [SW1-1889] 특징 id 는 프로세스 안에서 재사용되지 않지만(n_id 는 tracker 생성자에서만 0), 재시작 후에도
     //   추적이 이어진 특징의 재채택을 새 이벤트로 남기기 위해 A/O 중복 억제 집합을 비운다.
     depth_adopt_log_.reset();
@@ -220,6 +240,8 @@ void Estimator::clearState()
     clean_pose_t_     = -1.0;
     anchor_latch_t_   = -1.0;
     amputate_first_t_ = -1.0;
+    // [SW1-1938] 새 세션의 yaw 원점은 아직 없다 — 첫 프레임(initFirstIMUPose)에서 다시 잡는다.
+    seed_origin_t_    = -1.0;
     // [08-11] 발산 가드 이력 — 새 세션의 pose는 옛 세션과 다른 원점이라 이어붙이면 안 된다.
     still_drift_hist_.clear();
     still_drift_consec_  = 0;
@@ -432,7 +454,12 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
         std::vector<pair<double, pair<Eigen::Vector3d, Eigen::Vector3d>>> imu_vector;
         getIMUInterval(prevTime, curTime, imu_vector);
         if (!initFirstPoseFlag)
+        {
             initFirstIMUPose(imu_vector);
+            // [SW1-1938] 새 세션 yaw 원점 = 이 프레임(R0 의 yaw 를 0 으로 둔다, 운영 static init).
+            //   동적 초기화가 성공하면 visualInitialAlign* 가 창의 첫 프레임으로 다시 잡는다.
+            seed_origin_t_ = curTime;
+        }
         for (size_t i = 0; i < imu_vector.size(); i++)
         {
             double dt;
@@ -443,6 +470,10 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
             else
                 dt = imu_vector[i].first - imu_vector[i - 1].first;
             processIMU(dt, imu_vector[i].second.first, imu_vector[i].second.second);
+            // [SW1-1938] 다리 누적기(표본 시각 기준) — 재부팅 직후 VINS 는 IMU 가 없는 프레임에서
+            //   첫 새 표본을 거짓 dt 로 되풀이 적분하는데, 누적기는 표본 시각이 앞설 때만 더해 한 번만 센다.
+            seed_timed_yaw_.add(imu_vector[i].first, imu_vector[i].second.second,
+                                last_wheel_speed_.load() >= bgz_lock::kStillWheelMax, seed_bias_z_);
         }
         prevTime = curTime;
     }
@@ -481,6 +512,12 @@ void Estimator::processImage(map<int, Eigen::Matrix<double, 7, 1>> &image,
         }
         prevTime_wheel = curTime_w;
     }
+
+    // [SW1-1938] 프레임별 휠 pose(받은 최신값) — 다리 병진을 원점 프레임에서 끊기 위해. 키는 IMU 시계
+    //   프레임 시각(헤더 + td)으로 원점 시각과 같다.
+    if (USE_IMU)
+        seed_wheel_hist_.add(rclcpp::Time(header.stamp).seconds() + td, latest_wheel_x_.load(),
+                             latest_wheel_y_.load(), latest_wheel_yaw_.load());
 
     ImageFrame imageframe(image, rclcpp::Time(header.stamp).seconds());
     imageframe.pre_integration = tmp_pre_integration;
@@ -1038,6 +1075,8 @@ bool Estimator::visualInitialAlign()
     Matrix3d R0  = Utility::g2R(g);
     double   yaw = Utility::R2ypr(R0 * Rs[0]).x();
     R0           = Utility::ypr2R(Eigen::Vector3d{-yaw, 0, 0}) * R0;
+    // [SW1-1938] 이 경로는 창의 첫 프레임(Rs[0]) yaw 를 0 으로 둔다 → 새 세션 원점 = 그 프레임 시각.
+    seed_origin_t_ = Headers[0] + td;
     g            = R0 * g;
     // Matrix3d rot_diff = R0 * Rs[0].transpose();
     Matrix3d rot_diff = R0;
@@ -1189,6 +1228,8 @@ bool Estimator::visualInitialAlignWithDepth()
     Matrix3d R0  = Utility::g2R(g);
     double   yaw = Utility::R2ypr(R0 * Rs[0]).x();
     R0           = Utility::ypr2R(Eigen::Vector3d{-yaw, 0, 0}) * R0;
+    // [SW1-1938] 이 경로는 창의 첫 프레임(Rs[0]) yaw 를 0 으로 둔다 → 새 세션 원점 = 그 프레임 시각.
+    seed_origin_t_ = Headers[0] + td;
     g            = R0 * g;
     // Matrix3d rot_diff = R0 * Rs[0].transpose();
     Matrix3d rot_diff = R0;
@@ -1637,7 +1678,7 @@ void Estimator::gaugeSlideGuard()
                         //   함께 찍는다. 계승 재래치(latch_t 만 갱신)에선 pose·스냅샷 모두 그대로라
                         //   연쇄 계승이 그 사이 운동을 숨기지 못한다.
                         anchor_bridge_ = reboot_seed::BridgeSnap{
-                            stamp_now, seed_motion_yaw_.value(), latest_wheel_x_.load(),
+                            stamp_now, seedBridgeYawNow(), latest_wheel_x_.load(),
                             latest_wheel_y_.load(), latest_wheel_yaw_.load()};
                     }
                     if (!base_inherit)
@@ -2057,7 +2098,7 @@ void Estimator::gaugeSlideGuard()
                 clean_yaw_    = Utility::R2ypr(Rs[frame_count]).x() * M_PI / 180.0;
                 // [SW1-1936] 정화 pose 의 다리 시작점 — 발동보다 이른 정화 pose 도 그 사이 회전을 잃지 않게
                 clean_bridge_ = reboot_seed::BridgeSnap{
-                    stamp_now, seed_motion_yaw_.value(), latest_wheel_x_.load(),
+                    stamp_now, seedBridgeYawNow(), latest_wheel_x_.load(),
                     latest_wheel_y_.load(), latest_wheel_yaw_.load()};
             }
         }
@@ -2388,8 +2429,12 @@ void Estimator::captureRebootSeed(double stamp)
     //   시각·원시 적분). 옛 동작은 앵커를 잡은 뒤 들어 돌린 회전을 통째로 버렸다(vpr4 79.5°).
     //   확정(finalize)도 같은 누적기를 써야 차분이 맞으므로 방식을 캡처 때 고정해 둔다.
     seed_cap_align_ = (REBOOT_SEED_BRIDGE_ALIGN != 0);
+    // [SW1-1938] 다리 끝을 원점 시각에 맞추는 방식도 캡처 때 고정(재료 스냅샷과 같은 누적기를 써야 차분이 맞다).
+    seed_cap_origin_ = seed_cap_align_ && (REBOOT_SEED_BRIDGE_ORIGIN != 0);
+    seed_disc_n_     = 0;
+    seed_disc_dyaw_  = 0.0;
     const reboot_seed::BridgeSnap now{
-        stamp, seed_cap_align_ ? seed_motion_yaw_.value() : bridge_gyro_yaw_rad_,
+        stamp, seed_cap_align_ ? seedBridgeYawNow() : bridge_gyro_yaw_rad_,
         latest_wheel_x_.load(), latest_wheel_y_.load(), latest_wheel_yaw_.load()};
     const reboot_seed::BridgeSnap start = reboot_seed::bridgeStart(seed_cap_align_, *material, now);
     seed_cap_gyro_yaw_  = start.gyro_yaw;
@@ -2414,9 +2459,10 @@ void Estimator::captureRebootSeed(double stamp)
     // [SW1-1936] 다리 시작점과 그때부터 캡처까지의 다리 회전 — 앵커 뒤 들어 돌린 회전이 여기 보인다
     RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
                 "[REBOOT-SEED-BRIDGE] t=%.3f 방식=%s 다리시작 t=%.3f 캡처까지 다리회전=%.1fdeg "
-                "bias_z=%.6f",
+                "bias_z=%.6f 다리끝=%s",
                 stamp, seed_cap_align_ ? "시드자세시각" : "캡처시각(옛)", seed_cap_bridge_t_,
-                (now.gyro_yaw - seed_cap_gyro_yaw_) * 180.0 / M_PI, seed_bias_z_);
+                (now.gyro_yaw - seed_cap_gyro_yaw_) * 180.0 / M_PI, seed_bias_z_,
+                seed_cap_origin_ ? "새세션원점" : "확정(옛)");
 }
 
 // 재init 완료 후 첫 solve에서 호출 — 캡처~지금 사이 이동(휠 병진+gyro yaw)을 얹어
@@ -2430,10 +2476,37 @@ void Estimator::finalizeRebootSeed()
     if (!seed_pending_)
         return;
     // [SW1-1936] 캡처 때 고른 누적기와 같은 것으로 차분(방식이 섞이면 차분이 무의미)
-    const double gyro_now = seed_cap_align_ ? seed_motion_yaw_.value() : bridge_gyro_yaw_rad_;
-    const double d_yaw    = gyro_now - seed_cap_gyro_yaw_;
-    const Eigen::Vector2d wheel_delta(latest_wheel_x_.load() - seed_cap_wheel_x_,
-                                      latest_wheel_y_.load() - seed_cap_wheel_y_);
+    double gyro_end = seed_cap_align_ ? seed_motion_yaw_.value() : bridge_gyro_yaw_rad_;
+    double wheel_x_end = latest_wheel_x_.load(), wheel_y_end = latest_wheel_y_.load();
+    const char *end_kind = "확정(옛)";
+    double      end_t    = -1.0;
+    if (seed_cap_origin_)
+    {
+        // [SW1-1938] 다리 끝 = 새 세션 원점 시각. 새 세션은 원점에서 yaw 0 으로 출발해 원점 이후 회전을
+        //   스스로 세므로, 다리가 확정 시각까지 가면 [원점, 확정] 을 두 번 센다. 원점 값이 이력에 없으면
+        //   (원점 모름·이력 밖) 확정 시각으로 물러나고 경고한다 — 옛 동작과 같은 크기의 오차로 퇴화.
+        double                  v = 0.0;
+        reboot_seed::BridgeSnap w;
+        if (seed_origin_t_ >= 0.0 && seed_timed_yaw_.valueAt(seed_origin_t_, &v) &&
+            seed_wheel_hist_.at(seed_origin_t_, &w))
+        {
+            gyro_end    = v;
+            wheel_x_end = w.wheel_x;
+            wheel_y_end = w.wheel_y;
+            end_kind    = "새세션원점";
+            end_t       = seed_origin_t_;
+        }
+        else
+        {
+            gyro_end = seed_timed_yaw_.value();
+            end_kind = "확정(원점 이력 없음)";
+            RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
+                        "[REBOOT-SEED] 새 세션 원점(t=%.3f) 값을 이력에서 못 찾음 — 다리를 확정 시각까지 얹는다",
+                        seed_origin_t_);
+        }
+    }
+    const double d_yaw = gyro_end - seed_cap_gyro_yaw_;
+    const Eigen::Vector2d wheel_delta(wheel_x_end - seed_cap_wheel_x_, wheel_y_end - seed_cap_wheel_y_);
     const Vector3d d_p =
         reboot_seed::bridgeTranslation(seed_cap_yaw_, seed_cap_wheel_yaw_, wheel_delta);
     reboot_seed::finalizeSeed(seed_cap_P_, seed_cap_yaw_, d_p, d_yaw, seed_R_, seed_P_);
@@ -2442,10 +2515,18 @@ void Estimator::finalizeRebootSeed()
     seed_apply_cnt_++;
     RCLCPP_WARN(rclcpp::get_logger("vins_reboot_seed"),
                 "[REBOOT-SEED] T_seed 확정(누적 %ld회): (%.3f, %.3f, %.3f) yaw=%.1fdeg "
-                "(다리 %.3fm / %.2fdeg, 다리시작 t=%.3f)",
+                "(다리 %.3fm / %.2fdeg, 다리시작 t=%.3f) 다리끝=%s t=%.3f 비운표본 %d개·%.2fdeg",
                 seed_apply_cnt_, seed_P_.x(), seed_P_.y(), seed_P_.z(),
                 std::atan2(seed_R_(1, 0), seed_R_(0, 0)) * 180.0 / M_PI,
-                d_p.norm(), d_yaw * 180.0 / M_PI, seed_cap_bridge_t_);
+                d_p.norm(), d_yaw * 180.0 / M_PI, seed_cap_bridge_t_, end_kind, end_t, seed_disc_n_,
+                seed_disc_dyaw_ * 180.0 / M_PI);
+}
+
+double Estimator::seedBridgeYawNow() const
+{
+    // [SW1-1938] 다리 시작 스냅샷·캡처·확정이 모두 같은 누적기를 써야 차분이 맞다(방식은 기동 때 고정).
+    return (REBOOT_SEED_BRIDGE_ALIGN && REBOOT_SEED_BRIDGE_ORIGIN) ? seed_timed_yaw_.value()
+                                                                  : seed_motion_yaw_.value();
 }
 
 void Estimator::seedTransform(Vector3d &p, Matrix3d &R) const

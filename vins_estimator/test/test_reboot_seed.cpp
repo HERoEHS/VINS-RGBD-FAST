@@ -435,6 +435,129 @@ TEST(BridgeAlign, Vpr4FixtureReproducesLiftRotation)
     }
 }
 
+// ============================================================================
+// [SW1-1938] 다리 끝을 새 세션 원점 시각에 — 표본 시각 기준 누적기·이력
+// ============================================================================
+namespace
+{
+// 일정 각속도(z) 회전 표본을 [t0, t1) 에 380 Hz 로 흘린다. 반환 = 마지막 표본 시각.
+double feedRotation(rs::TimedSeedYaw &m, double t0, double t1, double wz)
+{
+    double t = t0;
+    for (; t < t1 - 1e-12; t += kImuDt)
+        m.add(t, Eigen::Vector3d(0.0, 0.0, wz), false, 0.0);
+    return t - kImuDt;
+}
+}  // namespace
+
+// 같은 표본(같은 시각)이 거듭 들어와도 한 번만 센다 — 재부팅 직후 VINS 는 IMU 가 없는 프레임에서
+//   첫 새 표본을 되풀이 적분하는데, 누적기까지 따라 세면 그 구간이 두 번 들어간다.
+TEST(BridgeOrigin, EachSampleCountedOnce)
+{
+    rs::TimedSeedYaw m;
+    const double wz   = 1.0;  // rad/s
+    const double last = feedRotation(m, 0.0, 1.0, wz);
+    const double v1   = m.value();
+    EXPECT_NEAR(v1, 1.0, 0.01);
+    for (int k = 0; k < 5; ++k)
+        m.add(last, Eigen::Vector3d(0.0, 0.0, wz), false, 0.0);   // 같은 시각 되풀이
+    m.add(last - 0.5, Eigen::Vector3d(0.0, 0.0, wz), false, 0.0);  // 더 이른 시각
+    EXPECT_DOUBLE_EQ(m.value(), v1);
+    EXPECT_DOUBLE_EQ(m.lastT(), last);
+}
+
+// 이력 조회: 표본 사이 선형 보간, 범위 밖은 거짓
+TEST(BridgeOrigin, ValueAtInterpolatesAndRejectsOutOfRange)
+{
+    rs::TimedSeedYaw m;
+    const double last = feedRotation(m, 10.0, 11.0, 0.5);
+    double v = 0.0;
+    ASSERT_TRUE(m.valueAt(10.5, &v));
+    EXPECT_NEAR(v, 0.25, 0.01);  // 0.5 rad/s × 0.5 s
+    ASSERT_TRUE(m.valueAt(last, &v));
+    EXPECT_DOUBLE_EQ(v, m.value());
+    EXPECT_FALSE(m.valueAt(9.0, &v));         // 첫 표본보다 이르다
+    EXPECT_FALSE(m.valueAt(last + 0.1, &v));  // 마지막 표본보다 늦다
+}
+
+// 세션 경계·시계 계단(간격 >= 0.1 s)은 적분하지 않고 시각만 이어 받는다
+TEST(BridgeOrigin, SeamGapIsNotIntegrated)
+{
+    rs::TimedSeedYaw m;
+    feedRotation(m, 0.0, 0.5, 1.0);
+    const double before = m.value();
+    feedRotation(m, 1.5, 2.0, 1.0);  // 1 s 공백 뒤 재개
+    EXPECT_NEAR(m.value() - before, 0.5, 0.02);  // 공백 1 s 는 들어가지 않는다
+}
+
+// 프레임별 휠 이력: 허용 차 안의 가장 가까운 프레임, 밖이면 거짓, 시각이 뒤로 가면 무시
+TEST(BridgeOrigin, FrameWheelHistoryLookup)
+{
+    rs::FrameWheelHistory h;
+    for (int k = 0; k < 20; ++k)
+        h.add(100.0 + 0.1 * k, 0.01 * k, -0.02 * k, 0.0);
+    h.add(100.05, 9.0, 9.0, 9.0);  // 뒤로 간 시각 — 무시
+    rs::BridgeSnap w;
+    ASSERT_TRUE(h.at(100.505, &w));  // 100.5 와 5 ms 차
+    EXPECT_NEAR(w.wheel_x, 0.05, 1e-12);
+    EXPECT_FALSE(h.at(100.55, &w));  // 가장 가까운 프레임과 50 ms 차 > 20 ms
+    EXPECT_FALSE(h.at(90.0, &w));
+}
+
+// 핵심 시나리오 — 로봇이 60°/s 로 도는 중에 재초기화.
+//   시드 자세 0.5 s, 캡처 프레임 1.0 s, 비우는 표본 (1.0, 1.2], 새 세션 첫 프레임(원점) 1.1 s,
+//   확정 2.5 s. 새 세션은 원점부터 yaw 0 으로 출발해 [1.1, 2.5] 회전을 스스로 센다.
+//   옛 방식: 다리 = 누적(2.5) − 누적(0.5), 비운 표본 빠짐 → 이중 [1.1,2.5] − 미계산 (1.0,1.2]
+//   새 방식: 다리 = 누적(원점 1.1) − 누적(0.5), 비운 표본 먹임 → 발행 yaw = 참값
+TEST(BridgeOrigin, ReinitWhileRotatingHasNoDoubleCountOrGap)
+{
+    const double wz = 60.0 * kDeg;
+    const double t_seed = 0.5, t_cap = 1.0, t_disc_end = 1.2, t_origin = 1.1, t_fin = 2.5;
+
+    // 옛 방식 재현: 캡처까지 적분 → (1.0, 1.2] 표본은 버려짐 → 새 세션 표본만 이어서
+    rs::TimedSeedYaw old_m;
+    feedRotation(old_m, 0.0, t_cap, wz);
+    double seed_start = 0.0;
+    ASSERT_TRUE(old_m.valueAt(t_seed, &seed_start));
+    feedRotation(old_m, t_disc_end, t_fin, wz);  // 비운 구간을 건너뛴 채 재개(경계 dt 는 버려짐)
+    const double old_bridge = old_m.value() - seed_start;
+
+    // 새 방식: 비우는 표본을 먼저 먹이고, 다리를 원점 시각에서 끊는다
+    rs::TimedSeedYaw m;
+    feedRotation(m, 0.0, t_cap, wz);
+    double start = 0.0;
+    ASSERT_TRUE(m.valueAt(t_seed, &start));
+    feedRotation(m, t_cap, t_disc_end, wz);  // clearState 가 비우기 전에 먹인 표본
+    // 재부팅 뒤 VINS 가 첫 새 표본을 거짓 dt 로 되풀이해도 누적기는 무시한다
+    m.add(t_disc_end - kImuDt, Eigen::Vector3d(0.0, 0.0, wz), false, 0.0);
+    feedRotation(m, t_disc_end, t_fin, wz);
+    double at_origin = 0.0;
+    ASSERT_TRUE(m.valueAt(t_origin, &at_origin));
+    const double new_bridge = at_origin - start;
+
+    const double session = wz * (t_fin - t_origin);  // 새 세션이 스스로 센 회전
+    const double truth   = wz * (t_fin - t_seed);     // 시드 자세 시각 → 확정 참 회전
+    const double old_err = old_bridge + session - truth;
+    const double new_err = new_bridge + session - truth;
+    // 옛 방식 오차 ≈ 이중 1.4 s − 미계산 0.2 s = 1.2 s × 60°/s = 72°
+    EXPECT_NEAR(old_err / kDeg, 72.0, 1.0);
+    EXPECT_LT(std::fabs(new_err) / kDeg, 0.5);
+}
+
+// 가만히 있을 때의 재초기화는 옛 방식·새 방식이 같다(회전이 없으면 이중·미계산도 0)
+TEST(BridgeOrigin, ReinitWhileStillIsUnchanged)
+{
+    rs::TimedSeedYaw m;
+    feedRotation(m, 0.0, 1.0, 0.0);
+    double start = 0.0;
+    ASSERT_TRUE(m.valueAt(0.5, &start));
+    feedRotation(m, 1.0, 2.5, 0.0);
+    double at_origin = 0.0;
+    ASSERT_TRUE(m.valueAt(1.1, &at_origin));
+    EXPECT_NEAR((at_origin - start) / kDeg, 0.0, 1e-9);
+    EXPECT_NEAR((m.value() - start) / kDeg, 0.0, 1e-9);
+}
+
 int main(int argc, char **argv)
 {
     testing::InitGoogleTest(&argc, argv);

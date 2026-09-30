@@ -267,6 +267,9 @@ extern double STILL_CUM_YAW_MAX_DEG;  // [deg] 정지 창 누적 yaw 상한 (<=0
 extern int    USE_REBOOT_POSE_SEED;   // 0=기존(원점 복귀), 1=시드 계승
 //   [SW1-1936] 다리를 '시드 자세 시각 → 확정'으로 얹는다(1, 키 없으면 1). 0=옛 동작(캡처 시각부터·원시 적분).
 extern int    REBOOT_SEED_BRIDGE_ALIGN;
+//   [SW1-1938] 다리 끝을 '새 세션 원점 시각'에 맞춘다(1, 키 없으면 1; ALIGN 1 일 때만 의미).
+//   0=옛 동작(확정 시각까지 — 회전 중 재초기화 때 [원점, 확정] 이중 계산·비운 IMU 미계산).
+extern int    REBOOT_SEED_BRIDGE_ORIGIN;
 
 // ===== 정지 중 발산 가드 (SW1-1866 08-11) =====
 //   failureDetection의 Δp/Δz는 solve 간 델타라 누적 이탈을 원리적으로 못 본다(40m 이탈

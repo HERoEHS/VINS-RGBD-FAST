@@ -102,6 +102,7 @@ double STILL_CUM_YAW_MAX_DEG;
 // ===== 재초기화 pose 시드 계승 (SW1-1866 reboot-pose-seed) =====
 int    USE_REBOOT_POSE_SEED;
 int    REBOOT_SEED_BRIDGE_ALIGN = 1;  // [SW1-1936] 키 부재 시 폴백 — 수정 동작이 기본
+int    REBOOT_SEED_BRIDGE_ORIGIN = 1; // [SW1-1938] 키 부재 시 폴백 — 수정 동작이 기본
 
 // ===== 정지 중 발산 가드 (SW1-1866 08-11) — 기본값도 yaml이 정본, 아래는 키 부재 시 폴백 =====
 int    USE_STILL_DRIFT_GUARD = 0;      // 기본 0 = 종전 동작
@@ -753,6 +754,9 @@ void readParameters(rclcpp::Node* node)
     // [SW1-1936] 다리 시작점 정렬 — 조건부 블록 밖 로드(키 부재 시 1 유지)
     if (!fsSettings["reboot_seed_bridge_align"].empty())
         REBOOT_SEED_BRIDGE_ALIGN = (int)fsSettings["reboot_seed_bridge_align"];
+    // [SW1-1938] 다리 끝을 새 세션 원점 시각에 — 같은 이유로 조건부 블록 밖(키 부재 시 1 유지)
+    if (!fsSettings["reboot_seed_bridge_origin"].empty())
+        REBOOT_SEED_BRIDGE_ORIGIN = (int)fsSettings["reboot_seed_bridge_origin"];
 
     // ===== 정지 중 발산 가드 (08-11) =====
     // ⚠️조건부 블록 '밖'에서 로드 — GRAVITY_ALIGN_VEL_THRESH가 use_gravity_align:1일 때만
@@ -814,9 +818,12 @@ void readParameters(rclcpp::Node* node)
     if (USE_REBOOT_POSE_SEED)
         RCLCPP_INFO(node->get_logger(),
                     "REBOOT_POSE_SEED: 1 (재초기화 시 마지막 건전 pose 시드 계승), "
-                    "다리 시작점=%s",
+                    "다리 시작점=%s, 다리 끝=%s",
                     REBOOT_SEED_BRIDGE_ALIGN ? "시드 자세 시각(운동 구간 적분)"
-                                             : "캡처 시각(옛 동작)");
+                                             : "캡처 시각(옛 동작)",
+                    (REBOOT_SEED_BRIDGE_ALIGN && REBOOT_SEED_BRIDGE_ORIGIN)
+                        ? "새 세션 원점 시각(표본 시각 기준·비우는 IMU 포함)"
+                        : "확정 시각(옛 동작)");
 
     // ===== init/출발 워밍업 게이트 (SW1-1866) — 키 없으면 비활성(기존 동작) =====
     WARMUP_GATE_STILL_SAMPLES = fsSettings["warmup_gate_still_samples"].empty()

@@ -285,6 +285,17 @@ public:
     reboot_seed::BridgeSnap clean_bridge_;   // 정화 pose 저장 순간
     bool     seed_cap_align_{false};     // 이번 캡처가 bridge-align 방식인가(확정 때 같은 누적기 사용)
     double   seed_cap_bridge_t_{-1.0};   // 다리 시작 시각(진단)
+    // [SW1-1938 bridge-origin] 다리 끝을 '새 세션 원점 시각'에 맞추기 위한 상태.
+    //   누적기·휠 이력은 clearState 를 관통한다(다리 상태와 같은 수명). 원점 시각은 세션 스코프라
+    //   clearState 에서 지우고, 새 세션의 첫 프레임(static init)·초기화 성공(동적)에서 다시 잡는다.
+    reboot_seed::TimedSeedYaw      seed_timed_yaw_;   // 표본 시각 기준 다리 yaw(이력 포함)
+    reboot_seed::FrameWheelHistory seed_wheel_hist_;  // 프레임별 휠 pose 이력
+    double   seed_origin_t_{-1.0};       // 새 세션 yaw 원점 시각(IMU 시계, <0 = 모름)
+    bool     seed_cap_origin_{false};    // 이번 캡처가 bridge-origin 방식인가(캡처 때 고정)
+    int      seed_disc_n_{0};            // 마지막 재부팅 때 비우기 전에 누적기에 먹인 표본 수(진단)
+    double   seed_disc_dyaw_{0.0};       // 그 표본들의 회전(진단)
+    // 다리 누적기 현재값 — bridge-origin 이면 표본 시각 기준 누적기, 아니면 SW1-1936 누적기
+    double seedBridgeYawNow() const;
     // [SW1-1866 vins-output-map-anchor] 출력 map 핀 — 표시 전용, 추정기 무접촉.
     //   published = T(map→odom)[GT 스크립트 1회 핀, static TF 수신] ∘
     //               T(odom←세션)[init 순간 휠 pose 스냅샷 — 부팅 정렬 가정 불요] ∘ ...

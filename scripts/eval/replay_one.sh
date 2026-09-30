@@ -3,6 +3,9 @@
 # 사용: TASK_WS=<작업공간> [RECORD_TF=1] [REPLAY_DOMAIN=<id>] replay_one.sh <label> <config_yaml> <bag_dir> <out_dir>
 #   REPLAY_DOMAIN: 전용 ROS 도메인(기본 77). 여러 세션이 동시에 재생할 수 있으면 세션마다 다른 값을 쓴다 —
 #   같은 도메인이면 토픽이 섞여 서로의 검증을 오염시킨다(09-29 세션 간 격리 규칙).
+#   REPLAY_TOPICS: 재생할 토픽만(공백 구분). 비우면 bag 전체. 라이브 /vins_estimator/odometry 가 녹화된 실기 bag
+#   (t3_field_0930·lift_yaw_0930 등)은 전체 재생하면 기록기가 라이브·재생 두 흐름을 같은 시각에 섞어 받는다(10-01) —
+#   입력 토픽(영상·깊이·IMU·휠·joint_states·다리 명령·/tf_static)만 틀 것.
 #   VINS 소스 위치가 다르면 VINS_ROOT=<.../VINS-RGBD-FAST/> 로 덮어쓴다(메인 ws: src/edie9/edie_localization/VINS-RGBD-FAST/).
 #   평가: gt_xy_eval.py <bag_dir> <out_dir>/*.tum (08-10 REPORT 핀 규약, 휠 대조군 RMS 0.475 로 평가기 검증됨)
 # 규약(VINS 메모리): 최종 바이너리, env -i, 바이너리 md5 기록, 정리는 PID kill 만(pkill -f 금지)
@@ -38,7 +41,7 @@ fi
   echo "label=$LABEL"; echo "domain=$DOMAIN"; echo "config=$CFG"; echo "config_md5=$(md5sum < "$CFG" | cut -d' ' -f1)"
   echo "binary=$BIN"; echo "binary_md5=$(md5sum < "$BIN" | cut -d' ' -f1)"
   echo "vins_head=$(git -C "$VINS_ROOT" rev-parse HEAD) dirty=$(git -C "$VINS_ROOT" status --porcelain | wc -l)"
-  echo "bag=$BAG"; echo "start=$(date -Is)"
+  echo "bag=$BAG"; echo "topics=${REPLAY_TOPICS:-all}"; echo "start=$(date -Is)"
 } > "$META"
 
 "${CLEAN[@]}" "$ENVSETUP; exec $BIN --ros-args -r __node:=vins_estimator -p config_file:=$CFG -p vins_folder:=$VINS_ROOT -p use_sim_time:=true" > "$LOG" 2>&1 &
@@ -53,7 +56,9 @@ if [ "${RECORD_TF:-0}" = 1 ]; then
   TFR=$!
 fi
 sleep 3
-"${CLEAN[@]}" "$ENVSETUP; ros2 bag play $BAG --clock 400" > "$OUT/$LABEL.play.log" 2>&1
+TOPICS_ARG=""
+[ -n "${REPLAY_TOPICS:-}" ] && TOPICS_ARG="--topics ${REPLAY_TOPICS}"
+"${CLEAN[@]}" "$ENVSETUP; ros2 bag play $BAG --clock 400 $TOPICS_ARG" > "$OUT/$LABEL.play.log" 2>&1
 sleep 4
 
 # 기록기 → 추정기 순으로 정상 종료 요청, 시간 제한 뒤 강제 종료
