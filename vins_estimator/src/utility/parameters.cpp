@@ -1,5 +1,7 @@
 #include "parameters.h"
 
+#include <stdexcept>
+
 #include <thread>
 
 double INIT_DEPTH;
@@ -216,7 +218,12 @@ void readParameters(rclcpp::Node* node)
     fsSettings.open(config_file, cv::FileStorage::READ);
     if (!fsSettings.isOpened())
     {
-        std::cerr << "ERROR: Wrong path to settings" << std::endl;
+        // [SW1-1948] 설정 파일을 못 열면 여기서 끝낸다. 예전엔 경고만 찍고 계속 가서 모든 값이 0 으로 읽히다가
+        // extrinsicRotation 을 빈 행렬로 cv2eigen 에 넣는 순간 OpenCV assert 로 abort(exit -6) 했다 —
+        // 원인은 경로인데 코어 덤프처럼 보여 진단이 어려웠다. 원인을 메시지에 담아 던지고 main 이 FATAL 로 남긴다.
+        const std::string msg = "설정 파일을 열 수 없음 (config_file 파라미터 확인): " + config_file;
+        RCLCPP_FATAL(node->get_logger(), "%s", msg.c_str());
+        throw std::runtime_error(msg);
     }
 
     NUM_THREADS = fsSettings["num_threads"];

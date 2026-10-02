@@ -20,6 +20,7 @@
 
 import os
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
@@ -29,11 +30,9 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     # --- 경로 기본값 ---------------------------------------------------------
-    # VINS-RGBD-FAST 소스 루트. 끝에 '/' 필수:
-    # 코드(parameters.cpp)가 vins_folder + "config/..." 형태로 문자열을 이어붙이기 때문.
-    vins_root_default = os.path.join(
-        os.path.expanduser('~'),
-        'ros2_ws', 'src', 'edie9', 'edie_localization', 'VINS-RGBD-FAST', '')
+    # [SW1-1948] 기본 경로는 패키지 share(설치본) 기준 — edie_vslam.launch.py 와 같은 이유(소스 트리 가정 금지).
+    # 끝에 '/' 필수: 코드(parameters.cpp)가 vins_folder + "config/..." 형태로 문자열을 이어붙이기 때문.
+    vins_root_default = os.path.join(get_package_share_directory('vins_estimator'), '')
     config_default = os.path.join(
         vins_root_default, 'config', 'elp_stereo_edie', 'vio_edie.yaml')
 
@@ -44,7 +43,7 @@ def generate_launch_description():
             description='vio_edie.yaml 절대 경로 (estimator가 cv::FileStorage로 읽음)'),
         DeclareLaunchArgument(
             'vins_folder', default_value=vins_root_default,
-            description="VINS-RGBD-FAST 루트 경로 (끝에 '/' 포함)"),
+            description="config/ 를 품은 루트 경로 (끝에 '/' 포함). 기본 = 패키지 share"),
         DeclareLaunchArgument(
             'bag', default_value='',
             description='재생할 ros2 bag 디렉토리. 비우면 자동 재생 안 함(직접 play).'),

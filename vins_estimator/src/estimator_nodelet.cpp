@@ -668,7 +668,15 @@ private:
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<EstimatorNode>();
+    std::shared_ptr<EstimatorNode> node;
+    try {
+        node = std::make_shared<EstimatorNode>();
+    } catch (const std::exception & e) {
+        // [SW1-1948] 설정 파일 경로 오류 같은 기동 실패는 abort(코어 덤프) 대신 사유를 남기고 exit 1 로 끝낸다.
+        RCLCPP_FATAL(rclcpp::get_logger("vins_estimator"), "기동 실패: %s", e.what());
+        rclcpp::shutdown();
+        return 1;
+    }
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;

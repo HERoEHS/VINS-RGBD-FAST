@@ -98,9 +98,12 @@ install(TARGETS vins_estimator_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY config/
+# [SW1-1948] 설정(vio_edie.yaml 등)은 저장소 루트 config/ 에 있다 — vins_estimator/config/ 는 없다.
+# 예전엔 없는 폴더를 OPTIONAL 로 설치해 share/config 가 빈 채로 배포됐고, 소스 체크아웃 없이 설치본만 있는
+# 로봇(/opt/edie, root 계정)에서 launch 기본 경로가 깨져 기동 즉시 abort 했다. OPTIONAL 을 빼서
+# 폴더가 없으면 빌드에서 바로 실패하게 한다(조용히 빈 설치 금지).
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../config/
   DESTINATION share/${PROJECT_NAME}/config
-  OPTIONAL
 )
 
 # launch 파일을 share 에 설치해야 `ros2 launch vins_estimator <file>` 로 실행 가능
@@ -253,6 +256,16 @@ if(BUILD_TESTING)
     VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_include_directories(test_camera_intrinsics_consistency PRIVATE ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(test_camera_intrinsics_consistency ${OpenCV_LIBS})
+
+  # [SW1-1948] 설정 파일을 못 열면 readParameters 가 즉시 예외 — 값 0 으로 계속 가다 cv2eigen abort 하던 결함 회귀.
+  # rclcpp 노드를 만드는 첫 테스트라 격리 도메인(ros_isolated)에서 돌린다 — PC 셸이 로봇과 같은 ROS_DOMAIN_ID 를 쓰기 때문.
+  find_package(ament_cmake_ros REQUIRED)
+  ament_add_ros_isolated_gtest(test_config_fail_fast test/test_config_fail_fast.cpp)
+  target_link_libraries(test_config_fail_fast vins_lib)
+
+  # [SW1-1948] 설치본(share)에 config 가 실제로 들어가고 launch 기본값이 그 파일을 가리키는지 — colcon test 는 install 뒤라 share 를 직접 본다
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_installed_config test/test_installed_config.py)
 endif()
 
 ament_package()

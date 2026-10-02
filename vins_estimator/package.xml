@@ -22,6 +22,15 @@
   <depend>camera_model</depend>
   <depend>ament_index_cpp</depend>
 
+  <!-- launch/edie/*.launch.py 가 쓰는 파이썬 의존 (SW1-1948: 기본 경로를 share 로 찾는다) -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_ros</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>
