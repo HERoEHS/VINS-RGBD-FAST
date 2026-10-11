@@ -10,11 +10,42 @@
 #   ※ 게이팅 on/off는 config(vio_edie.yaml)의 use_wheel_vel_gate로 토글 후 재실행.
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+# 설정 파일 경로: 파일마다 1순위 /opt/edie/current/share/<pkg>/<rel>(그 파일이 있을 때만),
+# 없으면 개발 워크스페이스 ament share, 둘 다 없으면 1순위 후보(SW1-1959).
+# edie_vision config_path.hpp·edie_hazard_filter config_path.py·edie_localization launch 의
+# _share_file 과 같은 규칙 — 같이 바꾼다(이 저장소의 두 launch 사본은
+# test_installed_config.py 가 동일성까지 확인).
+_OPT_SHARE_ROOT = '/opt/edie/current/share'
+
+
+def _share_file(package, rel):
+    opt_path = os.path.join(_OPT_SHARE_ROOT, package, rel)
+    if os.path.exists(opt_path):
+        return opt_path
+    try:
+        dev_path = os.path.join(get_package_share_directory(package), rel)
+        if os.path.exists(dev_path):
+            return dev_path
+    # ament 에 패키지가 없음·색인 경로 없음(상품 이미지 등)
+    except (PackageNotFoundError, ValueError, OSError):
+        pass
+    return opt_path
+
+
+# vio_edie.yaml 의 패키지 share 안 상대 경로. vins_folder 는 이 파일을 고른 쪽의 루트(끝 '/' 포함).
+_CONFIG_REL = os.path.join('config', 'elp_stereo_edie', 'vio_edie.yaml')
+
+
+def _vins_root_of(config_path):
+    # <루트>/config/elp_stereo_edie/vio_edie.yaml → <루트>/ (코드가 vins_folder + "config/..." 로 이어붙임)
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(config_path))), '')
 
 
 def generate_launch_description():
@@ -22,9 +53,9 @@ def generate_launch_description():
     # 설치본만 있는 로봇(/opt/edie, root 계정)에서 파일을 못 열어 기동 즉시 abort 했다.
     # share/vins_estimator/config 는 CMake 가 저장소 루트 config/ 를 통째로 설치한 것이고, PC 는 --symlink-install 이라
     # 소스 yaml 을 고치면 그대로 반영된다. 끝에 '/' 필수 — 코드가 vins_folder + "config/..." 로 이어붙인다.
-    vins_root_default = os.path.join(get_package_share_directory('vins_estimator'), '')
-    config_default = os.path.join(
-        vins_root_default, 'config', 'elp_stereo_edie', 'vio_edie.yaml')
+    # [SW1-1959] 그 위에 파일마다 /opt/edie 우선 — /opt/edie/current/share/vins_estimator/ 에 그 파일이 있으면 그것.
+    config_default = _share_file('vins_estimator', _CONFIG_REL)
+    vins_root_default = _vins_root_of(config_default)
 
     args = [
         DeclareLaunchArgument(
