@@ -116,8 +116,33 @@ def test_share_file_ament_error_returns_opt_candidate(mod, monkeypatch, tmp_path
 
 
 def test_vins_root_of_strips_config_rel(mod):
-    cfg = os.path.join('/r', 'config', 'elp_stereo_edie', 'vio_edie.yaml')
-    assert mod._vins_root_of(cfg) == '/r' + os.sep
+    assert mod._vins_root_of(os.path.join('/r', mod._CONFIG_REL)) == '/r' + os.sep
+
+
+def _defaults_of(module):
+    """이미 불러온 launch 모듈의 경로 인자 기본값(문자열)."""
+    context = LaunchContext()
+    return {e.name: perform_substitutions(context, e.default_value)
+            for e in module.generate_launch_description().entities
+            if isinstance(e, DeclareLaunchArgument) and e.name in PATH_ARGS}
+
+
+def test_launch_defaults_use_opt_when_present(mod, monkeypatch, tmp_path):
+    # 연결부: launch 기본값이 실제로 _share_file 을 거쳐 /opt 사본을 고르고, vins_folder 도 그 쪽 루트여야 한다.
+    # (이 PC 에는 /opt 사본이 없어 위 test_launch_defaults_* 만으로는 이 경로가 안 돈다 — critic R1)
+    opt_root = tmp_path / 'opt'
+    cfg = _make(opt_root / 'vins_estimator' / mod._CONFIG_REL)
+    monkeypatch.setattr(mod, '_OPT_SHARE_ROOT', str(opt_root))
+    d = _defaults_of(mod)
+    assert d['config_file'] == str(cfg)
+    assert d['vins_folder'] == os.path.join(str(opt_root / 'vins_estimator'), '')
+
+
+def test_launch_defaults_use_share_when_opt_empty(mod, monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, '_OPT_SHARE_ROOT', str(tmp_path / 'opt'))
+    d = _defaults_of(mod)
+    assert d['config_file'] == os.path.join(SHARE, mod._CONFIG_REL)
+    assert d['vins_folder'] == os.path.join(SHARE, '')
 
 
 def test_helper_copies_are_identical():

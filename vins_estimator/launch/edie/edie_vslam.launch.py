@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # [SW1-1837] edie 라이브 VIO 실행 launch — 실 로봇에서 vins_estimator만 헤드리스로 띄운다.
 #   gate1_klt.launch.py와 달리 rqt/bag 자동실행 없음 → SSH 헤드리스 라이브 테스트 친화.
-#   config_file/vins_folder 기본값은 패키지 share(설치본) 기준 — 소스 체크아웃이 없는 로봇에서도 그대로 뜬다(SW1-1948).
+#   config_file/vins_folder 기본값은 파일마다 /opt/edie 우선, 없으면 패키지 share(설치본) — 소스 체크아웃이
+#   없는 로봇에서도 그대로 뜬다(SW1-1948, SW1-1959).
 #   시각화가 필요하면 별도 쉘에서 rviz2 직접 실행 (bag 재생 시: rviz2 --ros-args -p use_sim_time:=true).
 #
 # 사용 예:
-#   ros2 launch vins_estimator edie_vslam.launch.py                # 헤드리스 라이브 (기본 = 패키지 share 의 vio_edie.yaml)
+#   ros2 launch vins_estimator edie_vslam.launch.py   # 헤드리스 라이브 (기본 = /opt 또는 share 설정)
 #   ros2 launch vins_estimator edie_vslam.launch.py config_file:=<다른 yaml>
 #   ※ 게이팅 on/off는 config(vio_edie.yaml)의 use_wheel_vel_gate로 토글 후 재실행.
 import os
@@ -44,8 +45,12 @@ _CONFIG_REL = os.path.join('config', 'elp_stereo_edie', 'vio_edie.yaml')
 
 
 def _vins_root_of(config_path):
-    # <루트>/config/elp_stereo_edie/vio_edie.yaml → <루트>/ (코드가 vins_folder + "config/..." 로 이어붙임)
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(config_path))), '')
+    # <루트>/<_CONFIG_REL> → <루트>/ (코드가 vins_folder + "config/..." 로 이어붙임).
+    # _CONFIG_REL 깊이만큼 올라가므로 상대 경로가 바뀌어도 루트가 어긋나지 않는다.
+    root = config_path
+    for _ in _CONFIG_REL.split(os.sep):
+        root = os.path.dirname(root)
+    return os.path.join(root, '')
 
 
 def generate_launch_description():
@@ -63,7 +68,8 @@ def generate_launch_description():
             description='vio_edie.yaml 절대 경로 (estimator가 cv::FileStorage로 읽음)'),
         DeclareLaunchArgument(
             'vins_folder', default_value=vins_root_default,
-            description="config/ 를 품은 루트 경로 (끝에 '/' 포함). 기본 = 패키지 share"),
+            description="config/ 를 품은 루트 경로 (끝에 '/' 포함). 기본 = 기본 config_file 쪽 루트 "
+                        "(/opt/edie 에 그 파일이 있으면 /opt, 없으면 패키지 share)"),
         DeclareLaunchArgument(
             'log_level', default_value='info', #'debug',
             description='vins_estimator RCLCPP 로그 레벨 (debug/info/warn/error)'),

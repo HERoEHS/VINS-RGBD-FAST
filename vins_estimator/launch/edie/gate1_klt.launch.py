@@ -55,8 +55,12 @@ _CONFIG_REL = os.path.join('config', 'elp_stereo_edie', 'vio_edie.yaml')
 
 
 def _vins_root_of(config_path):
-    # <루트>/config/elp_stereo_edie/vio_edie.yaml → <루트>/ (코드가 vins_folder + "config/..." 로 이어붙임)
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(config_path))), '')
+    # <루트>/<_CONFIG_REL> → <루트>/ (코드가 vins_folder + "config/..." 로 이어붙임).
+    # _CONFIG_REL 깊이만큼 올라가므로 상대 경로가 바뀌어도 루트가 어긋나지 않는다.
+    root = config_path
+    for _ in _CONFIG_REL.split(os.sep):
+        root = os.path.dirname(root)
+    return os.path.join(root, '')
 
 
 def generate_launch_description():
@@ -74,7 +78,8 @@ def generate_launch_description():
             description='vio_edie.yaml 절대 경로 (estimator가 cv::FileStorage로 읽음)'),
         DeclareLaunchArgument(
             'vins_folder', default_value=vins_root_default,
-            description="config/ 를 품은 루트 경로 (끝에 '/' 포함). 기본 = 패키지 share"),
+            description="config/ 를 품은 루트 경로 (끝에 '/' 포함). 기본 = 기본 config_file 쪽 루트 "
+                        "(/opt/edie 에 그 파일이 있으면 /opt, 없으면 패키지 share)"),
         DeclareLaunchArgument(
             'bag', default_value='',
             description='재생할 ros2 bag 디렉토리. 비우면 자동 재생 안 함(직접 play).'),

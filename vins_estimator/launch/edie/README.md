@@ -35,14 +35,14 @@ ros2 launch vins_estimator gate1_klt.launch.py bag:=/path/to/rosbag2_dir rate:=1
 | 인자 | 기본값 | 설명 |
 |------|--------|------|
 | `config_file` | `/opt/edie/current/share/vins_estimator/config/elp_stereo_edie/vio_edie.yaml` (그 파일이 있을 때), 없으면 `<share>/vins_estimator/config/elp_stereo_edie/vio_edie.yaml` | estimator config 절대경로. 파일마다 **/opt/edie 우선 → 패키지 share**(설치본) — 소스 트리가 없는 로봇·상품 Yocto 에서도 뜬다 (SW1-1948, SW1-1959) |
-| `vins_folder` | 고른 `config_file` 의 루트(`.../vins_estimator/`, 끝 `/`) | 코드가 `config/` 를 이어붙임(fisheye mask, `fisheye: 0` 이면 안 씀) |
+| `vins_folder` | **기본** `config_file` 의 루트(`.../vins_estimator/`, 끝 `/`) — `config_file:=` 로 다른 파일을 넘겨도 따라가지 않으니 필요하면 같이 넘긴다 | 코드가 `config/` 를 이어붙임(fisheye mask, `fisheye: 0` 이면 안 씀) |
 | `bag` | (빈값) | 주면 `ros2 bag play` 자동 실행 |
 | `rate` | `1.0` | bag 재생 배속 |
 | `rqt` | `true` | rqt_image_view 자동 실행 |
 
 > 설정 원본은 저장소 루트 `config/` 이고 CMake 가 통째로 `share/vins_estimator/config` 에 설치한다.
 > `/opt/edie/current/share/vins_estimator/` 는 edie_common `install_edie_share.sh`(기본 대상에 vins_estimator 포함)가 설치본을 복사해 채운다 — 규칙은 edie_vision·edie_localization launch 의 `_share_file` 과 같다(SW1-1959). 로봇별 캘리브 값 덮어쓰기는 아직 없다(팀 결정 대기).
-> PC 는 `colcon build --symlink-install` 이라 소스 yaml 을 고치면 재빌드 없이 반영된다(복사 설치본은 재빌드 필요).
+> PC 는 `colcon build --symlink-install` 이라 소스 yaml 을 고치면 재빌드 없이 반영된다(복사 설치본은 재빌드 필요 — 그 기계에 `/opt/edie/current/share/vins_estimator` 사본이 있으면 그 사본이 먼저 쓰이므로 `install_edie_share.sh` 도 다시 돌린다).
 > ⚠️ 이 변경을 pull 한 symlink 워크스페이스는 **vins_estimator 를 한 번 재빌드해야** share/config 가 채워진다 — 재빌드 전에는
 > launch 기본값이 빈 폴더를 가리켜 "설정 파일을 열 수 없음" 으로 즉시 exit 1 한다.
 > 설정 파일을 못 열면 estimator 는 FATAL 로그 뒤 exit 1 로 바로 끝난다(예전엔 값 0 으로 가다 abort).
