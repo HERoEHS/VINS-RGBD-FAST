@@ -28,7 +28,8 @@
   낮은 신뢰로 다뤄야 한다.
 
 라이브러리(import)로도, CLI로도 쓴다.
-  CLI: python3 bias_separation.py <bag> <tum...> [--yaml imu_offsets.yaml]
+  CLI: python3 bias_separation.py <bag> <tum...> [--yaml <영점 기록 yaml>]
+       영점 기록 = 로봇 ~/.edie/logs/imu_offsets/<녹화 직전 부팅 UTC 시각>Z.yaml (#SW1-1959).
 """
 import argparse
 import math
@@ -244,7 +245,7 @@ def main():
     ap = argparse.ArgumentParser(description='정지 자세 오차 bias/자세 분리 (SW1-1837)')
     ap.add_argument('bag')
     ap.add_argument('tums', nargs='+')
-    ap.add_argument('--yaml', default=None, help='imu_offsets.yaml — 레벨링 각↔p 교차검증')
+    ap.add_argument('--yaml', default=None, help='이 녹화 부팅의 영점 기록 ~/.edie/logs/imu_offsets/<UTC시각>Z.yaml — 레벨링 각↔p 교차검증')
     args = ap.parse_args()
 
     bag = read_bag(args.bag)

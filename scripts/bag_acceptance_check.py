@@ -2,7 +2,9 @@
 """[SW1-1837] edie_calib_verify bag 검수 — ROBOT_TASK_v6_record.md 스펙 자동 판정.
 
 사용:
-    python3 bag_acceptance_check.py <bag_경로> [--yaml imu_offsets_sN.yaml]
+    python3 bag_acceptance_check.py <bag_경로> [--yaml <영점 기록 yaml>]
+    영점 기록 = 로봇 ~/.edie/logs/imu_offsets/<녹화 직전 부팅 UTC 시각>Z.yaml (부팅마다 1개, 최근 30개).
+    icm20948_ros2/config/imu_offsets.yaml 은 노드가 더 이상 쓰지 않음(값 멈춤, #SW1-1959) — 쓰지 말 것.
 
 판정 항목 (각각 PASS/WARN/FAIL + 실측값):
     C1  필수 토픽 존재·수신량
@@ -56,7 +58,8 @@ def ang_norm(a):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('bag')
-    ap.add_argument('--yaml', default=None)
+    ap.add_argument('--yaml', default=None,
+                    help='이 녹화 부팅의 영점 기록 ~/.edie/logs/imu_offsets/<UTC시각>Z.yaml')
     args = ap.parse_args()
 
     # ---- 단일 패스 읽기: 내용은 IMU/odom/joints만 역직렬화, 나머지는 개수만 ----

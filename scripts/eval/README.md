@@ -39,8 +39,12 @@ source /opt/ros/humble/setup.bash
 `corr(t,\|ψ\|)` 경고. p 추정은 드리프트-프리 클러스터(차분) 우선, 잔차 큰 run은 낮은 신뢰.
 ```bash
 python3 scripts/eval/bias_separation.py ~/ros2_ws/bag/<bag> gv_r1.tum gv_r2.tum gv_r3.tum \
-  --yaml <icm20948_ros2>/config/imu_offsets.yaml
+  --yaml ~/.edie/logs/imu_offsets/<녹화 직전 부팅의 UTC 시각>Z.yaml
 ```
+`--yaml` 에는 **그 녹화를 한 부팅의 IMU 영점 기록**을 준다 — 로봇의 `~/.edie/logs/imu_offsets/` 에 부팅마다
+UTC 시각 이름으로 하나씩 남고(최근 30개), 녹화 시작 직전 시각의 파일이 그 부팅 것이다(파일 안 `calibrated_at` 로 확인).
+`icm20948_ros2/config/imu_offsets.yaml` 은 이제 노드가 쓰지 않아 값이 멈춰 있으므로 쓰지 말 것
+(imu-ros2-wrapper #SW1-1959, incident 2026-10-12-imu-offsets-reload-stale).
 
 ### STILL-DRIFT 가드 재생 검증 절차 (SW1-1922)
 
