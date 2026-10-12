@@ -30,7 +30,7 @@ source /opt/ros/humble/setup.bash
 뒤섞인 오염 지표**였고, 이 때문에 중력 재정렬을 수 주간 헛짚었다(→ 봉인).
 
 이 도구는 정지들을 heading별로 모아 `m − e_z ≈ ε(t) + [Rz(ψ)−Rz(ψ_init)]·p` 를 회귀해 분리한다:
-- **p** = 몸체 고정 bias 벡터(heading 따라 돎) → **QC 값**. wrapper 레벨링 각(`imu_offsets.yaml`
+- **p** = 몸체 고정 bias 벡터(heading 따라 돎) → **QC 값**. wrapper 레벨링 각(영점 기록 yaml 의
   `level_angle_deg`)과 `--yaml`로 교차검증(일치=인과 확증).
 - **drift 변동(std/p2p)** = bias 제거 후 남는 VINS 자세 드리프트 — 절대값은 init 프레임 기울기라
   gauge(분리 불가), **시간 변동만 관측 가능량**.
@@ -41,8 +41,14 @@ source /opt/ros/humble/setup.bash
 python3 scripts/eval/bias_separation.py ~/ros2_ws/bag/<bag> gv_r1.tum gv_r2.tum gv_r3.tum \
   --yaml ~/.edie/logs/imu_offsets/<녹화 직전 부팅의 UTC 시각>Z.yaml
 ```
-`--yaml` 에는 **그 녹화를 한 부팅의 IMU 영점 기록**을 준다 — 로봇의 `~/.edie/logs/imu_offsets/` 에 부팅마다
-UTC 시각 이름으로 하나씩 남고(최근 30개), 녹화 시작 직전 시각의 파일이 그 부팅 것이다(파일 안 `calibrated_at` 로 확인).
+`--yaml` 에는 **그 녹화를 한 IMU 노드 기동의 영점 기록**을 준다 — 로봇의 `~/.edie/logs/imu_offsets/`
+(환경변수 `EDIE_IMU_OFFSET_LOG_DIR` 로 바뀔 수 있음)에 노드가 뜰 때마다 UTC 시각 이름(`YYYY-MM-DD_HH-MM-SSZ.yaml`,
+같은 초면 `_1`…)으로 하나씩 남고 최근 30개만 유지된다.
+- **가장 확실한 방법**: 그 기동의 노드 로그 `[IMU-CALIB] 영점 기록: <경로>` 에 찍힌 파일을 쓴다.
+- 로그가 없으면: bag 시작 시각을 **UTC 로 바꿔서**(`ros2 bag info` 는 현지 시각) 그보다 이름이 앞선 기록 중 가장 늦은 것.
+  단 로봇 보드엔 RTC 가 없어 시계를 맞추기(NTP) 전에 켠 기동은 이름이 **몇 시간 앞설 수 있다** — 이름만으로 단정하지 말 것.
+  파일 안 `calibrated_at` 은 현지 시각이고 같은 (틀릴 수 있는) 시계라 대조 근거가 못 된다.
+- 기록은 30개만 남으므로 오래 둘 녹화라면 녹화할 때 그 기록 파일을 bag 폴더에 같이 복사해 둔다.
 `icm20948_ros2/config/imu_offsets.yaml` 은 이제 노드가 쓰지 않아 값이 멈춰 있으므로 쓰지 말 것
 (imu-ros2-wrapper #SW1-1959, incident 2026-10-12-imu-offsets-reload-stale).
 

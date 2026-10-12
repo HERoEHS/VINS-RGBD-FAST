@@ -29,7 +29,8 @@
 
 라이브러리(import)로도, CLI로도 쓴다.
   CLI: python3 bias_separation.py <bag> <tum...> [--yaml <영점 기록 yaml>]
-       영점 기록 = 로봇 ~/.edie/logs/imu_offsets/<녹화 직전 부팅 UTC 시각>Z.yaml (#SW1-1959).
+       영점 기록 = 로봇 ~/.edie/logs/imu_offsets/<UTC 시각>Z.yaml — 그 기동의 로그
+       "[IMU-CALIB] 영점 기록: <경로>" 로 고른다(RTC 없어 이름 시각이 틀릴 수 있음, README 참고, #SW1-1959).
 """
 import argparse
 import math

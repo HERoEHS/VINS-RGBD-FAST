@@ -3,7 +3,9 @@
 
 사용:
     python3 bag_acceptance_check.py <bag_경로> [--yaml <영점 기록 yaml>]
-    영점 기록 = 로봇 ~/.edie/logs/imu_offsets/<녹화 직전 부팅 UTC 시각>Z.yaml (부팅마다 1개, 최근 30개).
+    영점 기록 = 로봇 ~/.edie/logs/imu_offsets/<UTC 시각>Z.yaml (IMU 노드 기동마다 1개, 최근 30개).
+    고르는 법: 그 기동의 로그 "[IMU-CALIB] 영점 기록: <경로>" — RTC 없는 보드는 NTP 전 기동의 이름이 몇 시간 앞설 수 있다
+    (scripts/eval/README.md "bias 분리" 절 참고).
     icm20948_ros2/config/imu_offsets.yaml 은 노드가 더 이상 쓰지 않음(값 멈춤, #SW1-1959) — 쓰지 말 것.
 
 판정 항목 (각각 PASS/WARN/FAIL + 실측값):
