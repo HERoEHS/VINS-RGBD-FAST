@@ -253,6 +253,13 @@ if(BUILD_TESTING)
   # [SW1-1883 후속] IMU/휠 스탬프 간극 판정 — 헤더 단독 순수 함수 테스트
   ament_add_gtest(test_imu_gap test/test_imu_gap.cpp)
 
+  # [SW1-1964] 영상 속도 제한기 — 재시작 때 시간 기준·받은 사진 수 함께 리셋(재시작 뒤 영구 정지 재발 방지)
+  ament_add_gtest(test_frontend_rate_limiter test/test_frontend_rate_limiter.cpp)
+  target_compile_definitions(test_frontend_rate_limiter PRIVATE
+    VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+  target_include_directories(test_frontend_rate_limiter PRIVATE ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(test_frontend_rate_limiter ${OpenCV_LIBS})
+
   # [SW1-1828] vio_edie.yaml 카메라 모델 ↔ 정류 영상(edie_vision P) 일치 — 이중 보정 재발 방지
   ament_add_gtest(test_camera_intrinsics_consistency test/test_camera_intrinsics_consistency.cpp)
   target_compile_definitions(test_camera_intrinsics_consistency PRIVATE

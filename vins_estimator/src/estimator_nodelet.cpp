@@ -1,5 +1,6 @@
 #include <atomic>
 #include "utility/imu_gap.h"
+#include "utility/frontend_rate_limiter.h"
 #include <condition_variable>
 #include <cv_bridge/cv_bridge.h>
 #include <map>
@@ -154,10 +155,9 @@ private:
     bool init_pub     = false;
 
     bool   first_image_flag = true;
-    double first_image_time = 0;
+    FrontendRateLimiter rate_limiter_;  // [SW1-1964] 시간 기준·받은 사진 수를 한 몸으로(restart 로만 기준 변경)
     double last_image_time  = 0;
     int    pub_count        = 1;
-    int    input_count      = 0;
 
     double last_imu_t   = 0;
     // [SW1-1883 후속] 스탬프 간극 재시작 — 콜백 스레드에서 추정기를 비우고, 트래커 스레드 소유 플래그는
@@ -390,8 +390,13 @@ private:
                 if (first_image_flag)
                 {
                     first_image_flag = false;
-                    first_image_time = time_color;
-                    last_image_time  = time_color;
+                    // [SW1-1964] 속도 제한기의 받은 사진 수도 시간 기준과 함께 0 으로(restart) — 예전엔 기준 시각만
+                    //   새로 잡아 재시작 직후 "받은 수 / (아주 짧은 시간)" 이 FRONTEND_FREQ 를 넘어 모든 프레임을
+                    //   건너뛰고, 1 s 뒤 image discontinue 로 또 재시작하는 고리에 빠졌다(재생 109 회, .251 10-11 실기
+                    //   로그에 같은 모양 75 회 — 원인 미확정). 영상 불연속·IMU/휠 간극(tracker_reset_request_) 두 재시작
+                    //   경로 모두 이 블록을 지난다. upstream 0e8856b(제한기 도입)부터의 누락.
+                    rate_limiter_.restart(time_color);
+                    last_image_time = time_color;
                     continue;
                 }
 
@@ -416,22 +421,19 @@ private:
                     continue;
                 }
 
-                if (round(1.0 * input_count / (time_color - first_image_time)) > FRONTEND_FREQ)
+                if (!rate_limiter_.admit(time_color, FRONTEND_FREQ))
                 {
-                    RCLCPP_DEBUG(get_logger(), "Skip this frame.%f",
-                                 1.0 * input_count / (time_color - first_image_time));
+                    RCLCPP_DEBUG(get_logger(), "Skip this frame.%f", rate_limiter_.rate(time_color));
                     continue;
                 }
-                ++input_count;
 
-                if (round(1.0 * pub_count / (time_color - first_image_time)) <= FREQ)
+                if (round(1.0 * pub_count / (time_color - rate_limiter_.firstTime())) <= FREQ)
                 {
                     PUB_THIS_FRAME = true;
-                    if (abs(1.0 * pub_count / (time_color - first_image_time) - FREQ) < 0.01 * FREQ)
+                    if (abs(1.0 * pub_count / (time_color - rate_limiter_.firstTime()) - FREQ) < 0.01 * FREQ)
                     {
-                        first_image_time = time_color;
-                        pub_count        = 0;
-                        input_count      = 0;
+                        rate_limiter_.restart(time_color);
+                        pub_count = 0;
                     }
                 }
                 else
@@ -526,9 +528,8 @@ private:
                         }
                         else
                         {
-                            first_image_time = time_color;
-                            pub_count        = 0;
-                            input_count      = 0;
+                            rate_limiter_.restart(time_color);
+                            pub_count = 0;
                             continue;
                         }
                     }
