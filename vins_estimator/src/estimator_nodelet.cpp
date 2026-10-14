@@ -160,11 +160,16 @@ private:
     int    input_count      = 0;
 
     double last_imu_t   = 0;
-    double last_wheel_t = 0;
     // [SW1-1883 후속] 스탬프 간극 재시작 — 콜백 스레드에서 추정기를 비우고, 트래커 스레드 소유 플래그는
     //   원자 요청으로 넘겨 그 스레드가 스스로 리셋한다(이미지 불연속 경로와 동일 결과, 데이터 경합 없음).
     std::atomic<bool> tracker_reset_request_{false};
     long              gap_restart_cnt_{0};
+    // [SW1-1964 V1] 휠 스탬프 문 — 기준 시각(옛 last_wheel_t)과 "기준 다시 잡기" 깃발.
+    //   깃발 세우는 곳: 추정기 재시작 요청(콜백 스레드)·이미지 불연속(트래커 스레드) — 원자.
+    //   먹는 곳: wheel_callback 에서 IMU 와 같은 계단을 탄 "기준보다 크게 과거인 첫 표본"일 때만.
+    imu_gap::WheelStampGate wheel_gate_;
+    // 역행 크기 문턱 — IMU 간극 상한을 재사용(같은 "계단" 정의). 가드가 꺼져 있으면(0) 1 s.
+    static double wheelRebaseBackS() { return IMU_GAP_MAX_S > 0.0 ? IMU_GAP_MAX_S : 1.0; }
     // 콜백 스레드: 잠금 없이 요청만 세운다. 실제 리셋은 백엔드 스레드(consumeResetRequest)가 수행.
     void restartEstimatorOnGap(const char *src, double prev_t, double now_t, double max_gap)
     {
@@ -172,6 +177,7 @@ private:
         RCLCPP_WARN(get_logger(), "[%s-GAP] Δt=%+.2fs (prev %.3f → now %.3f, 상한 %.1fs) → 추정기 재시작 요청(누적 %ld)",
                     src, now_t - prev_t, prev_t, now_t, max_gap, gap_restart_cnt_);
         estimator.reset_request_ = true;
+        wheel_gate_.requestRebase();
     }
     // 백엔드 스레드: m_backend를 쥔 채 호출. 이미지 불연속 재시작과 같은 정리 + 트래커 리셋 요청.
     bool consumeResetRequest()
@@ -221,15 +227,23 @@ private:
     {
         if (!wheel_msg) return;
         double t = rclcpp::Time(wheel_msg->header.stamp).seconds();
-        const auto v = imu_gap::classify(last_wheel_t, t, WHEEL_GAP_MAX_S);
+        // [SW1-1964 V1] 시계 역행 재시작 뒤 첫 "크게 과거인" 표본이면 기준을 지우고 첫 표본으로 받는다.
+        //   이게 없으면 wheel_gap_max_s=0 에서 과거 스탬프 휠이 약 N s 동안 전부 kDisorder 로 버려져
+        //   재시작한 추정기가 휠을 기다리며 멈춘다(컨트롤러가 계단 직후 바로 발행할 때).
+        const double prev_t  = wheel_gate_.last();
+        bool         rebased = false;
+        const auto   v       = wheel_gate_.check(t, last_imu_t, WHEEL_GAP_MAX_S, wheelRebaseBackS(), &rebased);
+        if (rebased)
+            RCLCPP_WARN(get_logger(), "[WHEEL-REBASE] 시계 역행 뒤 첫 휠 표본 — 기준 %.3f → %.3f 로 다시 잡음",
+                        prev_t, t);
         if (imu_gap::needsRestart(v))
-            restartEstimatorOnGap("WHEEL", last_wheel_t, t, WHEEL_GAP_MAX_S);
+            restartEstimatorOnGap("WHEEL", prev_t, t, WHEEL_GAP_MAX_S);
         else if (v == imu_gap::Verdict::kDisorder)
         {
             RCLCPP_WARN(get_logger(), "wheel message in disorder! %f", t);
             return;
         }
-        last_wheel_t = t;
+        wheel_gate_.accept(t);
         // odom.twist: 로봇 본체(또는 odom child) 기준 선속도/각속도
         Eigen::Vector3d vel(wheel_msg->twist.twist.linear.x,
                             wheel_msg->twist.twist.linear.y,
@@ -237,7 +251,7 @@ private:
         Eigen::Vector3d gyr(wheel_msg->twist.twist.angular.x,
                             wheel_msg->twist.twist.angular.y,
                             wheel_msg->twist.twist.angular.z);
-        estimator.inputWheel(last_wheel_t, vel, gyr);
+        estimator.inputWheel(t, vel, gyr);
         // [reboot-pose-seed] 휠 odom pose 최신값 — 재초기화 다리(bridge) 병진 소스.
         //   휠 odom은 VINS reboot와 무관한 외부 적분이라 캡처~재init 사이 연속.
         const auto &p = wheel_msg->pose.pose.position;
@@ -397,6 +411,8 @@ private:
                     estimator.setParameter();
                     m_backend.unlock();
                     last_imu_t = 0;
+                    // [SW1-1964 V1] 영상 불연속(앞·뒤) — 휠 역행이 뒤따를 때만 깃발이 쓰인다
+                    wheel_gate_.requestRebase();
                     continue;
                 }
 
