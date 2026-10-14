@@ -2,6 +2,7 @@
 # edie_vision 캘리브(정류 P)로 덮어쓴 사본을 넘기는지 확인. 노드는 띄우지 않는다.
 import importlib.util
 import os
+import re
 
 import pytest
 from ament_index_python.packages import get_package_share_directory
@@ -70,7 +71,7 @@ def test_config_uses_vision_calibration(mod, monkeypatch, tmp_path):
     _use(mod, monkeypatch, tmp_path)
     out = mod._vision_calibrated_config(CONFIG)
     assert os.path.dirname(out) == str(tmp_path / 'patched' / f'edie_vins-{os.getuid()}')
-    assert out.endswith('_vio_edie.yaml')
+    assert re.fullmatch(r'vio_edie\.[0-9a-f]{8}\.yaml', os.path.basename(out))
     assert _proj_values(open(out).read()) == {'fx': 401.5, 'fy': 402.5, 'cx': 330.25, 'cy': 260.75}
     # 원본은 손대지 않는다
     assert _proj_values(open(CONFIG).read())['fx'] != 401.5
@@ -102,11 +103,42 @@ def test_patched_file_readable_by_opencv(mod, monkeypatch, tmp_path):
     assert fs.getNode('image_width').real() == 640
 
 
-def test_each_launch_gets_its_own_copy(mod, monkeypatch, tmp_path):
-    # 동시에 띄운 두 launch 가 같은 사본을 덮어쓰지 않는다(critic M1).
+def _copies(tmp_path):
+    return sorted(os.listdir(tmp_path / 'patched' / f'edie_vins-{os.getuid()}'))
+
+
+def test_same_config_reuses_one_copy(mod, monkeypatch, tmp_path):
+    # 실행할 때마다 파일이 쌓이지 않는다: 같은 설정이면 같은 파일 하나(임시 파일도 안 남음).
     _make_vision(tmp_path / 'opt')
     _use(mod, monkeypatch, tmp_path)
-    assert mod._vision_calibrated_config(CONFIG) != mod._vision_calibrated_config(CONFIG)
+    first = mod._vision_calibrated_config(CONFIG)
+    assert all(mod._vision_calibrated_config(CONFIG) == first for _ in range(3))
+    assert _copies(tmp_path) == [os.path.basename(first)]
+
+
+def test_different_config_gets_different_copy(mod, monkeypatch, tmp_path):
+    # 설정이 다르면 이름이 달라 서로 덮어쓰지 않는다(critic M1 — 동시 실행).
+    _make_vision(tmp_path / 'opt')
+    _use(mod, monkeypatch, tmp_path)
+    a = mod._vision_calibrated_config(CONFIG)
+    other = tmp_path / 'other' / 'vio_edie.yaml'
+    other.parent.mkdir()
+    other.write_text(open(CONFIG).read() + '\n# 다른 설정\n')
+    b = mod._vision_calibrated_config(str(other))
+    assert a != b
+    assert len(_copies(tmp_path)) == 2
+    assert open(b).read().endswith('# 다른 설정\n')
+
+
+def test_stale_copy_with_same_name_is_rewritten(mod, monkeypatch, tmp_path):
+    # 같은 이름 파일이 깨져 있으면(내용 불일치) 다시 쓴다.
+    _make_vision(tmp_path / 'opt')
+    _use(mod, monkeypatch, tmp_path)
+    out = mod._vision_calibrated_config(CONFIG)
+    with open(out, 'w') as f:
+        f.write('broken')
+    assert mod._vision_calibrated_config(CONFIG) == out
+    assert _proj_values(open(out).read())['fx'] == 401.5
 
 
 def test_calibration_file_follows_camera_yaml(mod, monkeypatch, tmp_path):
@@ -150,3 +182,30 @@ def test_node_gets_original_when_disabled(mod, monkeypatch, tmp_path):
     _make_vision(tmp_path / 'opt')
     _use(mod, monkeypatch, tmp_path)
     assert _launch_node_params(mod, 'false')['config_file'] == CONFIG
+
+
+def test_write_failure_cleans_temp_and_keeps_original(mod, monkeypatch, tmp_path):
+    # 바꿔 넣기(os.replace)가 실패하면 반쯤 쓴 임시 파일을 지우고 원본 경로로 돌아간다(critic R2).
+    _make_vision(tmp_path / 'opt')
+    _use(mod, monkeypatch, tmp_path)
+
+    def boom(*_a, **_k):
+        raise OSError('replace 실패 흉내')
+    monkeypatch.setattr(mod.os, 'replace', boom)
+    assert mod._vision_calibrated_config(CONFIG) == CONFIG
+    assert _copies(tmp_path) == []
+
+
+def test_foreign_owned_dir_keeps_original(mod, monkeypatch, tmp_path):
+    # 다른 계정이 만든 폴더면 쓰지 않고 원본 경로로 돌아간다(critic R4).
+    _make_vision(tmp_path / 'opt')
+    _use(mod, monkeypatch, tmp_path)
+    real_lstat = os.lstat
+
+    class _Foreign:
+        def __init__(self, st):
+            self.st = st
+            self.st_uid = st.st_uid + 1
+
+    monkeypatch.setattr(mod.os, 'lstat', lambda p: _Foreign(real_lstat(p)))
+    assert mod._vision_calibrated_config(CONFIG) == CONFIG

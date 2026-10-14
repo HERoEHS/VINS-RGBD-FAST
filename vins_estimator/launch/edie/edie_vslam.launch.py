@@ -11,6 +11,7 @@
 #   ※ 게이팅 on/off는 config(vio_edie.yaml)의 use_wheel_vel_gate로 토글 후 재실행.
 #   [SW1-1962] 카메라 fx·fy·cx·cy 는 시작할 때 edie_vision 캘리브(정류 P)로 덮어쓴다 — 로봇별 캘리브를
 #   바꾸면 재시작만으로 반영된다. 끄려면 use_vision_calib:=false (vio_edie.yaml 값 그대로).
+import hashlib
 import os
 import tempfile
 
@@ -64,8 +65,9 @@ def _vins_root_of(config_path):
 # 그 옆의 left.calibration_file(gstreamer_utils.hpp LoadCameraConfig). 그래야 vision 이 편 값과 어긋나지 않는다.
 _VISION_CAMERA_REL = os.path.join('config', 'gstreamer', 'camera_v4l2.yaml')
 # 덮어쓴 사본을 두는 곳 — 재부팅하면 지워져도 되는 임시 파일(eMMC 대신 /tmp).
-# 계정별 폴더 + 실행마다 새 파일: root 로 한 번 띄운 폴더에 다른 계정이 못 쓰거나,
-# 동시에 띄운 두 launch 가 같은 파일을 덮어써 서로의 설정을 읽는 일을 막는다.
+# 계정별 폴더: root 로 한 번 띄운 폴더 때문에 다른 계정이 못 쓰는 일을 막는다.
+# 파일 이름 = 고친 내용의 지문(sha256 앞 8자): 같은 설정이면 늘 같은 파일 1개를 다시 써서 쌓이지 않고,
+# 설정이 다르면 이름이 달라 동시에 띄운 두 launch 가 서로의 사본을 덮어쓰지 않는다.
 _PATCHED_ROOT = '/tmp'
 _PROJ_KEYS = ('fx', 'fy', 'cx', 'cy')
 
@@ -115,6 +117,38 @@ def _with_vision_intrinsics(config_text, k):
     return ''.join(lines)
 
 
+def _write_patched_copy(config_path, text):
+    """고친 본문을 <계정별 폴더>/<원본이름>.<내용 지문>.yaml 로 저장하고 그 경로를 돌려준다.
+
+    같은 내용이면 이미 있는 파일을 그대로 쓴다. 새로 쓸 때는 임시 파일에 다 쓴 뒤 os.replace 로
+    한 번에 바꿔 넣어, 동시에 읽는 쪽이 반쯤 쓰인 파일을 보지 않게 한다.
+    """
+    out_dir = os.path.join(_PATCHED_ROOT, f'edie_vins-{os.getuid()}')
+    os.makedirs(out_dir, mode=0o700, exist_ok=True)
+    # 다른 계정이 먼저 만든 폴더면 쓰지 않는다(이름이 예측 가능해 바꿔치기 막기) → 원본 + WARN.
+    if os.lstat(out_dir).st_uid != os.getuid():
+        raise OSError(f'{out_dir} 주인이 이 계정이 아님')
+    stem, ext = os.path.splitext(os.path.basename(config_path))
+    digest = hashlib.sha256(text.encode('utf-8')).hexdigest()[:8]
+    out = os.path.join(out_dir, f'{stem}.{digest}{ext}')
+    try:
+        with open(out) as f:
+            if f.read() == text:
+                return out
+    except OSError:
+        pass  # 아직 없음 → 새로 쓴다
+    fd, tmp = tempfile.mkstemp(prefix=f'.{stem}.', suffix='.tmp', dir=out_dir)
+    try:
+        with os.fdopen(fd, 'w') as f:
+            f.write(text)
+        os.replace(tmp, out)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return out
+
+
 def _vision_calibrated_config(config_path):
     """config_path 의 카메라 값을 edie_vision 캘리브로 덮은 사본 경로. 못 하면 원본 경로 + WARN."""
     log = launch_logging.get_logger('edie_vslam')
@@ -125,12 +159,7 @@ def _vision_calibrated_config(config_path):
     try:
         with open(config_path) as f:
             text = _with_vision_intrinsics(f.read(), k)
-        out_dir = os.path.join(_PATCHED_ROOT, f'edie_vins-{os.getuid()}')
-        os.makedirs(out_dir, exist_ok=True)
-        fd, out = tempfile.mkstemp(prefix='vins_', suffix='_' + os.path.basename(config_path),
-                                   dir=out_dir)
-        with os.fdopen(fd, 'w') as f:
-            f.write(text)
+        out = _write_patched_copy(config_path, text)
     except (OSError, ValueError) as e:
         log.warning(f'카메라 값 덮어쓰기 실패 — {config_path} 그대로 사용: {e}')
         return config_path
