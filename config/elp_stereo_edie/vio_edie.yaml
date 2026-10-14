@@ -51,6 +51,8 @@ num_grid_cols: 8
 #   한 번 더 펴게 된다(이중 보정). edie_vision camera_v4l2.yaml use_undistort:false 로 바꿀
 #   때만 K+D 를 쓴다. 두 파일이 어긋나면 vins_estimator/test/test_camera_intrinsics_consistency.cpp 가 잡는다.
 #   (SW1-1828, 2026-09-23: 06-18 0aaa324 에서 raw 값이 들어가 있던 것을 정정)
+#   [SW1-1962] edie_vslam.launch.py 는 시작할 때 아래 fx·fy·cx·cy 를 edie_vision 캘리브(정류 P, /opt/edie 우선)로
+#   덮은 사본을 쓴다 — 로봇마다 다른 값은 그 캘리브 파일만 고치면 된다. 여기 값은 use_vision_calib:=false·bag 재생용.
 model_type: PINHOLE
 camera_name: camera
 image_width: 640

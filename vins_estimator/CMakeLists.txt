@@ -266,6 +266,7 @@ if(BUILD_TESTING)
   # [SW1-1948] 설치본(share)에 config 가 실제로 들어가고 launch 기본값이 그 파일을 가리키는지 — colcon test 는 install 뒤라 share 를 직접 본다
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_installed_config test/test_installed_config.py)
+  ament_add_pytest_test(test_vision_calib_launch test/test_vision_calib_launch.py)
 endif()
 
 ament_package()
