@@ -9,11 +9,10 @@
 #   ros2 launch vins_estimator edie_vslam.launch.py   # 헤드리스 라이브 (기본 = /opt 또는 share 설정)
 #   ros2 launch vins_estimator edie_vslam.launch.py config_file:=<다른 yaml>
 #   ※ 게이팅 on/off는 config(vio_edie.yaml)의 use_wheel_vel_gate로 토글 후 재실행.
-#   [SW1-1962] 카메라 fx·fy·cx·cy 는 시작할 때 edie_vision 캘리브(정류 P)로 덮어쓴다 — 로봇별 캘리브를
-#   바꾸면 재시작만으로 반영된다. 끄려면 use_vision_calib:=false (vio_edie.yaml 값 그대로).
-import hashlib
+#   [SW1-1962] 카메라 fx·fy·cx·cy 는 VINS 가 시작할 때 edie_vision 캘리브(정류 P)에서 직접 읽는다 — 이 launch 는
+#   그 파일 경로(camera_calib_file)만 넘긴다. 로봇별 캘리브를 바꾸면 재시작만으로 반영된다.
+#   끄려면 use_vision_calib:=false (vio_edie.yaml 값 그대로).
 import os
-import tempfile
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchDescription
@@ -59,119 +58,42 @@ def _vins_root_of(config_path):
     return os.path.join(root, '')
 
 
-# ---- [SW1-1962] edie_vision 캘리브 → vio_edie.yaml 카메라 값 ----
-# 카메라 영상(image_gray)은 edie_vision 이 이미 편(정류) 영상이라 VINS 카메라 모델 = 정류 P(왜곡 0).
+# ---- [SW1-1962] edie_vision 캘리브 경로 → VINS camera_calib_file ----
 # 캘리브 파일은 edie_vision 이 영상을 펼 때와 똑같이 찾는다: camera_v4l2.yaml 을 /opt 우선으로 찾고,
 # 그 옆의 left.calibration_file(gstreamer_utils.hpp LoadCameraConfig). 그래야 vision 이 편 값과 어긋나지 않는다.
+# 값 읽기·검사는 VINS(C++ pinhole_calib_override)가 한다 — 못 읽으면 vio_edie.yaml 값 + WARN.
+# 같은 찾기 규칙이 bringup_robot.launch.py·edie_mind.launch.py 에도 있다 — 바꿀 때 세 곳을 같이 고친다.
 _VISION_CAMERA_REL = os.path.join('config', 'gstreamer', 'camera_v4l2.yaml')
-# 덮어쓴 사본을 두는 곳 — 재부팅하면 지워져도 되는 임시 파일(eMMC 대신 /tmp).
-# 계정별 폴더: root 로 한 번 띄운 폴더 때문에 다른 계정이 못 쓰는 일을 막는다.
-# 파일 이름 = 고친 내용의 지문(sha256 앞 8자): 같은 설정이면 늘 같은 파일 1개를 다시 써서 쌓이지 않고,
-# 설정이 다르면 이름이 달라 동시에 띄운 두 launch 가 서로의 사본을 덮어쓰지 않는다.
-_PATCHED_ROOT = '/tmp'
-_PROJ_KEYS = ('fx', 'fy', 'cx', 'cy')
 
 
-def _rect_intrinsics():
-    """edie_vision 정류 P 의 (fx, fy, cx, cy) 와 출처 경로. 못 쓰면 (None, 이유)."""
+def _vision_calib_file():
+    """edie_vision 정류 왼쪽 캘리브 파일 경로. 쓸 수 없으면 (None, 이유)."""
     camera_yaml = _share_file('edie_vision', _VISION_CAMERA_REL)
-    calib_yaml = camera_yaml
     try:
         with open(camera_yaml) as f:
             left = yaml.safe_load(f)['left']
-        use_undistort = left['use_undistort']
+        if left['use_undistort'] is not True:
+            # 정류 안 한 원본 영상이면 P 가 아니라 K+D 를 써야 해서 넘기지 않는다.
+            return None, f'{camera_yaml}: left.use_undistort={left["use_undistort"]} (not rectified)'
         calib_yaml = os.path.join(os.path.dirname(camera_yaml), left['calibration_file'])
-        if use_undistort is not True:
-            # 정류 안 한 원본 영상이면 P 가 아니라 K+D 를 써야 해서 여기서 덮어쓰지 않는다.
-            return None, f'{camera_yaml}: left.use_undistort={use_undistort} (정류 영상 아님)'
-        with open(calib_yaml) as f:
-            p = yaml.safe_load(f)['projection_matrix']['data']
-        return (float(p[0]), float(p[5]), float(p[2]), float(p[6])), calib_yaml
-    except (OSError, KeyError, IndexError, TypeError, ValueError, yaml.YAMLError) as e:
-        return None, f'{calib_yaml}: {e}'
-
-
-def _with_vision_intrinsics(config_text, k):
-    """vio_edie.yaml 본문에서 projection_parameters 블록의 fx·fy·cx·cy 4줄만 바꾼 본문.
-
-    블록이 없거나 네 줄이 다 없으면 ValueError — 엉뚱한 줄을 바꾸지 않게 한다.
-    """
-    lines = config_text.splitlines(keepends=True)
-    try:
-        start = next(i for i, ln in enumerate(lines) if ln.rstrip() == 'projection_parameters:')
-    except StopIteration:
-        raise ValueError('projection_parameters 블록 없음')
-    vals = dict(zip(_PROJ_KEYS, k))
-    done = set()
-    for i in range(start + 1, len(lines)):
-        ln = lines[i]
-        if ln.strip() and not ln[0].isspace():
-            break  # 들여쓰기 없는 줄 = 블록 끝
-        key = ln.strip().split(':', 1)[0]
-        if key in vals:
-            indent = ln[:len(ln) - len(ln.lstrip())]
-            lines[i] = f'{indent}{key}: {vals[key]!r}\n'
-            done.add(key)
-    if done != set(_PROJ_KEYS):
-        raise ValueError(f'projection_parameters 에 {sorted(set(_PROJ_KEYS) - done)} 없음')
-    return ''.join(lines)
-
-
-def _write_patched_copy(config_path, text):
-    """고친 본문을 <계정별 폴더>/<원본이름>.<내용 지문>.yaml 로 저장하고 그 경로를 돌려준다.
-
-    같은 내용이면 이미 있는 파일을 그대로 쓴다. 새로 쓸 때는 임시 파일에 다 쓴 뒤 os.replace 로
-    한 번에 바꿔 넣어, 동시에 읽는 쪽이 반쯤 쓰인 파일을 보지 않게 한다.
-    """
-    out_dir = os.path.join(_PATCHED_ROOT, f'edie_vins-{os.getuid()}')
-    os.makedirs(out_dir, mode=0o700, exist_ok=True)
-    # 다른 계정이 먼저 만든 폴더면 쓰지 않는다(이름이 예측 가능해 바꿔치기 막기) → 원본 + WARN.
-    if os.lstat(out_dir).st_uid != os.getuid():
-        raise OSError(f'{out_dir} 주인이 이 계정이 아님')
-    stem, ext = os.path.splitext(os.path.basename(config_path))
-    digest = hashlib.sha256(text.encode('utf-8')).hexdigest()[:8]
-    out = os.path.join(out_dir, f'{stem}.{digest}{ext}')
-    try:
-        with open(out) as f:
-            if f.read() == text:
-                return out
-    except OSError:
-        pass  # 아직 없음 → 새로 쓴다
-    fd, tmp = tempfile.mkstemp(prefix=f'.{stem}.', suffix='.tmp', dir=out_dir)
-    try:
-        with os.fdopen(fd, 'w') as f:
-            f.write(text)
-        os.replace(tmp, out)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
-    return out
-
-
-def _vision_calibrated_config(config_path):
-    """config_path 의 카메라 값을 edie_vision 캘리브로 덮은 사본 경로. 못 하면 원본 경로 + WARN."""
-    log = launch_logging.get_logger('edie_vslam')
-    k, src = _rect_intrinsics()
-    if k is None:
-        log.warning(f'edie_vision 캘리브를 못 씀 — vio_edie.yaml 카메라 값 그대로 사용: {src}')
-        return config_path
-    try:
-        with open(config_path) as f:
-            text = _with_vision_intrinsics(f.read(), k)
-        out = _write_patched_copy(config_path, text)
-    except (OSError, ValueError) as e:
-        log.warning(f'카메라 값 덮어쓰기 실패 — {config_path} 그대로 사용: {e}')
-        return config_path
-    log.info('카메라 값(edie_vision 캘리브) fx=%.3f fy=%.3f cx=%.3f cy=%.3f <- %s → %s'
-             % (*k, src, out))
-    return out
+    except (OSError, KeyError, TypeError, yaml.YAMLError) as e:
+        return None, f'{camera_yaml}: {e}'
+    if not os.path.isfile(calib_yaml):
+        return None, f'{calib_yaml}: not found'
+    return calib_yaml, None
 
 
 def _make_estimator(context):
-    config_file = LaunchConfiguration('config_file').perform(context)
+    calib_file = ''
     if LaunchConfiguration('use_vision_calib').perform(context).lower() == 'true':
-        config_file = _vision_calibrated_config(config_file)
+        path, why = _vision_calib_file()
+        log = launch_logging.get_logger('edie_vslam')
+        if path is None:
+            # 로봇 터미널에서 한글이 깨져 로그는 영어로 남긴다.
+            log.warning(f'edie_vision calib not usable - VINS uses config_file camera values: {why}')
+        else:
+            calib_file = path
+            log.info(f'camera_calib_file = {path}')
     return [Node(
         package='vins_estimator',
         executable='vins_estimator_node',
@@ -184,10 +106,11 @@ def _make_estimator(context):
         arguments=['--ros-args', '--log-level',
                    ['vins_estimator:=', LaunchConfiguration('log_level')]],
         parameters=[{
-            # 카메라 모델도 이 파일에서 읽는다(CAM_NAMES = config_file). vins_folder 는 원본 루트 그대로.
-            'config_file': config_file,
+            'config_file': LaunchConfiguration('config_file'),
             'vins_folder': LaunchConfiguration('vins_folder'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            # 비면 config_file 의 카메라 값 그대로(C++ 쪽 규칙).
+            'camera_calib_file': calib_file,
         }],
     )]
 
@@ -218,8 +141,8 @@ def generate_launch_description():
                         "라이브 실행은 false 유지. 필수 — 안 주면 TF lookup이 wall time 으로 가 buffer miss."),
         DeclareLaunchArgument(
             'use_vision_calib', default_value='true',
-            description='true: 카메라 fx·fy·cx·cy 를 edie_vision pinhole_left_calib.yaml(정류 P, /opt 우선)로 '
-                        '덮어쓴 사본을 쓴다. false: config_file 값 그대로 (SW1-1962)'),
+            description='true: VINS 가 카메라 fx·fy·cx·cy 를 edie_vision 캘리브(정류 P, /opt 우선)에서 직접 '
+                        '읽는다. false: config_file 값 그대로 (SW1-1962)'),
     ]
 
     return LaunchDescription(args + [OpaqueFunction(function=_make_estimator)])

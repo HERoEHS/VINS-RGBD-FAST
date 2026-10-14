@@ -166,6 +166,9 @@ int EQUALIZE;
 int FISHEYE;
 std::string FISHEYE_MASK;
 std::string CAM_NAMES;
+std::string CAMERA_CALIB_FILE;
+bool CAMERA_CALIB_OK = false;
+vins_calib::RectPinhole CAMERA_CALIB;
 int STEREO_TRACK;
 bool PUB_THIS_FRAME;
 Eigen::Matrix3d Ric;
@@ -248,6 +251,22 @@ void readParameters(rclcpp::Node* node)
     if (FISHEYE == 1)
         FISHEYE_MASK = VINS_FOLDER_PATH + "config/fisheye_mask.jpg";
     CAM_NAMES = config_file;
+    // [SW1-1962] launch 가 edie_vision 캘리브 경로를 넘긴다(비면 config_file 의 카메라 값 그대로).
+    CAMERA_CALIB_FILE = readParam<std::string>(node, "camera_calib_file");
+    CAMERA_CALIB_OK = false;
+    if (!CAMERA_CALIB_FILE.empty())
+    {
+        std::string err;
+        CAMERA_CALIB_OK = vins_calib::ReadRectifiedPinhole(CAMERA_CALIB_FILE, &CAMERA_CALIB, &err);
+        // 로그는 영어 — 로봇 터미널에서 한글이 깨진다.
+        if (CAMERA_CALIB_OK)
+            RCLCPP_INFO(node->get_logger(), "edie_vision calib read: fx=%.3f fy=%.3f cx=%.3f cy=%.3f <- %s",
+                        CAMERA_CALIB.fx, CAMERA_CALIB.fy, CAMERA_CALIB.cx, CAMERA_CALIB.cy,
+                        CAMERA_CALIB_FILE.c_str());
+        else
+            RCLCPP_WARN(node->get_logger(), "camera calib not applied (%s) - using config_file values",
+                        err.c_str());
+    }
 
     DEPTH_MIN_DIST = fsSettings["depth_min_dist"];
     DEPTH_MAX_DIST = fsSettings["depth_max_dist"];

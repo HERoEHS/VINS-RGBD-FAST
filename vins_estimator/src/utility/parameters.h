@@ -1,6 +1,7 @@
 #pragma once
 
 #include "utility.h"
+#include "pinhole_calib_override.h"
 #include <eigen3/Eigen/Dense>
 #include <fstream>
 #include <opencv2/core/eigen.hpp>
@@ -63,6 +64,11 @@ extern int             EQUALIZE;
 extern int             FISHEYE;
 extern std::string     FISHEYE_MASK;
 extern std::string     CAM_NAMES;
+// [SW1-1962] edie_vision 캘리브(정류 P) 경로. 비어 있지 않으면 시작할 때 한 번 읽어 CAMERA_CALIB 에 둔다.
+// 재초기화 때도 이 값을 다시 쓴다 — 세션 도중 파일이 바뀌거나 잠깐 못 읽어도 카메라 값이 흔들리지 않게.
+extern std::string     CAMERA_CALIB_FILE;
+extern bool            CAMERA_CALIB_OK;
+extern vins_calib::RectPinhole CAMERA_CALIB;
 extern int             STEREO_TRACK;
 extern bool            PUB_THIS_FRAME;
 extern Eigen::Matrix3d Ric;

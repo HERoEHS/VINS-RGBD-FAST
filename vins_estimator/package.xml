@@ -21,6 +21,7 @@
   <depend>image_transport</depend>
   <depend>camera_model</depend>
   <depend>ament_index_cpp</depend>
+  <depend>yaml-cpp</depend>
 
   <!-- launch/edie/*.launch.py 가 쓰는 파이썬 의존 (SW1-1948: 기본 경로를 share 로 찾는다) -->
   <exec_depend>launch</exec_depend>

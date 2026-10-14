@@ -37,6 +37,7 @@ find_package(Boost REQUIRED COMPONENTS filesystem program_options system)
 find_package(OpenCV REQUIRED)
 message(STATUS "Using OpenCV ${OpenCV_VERSION} from ${OpenCV_DIR}")
 find_package(Ceres REQUIRED)
+find_package(yaml-cpp REQUIRED)   # [SW1-1962] edie_vision 캘리브(ROS camera_info 형식) 읽기
 find_package(Eigen3 REQUIRED)
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
@@ -74,6 +75,7 @@ set(VINS_LIB_SRCS
   src/initial/initial_sfm.cpp
   src/initial/initial_ex_rotation.cpp
   src/feature_tracker/feature_tracker.cpp
+  src/utility/pinhole_calib_override.cpp
 )
 
 add_library(vins_lib ${VINS_LIB_SRCS})
@@ -85,6 +87,7 @@ target_link_libraries(vins_lib
   ${OpenCV_LIBS}
   ${CERES_LIBRARIES}
   Boost::filesystem Boost::program_options Boost::system
+  yaml-cpp
 )
 
 add_executable(vins_estimator_node src/estimator_nodelet.cpp)
@@ -256,6 +259,15 @@ if(BUILD_TESTING)
     VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_include_directories(test_camera_intrinsics_consistency PRIVATE ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(test_camera_intrinsics_consistency ${OpenCV_LIBS})
+
+  # [SW1-1962] VINS 가 edie_vision 캘리브(정류 P)를 직접 읽어 만든 카메라 = vio_edie.yaml 카메라와 같은 투영
+  ament_add_gtest(test_pinhole_calib_override test/test_pinhole_calib_override.cpp
+    src/utility/pinhole_calib_override.cpp)
+  target_compile_definitions(test_pinhole_calib_override PRIVATE
+    VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+  target_include_directories(test_pinhole_calib_override PRIVATE ${OpenCV_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
+  ament_target_dependencies(test_pinhole_calib_override camera_model)
+  target_link_libraries(test_pinhole_calib_override ${OpenCV_LIBS} yaml-cpp)
 
   # [SW1-1948] 설정 파일을 못 열면 readParameters 가 즉시 예외 — 값 0 으로 계속 가다 cv2eigen abort 하던 결함 회귀.
   # rclcpp 노드를 만드는 첫 테스트라 격리 도메인(ros_isolated)에서 돌린다 — PC 셸이 로봇과 같은 ROS_DOMAIN_ID 를 쓰기 때문.

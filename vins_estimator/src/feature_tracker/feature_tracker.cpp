@@ -499,6 +499,22 @@ void FeatureTracker::readIntrinsicParameter(const string &calib_file)
 {
     ROS_DEBUG("reading paramerter of camera %s", calib_file.c_str());
     m_camera = CameraFactory::instance()->generateCameraFromYamlFile(calib_file);
+    if (!CAMERA_CALIB_OK)
+        return;
+
+    // [SW1-1962] 카메라 내부 값은 edie_vision 캘리브(정류 P)가 정본 — 시작 때 한 번 읽어 둔 값으로 vio_edie.yaml 값을 덮는다.
+    // 재초기화 때도 같은 값이 다시 적용된다. 못 쓰면 vio_edie.yaml 값으로 계속(로그는 영어).
+    const rclcpp::Logger log = rclcpp::get_logger("vins_estimator");
+    std::string err;
+    camodocal::CameraPtr cam = vins_calib::MakeRectifiedPinhole(m_camera, CAMERA_CALIB, &err);
+    if (!cam)
+    {
+        RCLCPP_WARN(log, "camera calib not applied (%s) - using config_file values", err.c_str());
+        return;
+    }
+    m_camera = cam;
+    RCLCPP_INFO(log, "camera intrinsics from edie_vision calib: fx=%.3f fy=%.3f cx=%.3f cy=%.3f",
+                CAMERA_CALIB.fx, CAMERA_CALIB.fy, CAMERA_CALIB.cx, CAMERA_CALIB.cy);
 }
 
 void FeatureTracker::showUndistortion(const string &name)
