@@ -58,6 +58,16 @@ Follow [Ceres Installation](http://ceres-solver.org/installation.html)
   meta-ros 의 `ros-humble-sophus`(1.22)와 같이 넣지 않는다.
 - 개발 중 실험만 `-DSOPHUS_ALLOW_VERSION_MISMATCH=ON` 으로 경고로 낮출 수 있다(제품 빌드 금지).
 
+1.5. **교차 빌드(Yocto SDK colcon·bitbake)에서 달라지는 것** ([SW1-1959])
+- OpenCV: Ubuntu 에선 세 패키지(vins_estimator·camera_model·pose_graph)의 `cmake/OpenCvSystemHint.cmake` 가 시스템(apt)
+  OpenCV 를 `OpenCV_DIR` 로 먼저 박는다(/usr/local 커스텀 판과 두 판 로드 → ABI 충돌 방지, SW1-1837).
+  교차 빌드(`CMAKE_CROSSCOMPILING`)에선 이 힌트를 건너뛰고 sysroot 의 OpenCV(cv_bridge 와 같은 레시피)를 쓴다.
+  `-DOpenCV_DIR` 외부 지정은 항상 존중.
+  ★ SDK 셸에선 **새 build 폴더**로 빌드한다 — 네이티브로 configure 했던 build/ 를 재사용하면 캐시 때문에
+  `CMAKE_CROSSCOMPILING` 이 FALSE 로 남아 힌트가 다시 켜진다.
+- yaml-cpp: 0.8 이상이면 정식 타깃 `yaml-cpp::yaml-cpp`, 0.6/0.7 이면 옛 이름 `yaml-cpp` 로 링크한다(자동 선택).
+- Sophus: 위 1.4 — 교차 빌드에선 호스트 홈의 소스 트리를 쓰지 않고 sysroot 설치본만 받는다.
+
 1.3. **Atlas 200 DK环境配置**
 
 [https://blog.csdn.net/qq_42703283/article/details/110389270](https://blog.csdn.net/qq_42703283/article/details/110389270)

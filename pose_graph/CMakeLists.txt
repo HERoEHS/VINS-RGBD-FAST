@@ -5,17 +5,10 @@ set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
 
-# === OpenCV ABI 고정 (SW1-1837) — ★반드시 모든 find_package 보다 먼저 ===
-#   cv_bridge/camera_model config가 transitive 하게 find_package(OpenCV)를 호출해 OpenCV_DIR을
-#   /usr/local 커스텀(4.14)으로 먼저 박으면 가드 무력화 → cv_bridge(시스템 4.5d)와 2버전 로드 →
-#   ABI 충돌·크래시. 그래서 어떤 find_package 보다 먼저 시스템 OpenCV 선점. 외부 -DOpenCV_DIR 존중.
-if(NOT DEFINED OpenCV_DIR)
-  file(GLOB _sys_opencv_dirs "/usr/lib/*/cmake/opencv4")
-  if(_sys_opencv_dirs)
-    list(GET _sys_opencv_dirs 0 OpenCV_DIR)
-    message(STATUS "OpenCV_DIR 힌트(시스템 apt): ${OpenCV_DIR}")
-  endif()
-endif()
+# === OpenCV 선점 힌트(SW1-1837) — ★반드시 모든 find_package 보다 먼저, 교차 빌드에선 자동으로 끔(SW1-1959) ===
+#   Ubuntu 에선 시스템 OpenCV 를 OpenCV_DIR 로 먼저 박아 /usr/local 커스텀 판과 두 판 로드(ABI 충돌)를 막고,
+#   Yocto 교차 빌드에선 호스트 /usr/lib 를 읽지 않고 sysroot 에 맡긴다. 자세한 이유는 cmake/OpenCvSystemHint.cmake.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenCvSystemHint.cmake)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)

@@ -5,18 +5,10 @@ set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
 
-# === OpenCV ABI 고정 (SW1-1837) — ★반드시 모든 find_package 보다 먼저 ===
-#   cv_bridge/camera_model config가 transitive 하게 find_package(OpenCV)를 호출해 OpenCV_DIR을
-#   /usr/local 커스텀(4.14)으로 먼저 박으면 아래 가드가 무력화 → cv_bridge(시스템 4.5d)와 2버전
-#   로드 → cv::Mat ABI 충돌·크래시(277TB 할당). 그래서 어떤 find_package 보다 먼저 시스템 OpenCV 선점.
-#   외부 -DOpenCV_DIR 지정 시 존중(아키텍처 무관 glob=이식성).
-if(NOT DEFINED OpenCV_DIR)
-  file(GLOB _sys_opencv_dirs "/usr/lib/*/cmake/opencv4")
-  if(_sys_opencv_dirs)
-    list(GET _sys_opencv_dirs 0 OpenCV_DIR)
-    message(STATUS "OpenCV_DIR 힌트(시스템 apt): ${OpenCV_DIR}")
-  endif()
-endif()
+# === OpenCV 선점 힌트(SW1-1837) — ★반드시 모든 find_package 보다 먼저, 교차 빌드에선 자동으로 끔(SW1-1959) ===
+#   Ubuntu 에선 시스템 OpenCV 를 OpenCV_DIR 로 먼저 박아 /usr/local 커스텀 판과 두 판 로드(ABI 충돌)를 막고,
+#   Yocto 교차 빌드에선 호스트 /usr/lib 를 읽지 않고 sysroot 에 맡긴다. 자세한 이유는 cmake/OpenCvSystemHint.cmake.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenCvSystemHint.cmake)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -38,6 +30,14 @@ find_package(OpenCV REQUIRED)
 message(STATUS "Using OpenCV ${OpenCV_VERSION} from ${OpenCV_DIR}")
 find_package(Ceres REQUIRED)
 find_package(yaml-cpp REQUIRED)   # [SW1-1962] edie_vision 캘리브(ROS camera_info 형식) 읽기
+# yaml-cpp 0.8.0(Yocto Scarthgap)은 정식 타깃 yaml-cpp::yaml-cpp 만 export 한다 — 옛 이름 yaml-cpp 타깃이 없어서
+# 그대로 링크하면 맨 -lyaml-cpp 로 넘어가 include 경로·정의가 빠진다(옛 이름 호환 타깃+경고는 0.8.0 뒤 master 에서 추가).
+# Ubuntu 22.04 의 0.7·.219 의 0.6(정적)은 옛 이름뿐이다 → 있는 쪽을 쓴다 [SW1-1959].
+if(TARGET yaml-cpp::yaml-cpp)
+  set(VINS_YAML_CPP_TARGET yaml-cpp::yaml-cpp)
+else()
+  set(VINS_YAML_CPP_TARGET yaml-cpp)
+endif()
 find_package(Eigen3 REQUIRED)
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
@@ -83,7 +83,7 @@ target_link_libraries(vins_lib
   ${OpenCV_LIBS}
   ${CERES_LIBRARIES}
   Boost::filesystem Boost::program_options Boost::system
-  yaml-cpp
+  ${VINS_YAML_CPP_TARGET}
 )
 
 add_executable(vins_estimator_node src/estimator_nodelet.cpp)
@@ -270,7 +270,7 @@ if(BUILD_TESTING)
     VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_include_directories(test_pinhole_calib_override PRIVATE ${OpenCV_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
   ament_target_dependencies(test_pinhole_calib_override camera_model)
-  target_link_libraries(test_pinhole_calib_override ${OpenCV_LIBS} yaml-cpp)
+  target_link_libraries(test_pinhole_calib_override ${OpenCV_LIBS} ${VINS_YAML_CPP_TARGET})
 
   # [SW1-1948] 설정 파일을 못 열면 readParameters 가 즉시 예외 — 값 0 으로 계속 가다 cv2eigen abort 하던 결함 회귀.
   # rclcpp 노드를 만드는 첫 테스트라 격리 도메인(ros_isolated)에서 돌린다 — PC 셸이 로봇과 같은 ROS_DOMAIN_ID 를 쓰기 때문.
@@ -289,6 +289,11 @@ if(BUILD_TESTING)
   add_test(NAME test_sophus_pin
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test/test_sophus_pin.sh
             ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/SophusPin.cmake)
+
+  # [SW1-1959] 시스템 OpenCV 힌트(cmake/OpenCvSystemHint.cmake) — 네이티브/교차 빌드/외부 지정 동작 + 세 패키지 사본 동일성
+  add_test(NAME test_opencv_hint
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test/test_opencv_hint.sh
+            ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR}/..)
 endif()
 
 ament_package()
