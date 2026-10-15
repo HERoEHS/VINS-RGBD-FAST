@@ -183,8 +183,12 @@ sy: 1.0
 sw: 1.0
 
 # 휠(odom=base_link) → body(IMU) extrinsic T_io (4x4).
-# 기본 자세 값: URDF(imu.xacro) FK 산출. IMU는 base_link 기준 (-0.09293,0,0.0941), rpy=0.
-# body_T_wheel = T(IMU←base_link) = 위 위치의 역변환 → R=Identity, t=(0.09293,0,-0.0941).
+# 기본 자세 값: URDF(imu.xacro) FK 산출. IMU는 base_link 기준 (-0.0908084,0,0.100187), rpy=0.
+# body_T_wheel = T(IMU←base_link) = 위 위치의 역변환 → R=Identity, t=(0.0908084,0,-0.100187).
+# ★10-15 베타 하드웨어(.251·.52, 앞으로의 기준) 값으로 갱신 #SW1-1959: edie_common beta_edie
+#   d360fa0 chassis(-0.0270634,0,-0.016459)+imu(-0.063745,0,0.116646). 옛 판(.219)은
+#   (0.09293,0,-0.0941) — .219 는 옛 코드에 머문다. 설계도 시험 edie_description
+#   test_beta_mount_positions.py 의 IMU 기댓값과 반드시 같이 바꾼다.
 # ★08-06 갱신: edie_common `9754ebc`(imu.xacro chassis→imu x -0.0784→-0.06573)로 IMU
 #   위치가 base_link 기준 x -0.1056→-0.09293(12.67mm 전방)으로 정정됨. 이 값은 스핀 중
 #   속도 제약(v_imu = v_wheel + ω×r)에 직접 들어가므로 URDF와 반드시 동기 —
@@ -193,9 +197,9 @@ body_T_wheel: !!opencv-matrix
    rows: 4
    cols: 4
    dt: d
-   data: [1.0, 0.0, 0.0,  0.09293,
+   data: [1.0, 0.0, 0.0,  0.0908084,
           0.0, 1.0, 0.0,  0.0,
-          0.0, 0.0, 1.0, -0.0941,
+          0.0, 0.0, 1.0, -0.100187,
           0.0, 0.0, 0.0,  1.0]
 
 td_wheel: 0.0                  # 휠 시간오프셋 초기값
@@ -890,7 +894,7 @@ hf_body_tf_tau: 0.0          # [s] 발행단 스무딩 시정수 — 예측(100H
 
 # ================================================================
 # rviz 비교용 VINS footprint TF (SW1-1837)
-#   body(IMU)는 축중심에서 TIO(0.09293,0,-0.0941) 떨어져 있어 bringup의 base_link와
+#   body(IMU)는 축중심에서 TIO(0.0908084,0,-0.100187) 떨어져 있어 bringup의 base_link와
 #   그냥 겹치면 추정이 완벽해도 ~14cm 어긋나 보임(회전 시 레버암 원 궤적 = 오차 오해).
 #   1이면 body에 정적 자식 2개를 부착해 같은 의미의 점끼리 비교:
 #     body → vins/base_link      (= 휠 extrinsic RIO/TIO, 축중심·바퀴축 높이)

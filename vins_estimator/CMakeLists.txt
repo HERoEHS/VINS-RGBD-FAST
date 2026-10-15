@@ -286,6 +286,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_installed_config test/test_installed_config.py)
   ament_add_pytest_test(test_vision_calib_launch test/test_vision_calib_launch.py)
+  ament_add_pytest_test(test_body_t_wheel_beta test/test_body_t_wheel_beta.py)
 endif()
 
 ament_package()
