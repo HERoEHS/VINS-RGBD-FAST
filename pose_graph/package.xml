@@ -18,6 +18,11 @@
   <depend>cv_bridge</depend>
   <depend>camera_model</depend>
   <depend>ament_index_cpp</depend>
+  <!-- 시스템 라이브러리(rosdep 키) — CMake find_package 와 같은 목록 [SW1-1959] -->
+  <depend>boost</depend>
+  <depend>eigen</depend>
+  <depend>libceres-dev</depend>
+  <depend>libopencv-dev</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

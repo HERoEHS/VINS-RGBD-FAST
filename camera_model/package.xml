@@ -9,7 +9,11 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>Boost</depend>
+  <!-- 시스템 라이브러리(rosdep 키) — CMake find_package 와 같은 목록 [SW1-1959] (Boost → boost 오타 정정) -->
+  <depend>boost</depend>
+  <depend>eigen</depend>
+  <depend>libceres-dev</depend>
+  <depend>libopencv-dev</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

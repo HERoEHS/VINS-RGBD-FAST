@@ -31,24 +31,13 @@ make -j3
 sudo make install
 ```
 
-**Sophus**
+**Sophus** — 판 고정 1.24.6 (옛 a621ff 판·so2.cpp 손질은 더 이상 쓰지 않는다, [SW1-1959])
 ```
-git clone https://github.com/strasdat/Sophus.git
-cd Sophus
-git checkout a621ff  #版本回溯
+git clone -b 1.24.6 https://github.com/strasdat/Sophus.git ~/Sophus
 ```
-`gedit sophus/so2.cpp` modify `sophus/so2.cpp` as
-```
-SO2::SO2()
-{
-  unit_complex_.real(1.0);
-  unit_complex_.imag(0.0);
-}
-```
-build
-```
-mkdir build && cd build && cmake .. && sudo make install
-```
+헤더 전용이라 빌드가 필요 없다. 판 검사는 `vins_estimator/cmake/SophusPin.cmake` 가 한다(README 1.4 참고).
+cmake ≥ 3.24 면 설치본(`cmake --install`)으로 두어도 되고, 그렇지 않으면(Ubuntu 22.04 로봇) 소스 트리 그대로 쓴다
+(또는 `cmake_minimum_required` 를 3.22 로 한 줄 낮춰 설치본을 만든다). Eigen 3.4 외 다른 라이브러리는 필요 없다.
 
 
 

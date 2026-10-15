@@ -42,21 +42,17 @@ find_package(Eigen3 REQUIRED)
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
-# Sophus (헤더 전용 라이브러리) 경로 — 이식성 확보.
-#   기존엔 /home/higony/Sophus 로 하드코딩돼 있어 다른 사용자/로봇(예: /home/edie)에서 빌드가 깨졌다.
-#   기본값은 홈 디렉토리(~/Sophus). 다른 위치면 빌드 시 -DSOPHUS_INCLUDE_DIR=<경로> 로 덮어쓴다.
-set(SOPHUS_INCLUDE_DIR "$ENV{HOME}/Sophus" CACHE PATH "Path to Sophus header-only library")
-if(NOT EXISTS "${SOPHUS_INCLUDE_DIR}/sophus")
-  message(WARNING "Sophus 헤더를 '${SOPHUS_INCLUDE_DIR}' 에서 못 찾음. "
-                  "git clone https://github.com/strasdat/Sophus 후 "
-                  "-DSOPHUS_INCLUDE_DIR=<경로> 로 지정하세요.")
-endif()
+# Sophus(헤더 전용) — 판을 1.24.6 으로 못 박는다 [SW1-1959]. 찾는 순서·판 검사·안내는 cmake/SophusPin.cmake.
+#   ① 설치본 SophusConfig.cmake(sysroot·/usr/local, Yocto 정본) ② 교차 빌드가 아닐 때만 소스 트리
+#   (-DSOPHUS_INCLUDE_DIR, 기본 ~/Sophus, SOPHUS_VERSION 파일로 판 확인) ③ 없거나 판이 다르면 FATAL.
+#   예전엔 ~/Sophus 를 판 확인 없이 그대로 include 해 2020 판/1.22(meta-ros)가 조용히 섞일 수 있었다.
+include(SophusPin)
 
 include_directories(
   src
   ${CERES_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
-  ${SOPHUS_INCLUDE_DIR}
+  ${VINS_SOPHUS_INCLUDE_DIRS}
 )
 
 set(VINS_LIB_SRCS
@@ -287,6 +283,12 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_installed_config test/test_installed_config.py)
   ament_add_pytest_test(test_vision_calib_launch test/test_vision_calib_launch.py)
   ament_add_pytest_test(test_body_t_wheel_beta test/test_body_t_wheel_beta.py)
+
+  # [SW1-1959] Sophus 판 고정(cmake/SophusPin.cmake) — 가짜 설치본·소스 트리로 configure 만 돌려
+  # 판 검사·찾는 순서·교차 빌드 분기·안내 문구를 확인한다(컴파일러 불필요, 수 초).
+  add_test(NAME test_sophus_pin
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test/test_sophus_pin.sh
+            ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/SophusPin.cmake)
 endif()
 
 ament_package()

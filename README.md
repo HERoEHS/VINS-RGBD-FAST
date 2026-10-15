@@ -43,11 +43,20 @@ However, the proposed approach can also be applied to other application like han
 1.3. **Ceres Solver**
 Follow [Ceres Installation](http://ceres-solver.org/installation.html)
 
-1.4. **Sophus**
+1.4. **Sophus** — 판 고정 **1.24.6** (태그 1.24.6 = d0b7315a, [SW1-1959])
 ```
-  git clone http://github.com/strasdat/Sophus.git
-  git checkout a621ff
+  git clone -b 1.24.6 https://github.com/strasdat/Sophus.git ~/Sophus
 ```
+- 헤더 전용. `vins_estimator/cmake/SophusPin.cmake` 가 판을 검사한다: ① 설치본 `SophusConfig.cmake`
+  (sysroot·/usr/local, Yocto 정본) → ② 교차 빌드가 아닐 때만 소스 트리(`-DSOPHUS_INCLUDE_DIR=<경로>`,
+  기본 `~/Sophus`, 트리의 `SOPHUS_VERSION` 파일로 판 확인) → ③ 없거나 판이 다르면 빌드 중단 + 안내.
+- cmake ≥ 3.24 인 PC 는 설치본으로 두어도 된다(`cmake -S ~/Sophus -B ~/Sophus/build && sudo cmake --install ~/Sophus/build`).
+  Ubuntu 22.04 로봇(cmake 3.22)은 소스 트리 그대로 쓰거나, Sophus `CMakeLists.txt` 의
+  `cmake_minimum_required(VERSION 3.24)` 를 3.22 로 한 줄 낮추면 설치본도 만들 수 있다(실측). Eigen 3.4 외 다른
+  라이브러리는 필요 없다(1.24.6 헤더는 fmt 를 쓰지 않는다).
+- Yocto: 전용 레시피(SRCREV d0b7315a, DEPENDS libeigen, 위 최소 판 패치 포함 — kirkstone cmake-native 는 3.22) —
+  meta-ros 의 `ros-humble-sophus`(1.22)와 같이 넣지 않는다.
+- 개발 중 실험만 `-DSOPHUS_ALLOW_VERSION_MISMATCH=ON` 으로 경고로 낮출 수 있다(제품 빌드 금지).
 
 1.3. **Atlas 200 DK环境配置**
 

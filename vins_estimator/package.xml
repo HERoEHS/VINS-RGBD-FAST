@@ -23,6 +23,15 @@
   <depend>ament_index_cpp</depend>
   <depend>yaml-cpp</depend>
 
+  <!-- 시스템 라이브러리(rosdep 키) — CMake 의 find_package 와 같은 목록. Yocto 레시피 DEPENDS 도 이 목록을 따른다 [SW1-1959]
+       sophus 는 적지 않는다: rosdep 키 sophus = ros-humble-sophus(1.22)라 다른 판을 끌어온다.
+       요구 판 1.24.6 은 cmake/SophusPin.cmake 가 검사하고, Yocto 는 전용 레시피(SRCREV d0b7315a)로 넣는다. -->
+  <depend>eigen</depend>
+  <depend>libceres-dev</depend>
+  <depend>boost</depend>
+  <depend>libopencv-dev</depend>
+  <!-- fmt 는 적지 않는다: Sophus 1.24.6 헤더는 fmt 를 쓰지 않는다(파이썬 바인딩만 씀), VINS 소스도 안 쓴다 -->
+
   <!-- launch/edie/*.launch.py 가 쓰는 파이썬 의존 (SW1-1948: 기본 경로를 share 로 찾는다) -->
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
