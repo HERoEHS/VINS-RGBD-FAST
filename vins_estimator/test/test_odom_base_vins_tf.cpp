@@ -47,7 +47,7 @@ void expectSame(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q,
 // RIO=I(현재 vio_edie.yaml 상태): base_vins = body + Q·(TIO + [0,0,-z])
 TEST(OdomBaseVinsTf, IdentityExtrinsicMatchesChain)
 {
-    const Eigen::Vector3d TIO_edie(0.1056, 0.0, -0.0941);  // parameters.h 주석의 실측값
+    const Eigen::Vector3d TIO_edie(0.1056, 0.0, -0.0941);  // 시험용 고정값(초기 URDF 시절 값, 지금 vio_edie.yaml 과 다름 — 식 검증용)
     expectSame(Eigen::Vector3d(1.0, 2.0, 0.3),
                Eigen::Quaterniond::Identity(),
                Eigen::Matrix3d::Identity(), TIO_edie,

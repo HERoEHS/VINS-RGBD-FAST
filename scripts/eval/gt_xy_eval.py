@@ -21,6 +21,7 @@ from scipy.spatial.transform import Rotation as R, Slerp
 from tf2_msgs.msg import TFMessage
 
 LEVER = np.array([0.09293, 0.0, -0.1341])   # body→base_footprint (vio_edie.yaml body_T_wheel + 바퀴 반경 0.04)
+# ↑ 옛 판(.219) bag 전용. 베타 하드웨어(.251·.52, SW1-1959) bag 은 (0.0908084, 0.0, -0.140187)
 
 
 def tf_to_mat(tr):

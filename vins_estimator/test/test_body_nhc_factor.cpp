@@ -79,7 +79,7 @@ TEST(BodyNhcFactorTest, SlopeDrivingStillZero)
 //    (v1[보상 없음]이라면 r[0] = w·0.3 = 3.0의 대형 잔차 → xy 악화 실증 케이스)
 TEST(BodyNhcFactorTest, SpinInPlaceLeverArmCompensated)
 {
-    const Eigen::Vector3d tio(0.1056, 0, -0.0941);  // 실제 EDIE body_T_wheel 값
+    const Eigen::Vector3d tio(0.1056, 0, -0.0941);  // 시험용 고정값(초기 URDF 시절 EDIE 값, 지금 설정과 다름 — 식 검증용)
     const Eigen::Vector3d omega(0, 0, 3.0);          // 제자리회전 3 rad/s
     // 바퀴 원점 고정 회전 → IMU 월드 속도 = -R_i·(ω×t_io). 자세 Identity 가정.
     const Eigen::Vector3d Vw = -omega.cross(tio);
