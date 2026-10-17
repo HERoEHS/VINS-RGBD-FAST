@@ -50,6 +50,23 @@ ros2 launch vins_estimator gate1_klt.launch.py bag:=/path/to/rosbag2_dir rate:=1
 
 > 같은 캘리브 읽기 함수(`_share_file` 와 캘리브 찾기 — VINS 는 `_vision_calib_file`)가 bringup `bringup_robot.launch.py`·mind `edie_mind.launch.py`·VINS `edie_vslam.launch.py` 세 곳에 있다(저장소가 달라 공유 불가) — 규칙을 바꿀 때 **세 사본을 같이 고친다**.
 
+## 기록 폴더 (외부값 파일·궤적 CSV) — #SW1-1959
+
+`vio_edie.yaml` 의 `output_path` 는 이제 비어 있다(`""`). VINS 가 시작할 때 아래 순서로 폴더를 정하고 만든다(`src/utility/output_dir.h`):
+
+| 순서 | 조건 | 폴더 | 궤적 CSV |
+|---|---|---|---|
+| ① | 환경변수 `EDIE_VINS_OUTPUT_DIR` 가 있음 | 그 값 | 씀 |
+| ② | yaml `output_path` 가 비어 있지 않음 | 그 값 | 씀 |
+| ③ | root(edieOS)이고 `/var/lib/edie` 를 쓸 수 있음 | `/var/lib/edie/data/logs/vins` | 안 씀 |
+| ④ | 그 밖(Ubuntu edie 계정) | `~/.edie/logs/vins` | 안 씀 |
+| ⑤ | HOME 도 없음 | 기록 안 함 | 안 씀 |
+
+- **외부값 파일**(`extrinsic_parameter.txt`, `estimate_extrinsic: 1`)은 폴더가 있으면 **10 s 에 한 번**만 다시 쓴다(예전엔 발행 프레임마다 — eMMC 마모).
+- **궤적 CSV**(`vins_result_no_loop.csv`)는 발행 프레임마다 한 줄씩 끝없이 붙어 시간당 수 MB 가 쌓인다. 기본 데이터 폴더(재부팅해도 남음)를 채우지 않게, 폴더를 **직접 적었을 때(①·②)만** 쓴다. 평가·bag 재생에서 필요하면 `EDIE_VINS_OUTPUT_DIR=/tmp/vins_edie_output` 처럼 주면 된다.
+- 폴더를 만들거나 쓸 수 없으면 `VINS output dir unusable` 경고를 **한 번** 남기고 두 파일 모두 끈다. 예전엔 edieOS 에 없는 `/tmp/vins_edie_output` 에 매 프레임 쓰려다 OpenCV `Can't open file` ERROR 가 초당 여러 번 찍혔다(2026-10-18 .127 실측).
+- `pose_graph_save_path` 는 그대로다 — edie launch 는 pose_graph 노드를 띄우지 않는다(`loop_closure: 0`).
+
 ## 게이트① 판정 기준
 
 - 코너 수가 `max_cnt`(150) 근접

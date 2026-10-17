@@ -14,7 +14,11 @@ static_init: 1
 imu_topic: "/edie/sensor/offset_imu"
 image_topic: "/edie/sensors/camera/left/image_gray"
 depth_topic: "/edie/sensors/camera/left/depth"
-output_path: "/tmp/vins_edie_output"
+# [SW1-1959] 비워 두면 데이터 폴더 규칙(vins_estimator/src/utility/output_dir.h): 환경변수 EDIE_VINS_OUTPUT_DIR →
+#   root(edieOS) 면 /var/lib/edie/data/logs/vins, 그 밖엔 ~/.edie/logs/vins. 기본 자리엔 외부값 파일만(10 s 마다) 쓰고,
+#   궤적 CSV(vins_result_no_loop.csv, 매 프레임 덧붙음)는 여기나 환경변수로 폴더를 직접 적었을 때만 쓴다.
+#   예전 값 "/tmp/vins_edie_output" 은 edieOS 에 없는 폴더라 매 프레임 쓰기 오류가 났다(10-18 실측).
+output_path: ""
 
 #RGBD camera valid depth range
 depth_min_dist: 0.3   # ⚠️0.5로 올리면 붕괴(v15 전체 RMS 1.876m·재초기화 2회).

@@ -1,4 +1,5 @@
 #include "parameters.h"
+#include "output_dir.h"
 
 #include <stdexcept>
 
@@ -292,11 +293,31 @@ void readParameters(rclcpp::Node* node)
     RCLCPP_INFO(node->get_logger(), "keyframe_parallax: %f", MIN_PARALLAX);
     MIN_PARALLAX = MIN_PARALLAX / FOCAL_LENGTH;
 
+    // [SW1-1959] 기록 폴더는 데이터 폴더 규칙으로 정한다(output_dir.h). 못 만들거나 못 쓰면 경고 한 번 하고 기록을 끈다 —
+    //   예전엔 없는 /tmp 폴더에 매 프레임 쓰려다 OpenCV ERROR 가 초당 여러 번 찍혔다(edieOS 실측).
+    std::string yaml_output_path;
+    fsSettings["output_path"] >> yaml_output_path;
+    const vins_output_dir::Resolved out = vins_output_dir::Resolve(yaml_output_path);
     std::string OUTPUT_PATH;
-    fsSettings["output_path"] >> OUTPUT_PATH;
-    VINS_RESULT_PATH = OUTPUT_PATH + "/vins_result_no_loop.csv";
-    std::ofstream fout(VINS_RESULT_PATH, std::ios::out);
-    fout.close();
+    if (vins_output_dir::Prepare(out.dir))
+    {
+        OUTPUT_PATH = out.dir;
+        RCLCPP_INFO(node->get_logger(), "VINS output dir: %s (%s)", OUTPUT_PATH.c_str(),
+                    out.explicit_dir ? "explicit" : "data-folder rule");
+    }
+    else
+    {
+        RCLCPP_WARN(node->get_logger(), "VINS output dir unusable ('%s') - extrinsic/trajectory files disabled",
+                    out.dir.c_str());
+    }
+    // 궤적 CSV 는 발행 프레임마다 한 줄씩 끝없이 덧붙는다(시간당 수 MB). 기본 데이터 폴더(eMMC, 재부팅해도 남음)에
+    // 쌓이면 디스크를 채우므로, 사람이 폴더를 직접 정했을 때(환경변수·yaml)만 쓴다 — 평가·bag 재생용.
+    VINS_RESULT_PATH = (!OUTPUT_PATH.empty() && out.explicit_dir) ? OUTPUT_PATH + "/vins_result_no_loop.csv" : "";
+    if (!VINS_RESULT_PATH.empty())
+    {
+        std::ofstream fout(VINS_RESULT_PATH, std::ios::out);
+        fout.close();
+    }
 
     USE_IMU = fsSettings["imu"];
     RCLCPP_INFO(node->get_logger(), "USE_IMU: %d", USE_IMU);
@@ -334,14 +355,14 @@ void readParameters(rclcpp::Node* node)
         RCLCPP_WARN(node->get_logger(), "have no prior about extrinsic param, calibrate extrinsic param");
         RIC.emplace_back(Eigen::Matrix3d::Identity());
         TIC.emplace_back(Eigen::Vector3d::Zero());
-        EX_CALIB_RESULT_PATH = OUTPUT_PATH + "/extrinsic_parameter.txt";
+        EX_CALIB_RESULT_PATH = OUTPUT_PATH.empty() ? "" : OUTPUT_PATH + "/extrinsic_parameter.txt";
     }
     else
     {
         if (ESTIMATE_EXTRINSIC == 1)
         {
             RCLCPP_WARN(node->get_logger(), "Optimize extrinsic param around initial guess!");
-            EX_CALIB_RESULT_PATH = OUTPUT_PATH + "/extrinsic_parameter.txt";
+            EX_CALIB_RESULT_PATH = OUTPUT_PATH.empty() ? "" : OUTPUT_PATH + "/extrinsic_parameter.txt";
         }
         if (ESTIMATE_EXTRINSIC == 0)
             RCLCPP_WARN(node->get_logger(), "fix extrinsic param");

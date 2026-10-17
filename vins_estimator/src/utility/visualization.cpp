@@ -1,6 +1,8 @@
 #include "visualization.h"
 #include <cmath>
 #include "parameters.h"
+#include "output_dir.h"
+#include <chrono>
 #include "odom_base_vins_tf.h"
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/static_transform_broadcaster.h>
@@ -232,7 +234,11 @@ void printStatistics(const Estimator &estimator, double t)
         auto logger = g_node->get_logger();
         RCLCPP_DEBUG_STREAM(logger, "extirnsic tic: " << estimator.tic[0].transpose());
         RCLCPP_DEBUG_STREAM(logger, "extrinsic ric: " << Utility::R2ypr(estimator.ric[0]).transpose());
-        if (ESTIMATE_EXTRINSIC)
+        // [SW1-1959] 경로가 비면(기록 꺼짐) 건너뛰고, 쓰더라도 10 s 에 한 번만(값은 천천히 변함 — eMMC 마모 줄이기)
+        static vins_output_dir::WriteThrottle ex_throttle(vins_output_dir::kExtrinsicWritePeriodS);
+        const double now_s = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (ESTIMATE_EXTRINSIC && !EX_CALIB_RESULT_PATH.empty() && ex_throttle.Due(now_s))
         {
             cv::FileStorage fs(EX_CALIB_RESULT_PATH, cv::FileStorage::WRITE);
             Eigen::Matrix3d eigen_R = estimator.ric[0];
@@ -326,6 +332,8 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
         relo_path.poses.push_back(pose_stamped);
         pub_relo_path->publish(relo_path);
 
+        if (!VINS_RESULT_PATH.empty())   // [SW1-1959] 폴더를 명시했을 때만 궤적 CSV(parameters.cpp 설명)
+        {
         ofstream foutC(VINS_RESULT_PATH, ios::app);
         foutC.setf(ios::fixed, ios::floatfield);
         foutC.precision(0);
@@ -337,6 +345,7 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
               << estimator.Vs[WINDOW_SIZE].y() << "," << estimator.Vs[WINDOW_SIZE].z() << ","
               << endl;
         foutC.close();
+        }
     }
 }
 

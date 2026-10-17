@@ -122,6 +122,9 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_zero_velocity_factor ${CERES_LIBRARIES})
 
+  # [SW1-1959] 기록 폴더 규칙(output_dir.h, 순수 STL+POSIX 헤더-only) — 환경변수·yaml·uid·HOME 순서와 쓰기 간격
+  ament_add_gtest(test_output_dir test/test_output_dir.cpp)
+
   # [SW1-1837] LegEventDetector(순수 STL 헤더-only) — 이벤트 게이팅 구간 마킹 단위검증
   ament_add_gtest(test_leg_event_detector test/test_leg_event_detector.cpp)
 
