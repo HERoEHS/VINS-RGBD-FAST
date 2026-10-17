@@ -64,6 +64,10 @@ ros2 launch vins_estimator gate1_klt.launch.py bag:=/path/to/rosbag2_dir rate:=1
 
 - **외부값 파일**(`extrinsic_parameter.txt`, `estimate_extrinsic: 1`)은 폴더가 있으면 **10 s 에 한 번**만 다시 쓴다(예전엔 발행 프레임마다 — eMMC 마모).
 - **궤적 CSV**(`vins_result_no_loop.csv`)는 발행 프레임마다 한 줄씩 끝없이 붙어 시간당 수 MB 가 쌓인다. 기본 데이터 폴더(재부팅해도 남음)를 채우지 않게, 폴더를 **직접 적었을 때(①·②)만** 쓴다. 평가·bag 재생에서 필요하면 `EDIE_VINS_OUTPUT_DIR=/tmp/vins_edie_output` 처럼 주면 된다.
+
+- 사람이 적은 경로(①·②)는 **마지막 폴더 하나만** 만든다. 부모가 없으면 경고 한 번 뒤 기록을 끈다(옛 yaml 의 `/tmp/vins_edie_output` 이 edieOS 루트에 `/tmp` 를 새로 만들어 CSV 를 쌓지 않게).
+- Ubuntu 개발 로봇: 외부값 파일은 이제 `~/.edie/logs/vins` 에 쌓이고 궤적 CSV 는 기본으로 꺼진다. 평가에 CSV 가 필요하면 `export EDIE_VINS_OUTPUT_DIR=/tmp/vins_edie_output` 처럼 폴더를 지정하고(부모가 있어야 함) 실행한다.
+
 - 폴더를 만들거나 쓸 수 없으면 `VINS output dir unusable` 경고를 **한 번** 남기고 두 파일 모두 끈다. 예전엔 edieOS 에 없는 `/tmp/vins_edie_output` 에 매 프레임 쓰려다 OpenCV `Can't open file` ERROR 가 초당 여러 번 찍혔다(2026-10-18 .127 실측).
 - `pose_graph_save_path` 는 그대로다 — edie launch 는 pose_graph 노드를 띄우지 않는다(`loop_closure: 0`).
 

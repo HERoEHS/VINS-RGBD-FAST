@@ -108,12 +108,22 @@ inline Resolved Resolve(const std::string & yaml_path)
 }
 
 // 폴더를 만들고 쓸 수 있으면 true. 못 쓰면 호출자는 경로를 비워 기록을 끈다(프레임마다 오류를 찍지 않게).
-inline bool Prepare(const std::string & dir)
+// explicit_dir(①·② 사람이 적은 경로)는 마지막 폴더 하나만 만든다 — 부모가 없으면 실패(기록 끔).
+//   왜(critic 1차 R1): 옛 yaml(/tmp/vins_edie_output)이 새 실행 파일과 섞이면, 부모까지 만드는 방식은 edieOS root 에서
+//   없던 /tmp 를 eMMC 루트에 새로 만들고 궤적 CSV(시간당 약 8 MB)가 끝없이 쌓인다. 예전 코드는 오류만 찍고 디스크는 안 채웠다.
+//   규칙 경로(③·④)는 우리가 고른 자리라 부모까지 만든다.
+inline bool Prepare(const std::string & dir, bool explicit_dir = false)
 {
   if (dir.empty()) {
     return false;
   }
-  MakeDirs(dir);
+  if (explicit_dir) {
+    if (::mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
+      return false;
+    }
+  } else {
+    MakeDirs(dir);
+  }
   return IsWritableDir(dir);
 }
 

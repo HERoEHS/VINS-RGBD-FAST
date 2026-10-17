@@ -299,7 +299,7 @@ void readParameters(rclcpp::Node* node)
     fsSettings["output_path"] >> yaml_output_path;
     const vins_output_dir::Resolved out = vins_output_dir::Resolve(yaml_output_path);
     std::string OUTPUT_PATH;
-    if (vins_output_dir::Prepare(out.dir))
+    if (vins_output_dir::Prepare(out.dir, out.explicit_dir))
     {
         OUTPUT_PATH = out.dir;
         RCLCPP_INFO(node->get_logger(), "VINS output dir: %s (%s)", OUTPUT_PATH.c_str(),

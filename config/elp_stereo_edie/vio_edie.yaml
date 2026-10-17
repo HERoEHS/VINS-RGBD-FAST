@@ -135,6 +135,8 @@ rolling_shutter_tr: 0.0
 loop_closure: 0
 fast_relocalization: 0
 load_previous_pose_graph: 0
+# (주의, critic 1차 N1) pose_graph 노드는 output_path 를 그대로 쓴다 — 빈 값이면 "/vins_result_loop.csv"(파일시스템 맨 위)에 쓴다.
+#   edie launch 는 pose_graph 를 띄우지 않아(loop_closure: 0) 지금은 영향 없음. 띄울 땐 output_path 를 직접 적을 것.
 pose_graph_save_path: "/tmp/vins_edie_output/pose_graph"
 
 #visualization

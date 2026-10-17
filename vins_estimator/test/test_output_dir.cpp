@@ -111,6 +111,27 @@ TEST(OutputDir, PrepareCreatesNestedAndRejectsBad)
   EXPECT_FALSE(vins_output_dir::Prepare(file + "/under"));  // 파일 아래는 못 만듦
 }
 
+// critic 1차 R1: 사람이 적은 경로는 마지막 폴더만 만든다 — 부모가 없으면 실패(옛 /tmp 설정이 eMMC 에 폴더를 새로 파지 않게)
+TEST(OutputDir, PrepareExplicitCreatesOnlyLeaf)
+{
+  TempDir t;
+  const std::string missing_parent = t.path() + "/no_parent/vins";
+  EXPECT_FALSE(vins_output_dir::Prepare(missing_parent, true));
+  EXPECT_FALSE(vins_output_dir::IsWritableDir(t.path() + "/no_parent"));  // 부모를 만들지 않았다
+  const std::string leaf = t.path() + "/vins";
+  EXPECT_TRUE(vins_output_dir::Prepare(leaf, true));   // 부모가 있으면 마지막 폴더는 만든다
+  EXPECT_TRUE(vins_output_dir::Prepare(leaf, true));   // 이미 있어도 true
+}
+
+// critic 1차 N4: root 이고 HOME 이 있어도 시스템 자리가 이긴다
+TEST(OutputDir, RootSystemWinsOverHome)
+{
+  TempDir t;
+  const std::string sys = t.path() + "/var_lib_edie";
+  const auto r = vins_output_dir::ResolveFrom(nullptr, "", true, "/home/root", sys);
+  EXPECT_EQ(r.dir, sys + "/data/logs/vins");
+}
+
 TEST(OutputDir, WriteThrottle)
 {
   vins_output_dir::WriteThrottle th(10.0);
