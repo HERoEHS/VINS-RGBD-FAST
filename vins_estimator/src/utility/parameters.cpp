@@ -170,6 +170,7 @@ std::string FISHEYE_MASK;
 std::string CAM_NAMES;
 std::string CAMERA_CALIB_FILE;
 bool CAMERA_CALIB_OK = false;
+bool CAMERA_CALIB_FROM_ROBOT = false;
 vins_calib::RectPinhole CAMERA_CALIB;
 int STEREO_TRACK;
 bool PUB_THIS_FRAME;
@@ -256,6 +257,7 @@ void readParameters(rclcpp::Node* node)
     // [SW1-1962] launch 가 edie_vision 캘리브 경로를 넘긴다(비면 config_file 의 카메라 값 그대로).
     CAMERA_CALIB_FILE = readParam<std::string>(node, "camera_calib_file");
     CAMERA_CALIB_OK = false;
+    CAMERA_CALIB_FROM_ROBOT = readParam<bool>(node, "camera_calib_from_robot");
     if (!CAMERA_CALIB_FILE.empty())
     {
         std::string err;
@@ -265,6 +267,8 @@ void readParameters(rclcpp::Node* node)
             RCLCPP_INFO(node->get_logger(), "edie_vision calib read: fx=%.3f fy=%.3f cx=%.3f cy=%.3f <- %s",
                         CAMERA_CALIB.fx, CAMERA_CALIB.fy, CAMERA_CALIB.cx, CAMERA_CALIB.cy,
                         CAMERA_CALIB_FILE.c_str());
+        else if (CAMERA_CALIB_FROM_ROBOT)
+            RCLCPP_ERROR(node->get_logger(), "robot calib invalid (%s) - using config_file values", err.c_str());
         else
             RCLCPP_WARN(node->get_logger(), "camera calib not applied (%s) - using config_file values",
                         err.c_str());
@@ -421,8 +425,8 @@ void readParameters(rclcpp::Node* node)
         }
         else
         {
-            RCLCPP_WARN(node->get_logger(), "robot extrinsic not applied (%s) - using config_file values",
-                        err.c_str());
+            // extrinsic_file 은 로봇 설정 폴더 파일(launch) 아니면 사람이 직접 준 파일뿐 — 틀렸으면 늘 ERROR.
+            RCLCPP_ERROR(node->get_logger(), "robot extrinsic invalid (%s) - using config_file values", err.c_str());
         }
     }
 

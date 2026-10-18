@@ -68,6 +68,9 @@ extern std::string     CAM_NAMES;
 // 재초기화 때도 이 값을 다시 쓴다 — 세션 도중 파일이 바뀌거나 잠깐 못 읽어도 카메라 값이 흔들리지 않게.
 extern std::string     CAMERA_CALIB_FILE;
 extern bool            CAMERA_CALIB_OK;
+// [SW1-1959] CAMERA_CALIB_FILE 이 로봇 설정 폴더(camera/)에서 왔는지 — launch 가 알려 준다. 로봇 파일이 틀렸으면
+// "이 로봇 캘리브가 망가졌다"는 뜻이라 WARN 이 아니라 ERROR 로 남긴다(이미지 기본 파일이 틀린 것과 구분).
+extern bool            CAMERA_CALIB_FROM_ROBOT;
 extern vins_calib::RectPinhole CAMERA_CALIB;
 extern int             STEREO_TRACK;
 extern bool            PUB_THIS_FRAME;

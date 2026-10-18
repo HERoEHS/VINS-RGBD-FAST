@@ -193,7 +193,9 @@ def _node_params(mod, use_vision_calib, use_robot_extrinsic='true'):
     for d in node._Node__parameters:  # launch_ros Node 는 parameters 를 공개 프로퍼티로 내주지 않는다
         for k, v in d.items():
             # 문자열 값은 launch_ros 가 YAML 문자열로 정규화해 TextSubstitution 에 담는다 → 다시 푼다.
-            flat[perform_substitutions(ctx, list(k))] = yaml.safe_load(perform_substitutions(ctx, list(v)))
+            # bool 같은 값은 그대로 담긴다.
+            flat[perform_substitutions(ctx, list(k))] = (
+                v if isinstance(v, bool) else yaml.safe_load(perform_substitutions(ctx, list(v))))
     return flat
 
 
@@ -213,6 +215,37 @@ def test_node_gets_empty_calib_when_disabled(mod, monkeypatch, tmp_path):
     # 빈 문자열은 YAML 로 풀면 None — 어느 쪽이든 "경로 없음"
     assert p['camera_calib_file'] in ('', None)
     assert p['config_file'] == CONFIG
+
+
+def test_node_marks_robot_calib_source(mod, monkeypatch, tmp_path, robot_home):
+    # launch 는 파일이 있는지만 본다 — 내용이 틀렸어도 넘기고, 로봇 폴더 파일이라고 표시해 VINS 가 ERROR 로 남기게 한다.
+    _make_vision(tmp_path / 'opt')
+    _use_opt(mod, monkeypatch, tmp_path)
+    d = robot_home / 'camera'
+    d.mkdir(parents=True)
+    (d / 'pinhole_left_calib.yaml').write_text('not: a calib\n')
+    p = _node_params(mod, 'true')
+    assert p['camera_calib_file'] == str(d / 'pinhole_left_calib.yaml')
+    assert p['camera_calib_from_robot'] is True
+
+
+def test_node_marks_image_default_calib_source(mod, monkeypatch, tmp_path, robot_home):
+    d = _make_vision(tmp_path / 'opt')
+    _use_opt(mod, monkeypatch, tmp_path)
+    p = _node_params(mod, 'true')
+    assert p['camera_calib_file'] == str(d / 'pinhole_left_calib.yaml')
+    assert p['camera_calib_from_robot'] is False
+    assert _node_params(mod, 'false')['camera_calib_from_robot'] is False
+
+
+def test_node_passes_invalid_robot_extrinsic_through(mod, monkeypatch, tmp_path, robot_home):
+    # 형식 검사는 VINS(C++) 몫 — 틀린 파일도 경로는 넘기고, VINS 가 ERROR 후 config 값으로 간다.
+    _make_vision(tmp_path / 'opt')
+    _use_opt(mod, monkeypatch, tmp_path)
+    d = robot_home / 'vins'
+    d.mkdir(parents=True)
+    (d / 'extrinsic.yaml').write_text('garbage')
+    assert _node_params(mod, 'true')['extrinsic_file'] == str(d / 'extrinsic.yaml')
 
 
 def test_node_gets_robot_extrinsic(mod, monkeypatch, tmp_path, robot_home):

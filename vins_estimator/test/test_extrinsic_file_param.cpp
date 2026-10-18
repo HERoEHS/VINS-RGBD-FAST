@@ -1,14 +1,22 @@
-// [SW1-1959] extrinsic_file 파라미터 연결부 — readParameters 가 vio_edie.yaml 을 다 읽은 뒤
+// [SW1-1959] extrinsic_file·camera_calib_from_robot 파라미터 연결부 — readParameters 가 vio_edie.yaml 을 다 읽은 뒤
 // 로봇 외부값 파일로 RIC·TIC(·TD)를 덮는지, 비었거나 틀린 파일이면 vio_edie.yaml 값 그대로인지.
+// 로봇 폴더 파일이 틀렸으면 죽지 않고 기본값으로 가되 로그는 ERROR "robot ... invalid" 여야 한다(로그 가로채 확인).
 #include <gtest/gtest.h>
 
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
+#include <rcutils/logging.h>
 
+#include "../src/feature_tracker/feature_tracker.h"
 #include "../src/utility/parameters.h"
 
 namespace
@@ -33,16 +41,51 @@ const char* kRobotExtrinsic =
     "extrinsicTranslation: !!opencv-matrix\n   rows: 3\n   cols: 1\n   dt: d\n"
     "   data: [0.1, 0.2, 0.3]\n";
 
+// ---- 로그 가로채기: (심각도, 글) 목록 ----
+std::mutex g_log_mutex;
+std::vector<std::pair<int, std::string>> g_logs;
+
+void CaptureLog(const rcutils_log_location_t*, int severity, const char*, rcutils_time_point_value_t,
+                const char* format, va_list* args)
+{
+  char buf[4096];
+  va_list copy;
+  va_copy(copy, *args);
+  std::vsnprintf(buf, sizeof(buf), format, copy);
+  va_end(copy);
+  std::lock_guard<std::mutex> lock(g_log_mutex);
+  g_logs.emplace_back(severity, buf);
+}
+
+// needle 을 담은 로그의 심각도(없으면 -1).
+int SeverityOf(const std::string& needle)
+{
+  std::lock_guard<std::mutex> lock(g_log_mutex);
+  for (const auto& l : g_logs)
+  {
+    if (l.second.find(needle) != std::string::npos)
+      return l.first;
+  }
+  return -1;
+}
+
 // readParameters 는 전역에 쌓는다(RIC.push_back) — 시험마다 비우고 다시 읽는다.
-void ReadWith(const std::string& extrinsic_file)
+void ReadWith(const std::string& extrinsic_file, const std::string& camera_calib_file = "",
+              bool camera_calib_from_robot = false)
 {
   RIC.clear();
   TIC.clear();
+  {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    g_logs.clear();
+  }
   rclcpp::NodeOptions opts;
   opts.parameter_overrides({
     rclcpp::Parameter("config_file", kVioYaml),
     rclcpp::Parameter("vins_folder", kVinsRoot + "/"),
-    rclcpp::Parameter("extrinsic_file", extrinsic_file)});
+    rclcpp::Parameter("extrinsic_file", extrinsic_file),
+    rclcpp::Parameter("camera_calib_file", camera_calib_file),
+    rclcpp::Parameter("camera_calib_from_robot", camera_calib_from_robot)});
   auto node = std::make_shared<rclcpp::Node>("vins_extrinsic_file_test", opts);
   readParameters(node.get());
 }
@@ -118,11 +161,64 @@ TEST(ExtrinsicFileParam, BadOrMissingFileKeepsConfigValues)
   EXPECT_DOUBLE_EQ(TD, c.td);
 }
 
+TEST(ExtrinsicFileParam, InvalidRobotExtrinsicIsErrorNamingFile)
+{
+  // 로봇 폴더 외부값이 틀렸으면 죽지 않고 vio_edie 값으로 — 로그는 WARN 이 아니라 ERROR, 그 파일 경로와 이유를 담는다.
+  const Config c = FromVioYaml();
+  const std::string bad = WriteTemp("robot_extrinsic_mirror.yaml",
+                                    "%YAML:1.0\n"
+                                    "extrinsicRotation: !!opencv-matrix\n   rows: 3\n   cols: 3\n   dt: d\n"
+                                    "   data: [-1, 0, 0, 0, 1, 0, 0, 0, 1]\n"
+                                    "extrinsicTranslation: !!opencv-matrix\n   rows: 3\n   cols: 1\n   dt: d\n"
+                                    "   data: [0.1, 0.2, 0.3]\n");
+  ASSERT_NO_THROW(ReadWith(bad));
+  EXPECT_TRUE(RIC[0].isApprox(c.R, 1e-6));
+  EXPECT_TRUE(TIC[0].isApprox(c.t));
+  EXPECT_EQ(SeverityOf("robot extrinsic invalid (" + bad + ": "), RCUTILS_LOG_SEVERITY_ERROR);
+  EXPECT_NE(SeverityOf("- using config_file values"), -1);
+}
+
+TEST(ExtrinsicFileParam, InvalidRobotCameraCalibIsErrorNamingFile)
+{
+  const std::string bad = WriteTemp("robot_pinhole_left_calib.yaml", "projection_matrix:\n  data: [1.0, 2.0]\n");
+  ASSERT_NO_THROW(ReadWith("", bad, true));
+  EXPECT_FALSE(CAMERA_CALIB_OK);  // 카메라는 vio_edie.yaml 값
+  EXPECT_EQ(SeverityOf("robot calib invalid (" + bad + ": "), RCUTILS_LOG_SEVERITY_ERROR);
+}
+
+TEST(ExtrinsicFileParam, InvalidImageDefaultCameraCalibStaysWarn)
+{
+  // 이미지 기본 파일(로봇 폴더 아님)이 틀린 것은 지금처럼 WARN — 로봇 캘리브가 망가졌다고 말하지 않는다.
+  const std::string bad = WriteTemp("image_pinhole_left_calib.yaml", "projection_matrix:\n  data: [1.0, 2.0]\n");
+  ReadWith("", bad, false);
+  EXPECT_EQ(SeverityOf("camera calib not applied (" + bad), RCUTILS_LOG_SEVERITY_WARN);
+  EXPECT_EQ(SeverityOf("robot calib invalid"), -1);
+}
+
+TEST(ExtrinsicFileParam, RobotCalibRejectedByTrackerIsErrorNamingFile)
+{
+  // 읽기는 됐지만 해상도가 설정(640x480)과 달라 카메라 모델로 못 쓰는 로봇 파일 — feature_tracker 에서 ERROR.
+  const std::string calib = WriteTemp(
+      "robot_calib_720.yaml",
+      "image_width: 1280\nimage_height: 720\n"
+      "projection_matrix:\n  data: [401.5, 0, 330.25, 0, 0, 402.5, 260.75, 0, 0, 0, 1, 0]\n");
+  ReadWith("", calib, true);
+  ASSERT_TRUE(CAMERA_CALIB_OK);
+  FeatureTracker tracker;
+  tracker.readIntrinsicParameter(kVioYaml);
+  EXPECT_EQ(SeverityOf("robot calib invalid (" + calib + ": calib resolution 1280x720"),
+            RCUTILS_LOG_SEVERITY_ERROR);
+  ASSERT_TRUE(tracker.m_camera);
+  EXPECT_EQ(tracker.m_camera->imageWidth(), 640);  // vio_edie.yaml 카메라 그대로
+  CAMERA_CALIB_OK = false;
+}
+
 int main(int argc, char ** argv)
 {
   // 기록 폴더를 임시 폴더로 — 시험이 홈(~/.edie/logs/vins)에 파일을 남기지 않게.
   setenv("EDIE_VINS_OUTPUT_DIR", ::testing::TempDir().c_str(), 1);
   rclcpp::init(argc, argv);
+  rcutils_logging_set_output_handler(CaptureLog);
   ::testing::InitGoogleTest(&argc, argv);
   const int rc = RUN_ALL_TESTS();
   rclcpp::shutdown();

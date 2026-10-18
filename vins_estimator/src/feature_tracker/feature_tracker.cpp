@@ -509,7 +509,11 @@ void FeatureTracker::readIntrinsicParameter(const string &calib_file)
     camodocal::CameraPtr cam = vins_calib::MakeRectifiedPinhole(m_camera, CAMERA_CALIB, &err);
     if (!cam)
     {
-        RCLCPP_WARN(log, "camera calib not applied (%s) - using config_file values", err.c_str());
+        if (CAMERA_CALIB_FROM_ROBOT)
+            RCLCPP_ERROR(log, "robot calib invalid (%s: %s) - using config_file values", CAMERA_CALIB_FILE.c_str(),
+                         err.c_str());
+        else
+            RCLCPP_WARN(log, "camera calib not applied (%s) - using config_file values", err.c_str());
         return;
     }
     m_camera = cam;

@@ -133,6 +133,12 @@ def _vision_calib_file():
     return calib_yaml, None
 
 
+def _from_robot_folder(path, sub):
+    """path 가 로봇 설정 폴더/<sub>/ 안 파일인가 — VINS 가 그 파일이 틀렸을 때 ERROR 로 남기게 알려 준다."""
+    base = _robot_config_dir()
+    return bool(base) and os.path.dirname(path) == os.path.join(base, sub)
+
+
 def _vins_extrinsic_file(config_file):
     """로봇 vins/extrinsic.yaml 경로. 없으면 '' — VINS 는 config_file 의 extrinsicRotation·Translation·td 그대로."""
     path, looked = _robot_config_file('vins', 'extrinsic.yaml')
@@ -146,6 +152,7 @@ def _vins_extrinsic_file(config_file):
 
 def _make_estimator(context):
     calib_file = ''
+    calib_from_robot = False
     if LaunchConfiguration('use_vision_calib').perform(context).lower() == 'true':
         path, why = _vision_calib_file()
         if path is None:
@@ -153,6 +160,7 @@ def _make_estimator(context):
             _log().warning(f'edie_vision calib not usable - VINS uses config_file camera values: {why}')
         else:
             calib_file = path
+            calib_from_robot = _from_robot_folder(path, 'camera')
             _log().info(f'camera_calib_file = {path}')
     extrinsic_file = ''
     if LaunchConfiguration('use_robot_extrinsic').perform(context).lower() == 'true':
@@ -174,6 +182,8 @@ def _make_estimator(context):
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             # 비면 config_file 의 카메라 값 그대로(C++ 쪽 규칙).
             'camera_calib_file': calib_file,
+            # [SW1-1959] 로봇 폴더 파일이면 VINS 가 그 파일이 틀렸을 때 ERROR "robot calib invalid" 로 남긴다.
+            'camera_calib_from_robot': calib_from_robot,
             # [SW1-1959] 비면 config_file 의 외부값 그대로. 있으면 VINS 가 config_file 을 다 읽은 뒤 RIC·TIC(·td)를 덮는다.
             'extrinsic_file': extrinsic_file,
         }],
