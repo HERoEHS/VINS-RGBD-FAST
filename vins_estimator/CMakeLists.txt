@@ -72,6 +72,7 @@ set(VINS_LIB_SRCS
   src/initial/initial_ex_rotation.cpp
   src/feature_tracker/feature_tracker.cpp
   src/utility/pinhole_calib_override.cpp
+  src/utility/extrinsic_override.cpp
 )
 
 add_library(vins_lib ${VINS_LIB_SRCS})
@@ -275,11 +276,24 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_pinhole_calib_override camera_model)
   target_link_libraries(test_pinhole_calib_override ${OpenCV_LIBS} ${VINS_YAML_CPP_TARGET})
 
+  # [SW1-1959] 로봇별 카메라–IMU 외부값(vins/extrinsic.yaml) 읽기·검사 — 형식 틀리면 통째로 무시
+  ament_add_gtest(test_extrinsic_override test/test_extrinsic_override.cpp
+    src/utility/extrinsic_override.cpp)
+  target_compile_definitions(test_extrinsic_override PRIVATE
+    VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+  target_include_directories(test_extrinsic_override PRIVATE ${OpenCV_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
+  target_link_libraries(test_extrinsic_override ${OpenCV_LIBS})
+
   # [SW1-1948] 설정 파일을 못 열면 readParameters 가 즉시 예외 — 값 0 으로 계속 가다 cv2eigen abort 하던 결함 회귀.
   # rclcpp 노드를 만드는 첫 테스트라 격리 도메인(ros_isolated)에서 돌린다 — PC 셸이 로봇과 같은 ROS_DOMAIN_ID 를 쓰기 때문.
   find_package(ament_cmake_ros REQUIRED)
   ament_add_ros_isolated_gtest(test_config_fail_fast test/test_config_fail_fast.cpp)
   target_link_libraries(test_config_fail_fast vins_lib)
+  # [SW1-1959] extrinsic_file 파라미터 연결부 — readParameters 가 vio_edie.yaml 을 읽은 뒤 RIC·TIC·TD 를 덮는지
+  ament_add_ros_isolated_gtest(test_extrinsic_file_param test/test_extrinsic_file_param.cpp)
+  target_compile_definitions(test_extrinsic_file_param PRIVATE
+    VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+  target_link_libraries(test_extrinsic_file_param vins_lib)
 
   # [SW1-1948] 설치본(share)에 config 가 실제로 들어가고 launch 기본값이 그 파일을 가리키는지 — colcon test 는 install 뒤라 share 를 직접 본다
   find_package(ament_cmake_pytest REQUIRED)

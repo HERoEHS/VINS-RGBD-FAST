@@ -1,4 +1,5 @@
 #include "parameters.h"
+#include "extrinsic_override.h"
 #include "output_dir.h"
 
 #include <stdexcept>
@@ -388,6 +389,43 @@ void readParameters(rclcpp::Node* node)
     BIAS_GYR_THRESHOLD = 0.1;
 
     TD = fsSettings["td"];
+
+    // [SW1-1959] 로봇별 외부값(<로봇 설정 폴더>/vins/extrinsic.yaml)이 있으면 config_file 의 RIC·TIC(·TD)를 덮는다.
+    // launch 가 경로를 넘긴다(비면 config_file 값 그대로). 못 읽으면 파일 전체를 버린다 — 반쪽만 섞이면 더 나쁘다.
+    const std::string extrinsic_file = readParam<std::string>(node, "extrinsic_file");
+    if (!extrinsic_file.empty())
+    {
+        vins_calib::ImuCamExtrinsic ex;
+        std::string err;
+        if (vins_calib::ReadImuCamExtrinsic(extrinsic_file, &ex, &err))
+        {
+            // config_file 쪽과 같은 정규화(쿼터니언 거쳐 직교화).
+            const Eigen::Matrix3d R = Eigen::Quaterniond(ex.R).normalized().toRotationMatrix();
+            Ric = R;
+            RIC[0] = R;
+            TIC[0] = ex.t;
+            if (ex.has_td)
+                TD = ex.td;
+            RCLCPP_INFO_STREAM(node->get_logger(),
+                               "robot extrinsic applied <- " << extrinsic_file << " (robot_id='" << ex.robot_id
+                               << "' source='" << ex.source << "' calibrated_at='" << ex.calibrated_at << "')"
+                               << std::endl << "Extrinsic_R : " << std::endl << RIC[0]
+                               << std::endl << "Extrinsic_T : " << TIC[0].transpose()
+                               << std::endl << "td : " << TD << (ex.has_td ? " (robot)" : " (config_file)"));
+            // estimate_extrinsic 2 는 회전을 움직임에서 처음부터 다시 구해 RIC 를 갈아끼운다(estimator.cpp) —
+            // 그래도 TIC 와 보정 전 값은 로봇 값을 쓰는 편이 낫다. 모드는 사용자가 고른 대로 둔다.
+            if (ESTIMATE_EXTRINSIC == 2)
+                RCLCPP_WARN(node->get_logger(),
+                            "estimate_extrinsic=2: rotation will be re-calibrated from motion; "
+                            "robot extrinsic is only the starting value");
+        }
+        else
+        {
+            RCLCPP_WARN(node->get_logger(), "robot extrinsic not applied (%s) - using config_file values",
+                        err.c_str());
+        }
+    }
+
     ESTIMATE_TD = fsSettings["estimate_td"];
     if (ESTIMATE_TD)
         RCLCPP_INFO_STREAM(node->get_logger(), "Unsynchronized sensors, online estimate time offset, initial td: " << TD);

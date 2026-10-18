@@ -12,6 +12,9 @@
 #   [SW1-1962] 카메라 fx·fy·cx·cy 는 VINS 가 시작할 때 edie_vision 캘리브(정류 P)에서 직접 읽는다 — 이 launch 는
 #   그 파일 경로(camera_calib_file)만 넘긴다. 로봇별 캘리브를 바꾸면 재시작만으로 반영된다.
 #   끄려면 use_vision_calib:=false (vio_edie.yaml 값 그대로).
+#   [SW1-1959] 로봇별 캘리브는 로봇 설정 폴더(root → /var/lib/edie/config, 그 밖 → ~/.config/edie)에서 먼저 찾는다:
+#   camera/<calibration_file>(카메라 내부 값), vins/extrinsic.yaml(카메라–IMU 외부값 → extrinsic_file).
+#   없으면 이미지 기본값 + ERROR 로그. 외부값 덮어쓰기를 끄려면 use_robot_extrinsic:=false.
 import os
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
@@ -58,16 +61,55 @@ def _vins_root_of(config_path):
     return os.path.join(root, '')
 
 
+# ---- [SW1-1959] 로봇 설정 폴더 — 이미지 업데이트(/opt/edie/current 교체)에도 남는 로봇별 캘리브 자리 ----
+# 공통 규칙서: bag/analysis/robot_calib_config_20261018/SPEC.md. 아래 두 함수는 edie_vision·edie_localization·
+# edie9 launch 사본과 같은 모양이다 — 바꿀 때 같이 고친다. 환경변수로 뿌리를 바꾸는 길은 일부러 없다.
+_SYSTEM_STATE_ROOT = '/var/lib/edie'
+
+
+def _robot_config_dir():
+    """로봇별 설정 폴더 — edie_vision state_path.hpp 와 같은 uid 규칙(root → /var/lib/edie/config, 그 밖 → ~/.config/edie)."""
+    if os.geteuid() == 0:
+        try:
+            os.makedirs(_SYSTEM_STATE_ROOT, exist_ok=True)
+        except OSError:
+            pass
+        if os.path.isdir(_SYSTEM_STATE_ROOT) and os.access(_SYSTEM_STATE_ROOT, os.W_OK):
+            return os.path.join(_SYSTEM_STATE_ROOT, 'config')
+    home = os.environ.get('HOME', '')
+    return os.path.join(home, '.config', 'edie') if home else ''
+
+
+def _robot_config_file(sub, name):
+    """로봇 설정 폴더/<sub>/<name 의 파일 이름>. 폴더가 없으면 만든다. 파일이 있으면 경로, 없으면 (None, 찾아본 경로)."""
+    base = _robot_config_dir()
+    if not base:
+        return None, '(no robot config dir: HOME empty)'
+    folder = os.path.join(base, sub)
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError:
+        pass
+    path = os.path.join(folder, os.path.basename(name))
+    return (path, path) if os.path.isfile(path) else (None, path)
+
+
+def _log():
+    return launch_logging.get_logger('edie_vslam')
+
+
 # ---- [SW1-1962] edie_vision 캘리브 경로 → VINS camera_calib_file ----
 # 캘리브 파일은 edie_vision 이 영상을 펼 때와 똑같이 찾는다: camera_v4l2.yaml 을 /opt 우선으로 찾고,
 # 그 옆의 left.calibration_file(gstreamer_utils.hpp LoadCameraConfig). 그래야 vision 이 편 값과 어긋나지 않는다.
 # 값 읽기·검사는 VINS(C++ pinhole_calib_override)가 한다 — 못 읽으면 vio_edie.yaml 값 + WARN.
+# [SW1-1959] 그 이름의 파일을 로봇 설정 폴더 camera/ 에서 먼저 찾는다(vision 도 같은 순서) — camera_v4l2.yaml 본체는
+# 공통 설정이라 옮기지 않고, 이름·use_undistort 만 거기서 읽는다.
 # 같은 찾기 규칙이 bringup_robot.launch.py·edie_mind.launch.py 에도 있다 — 바꿀 때 세 곳을 같이 고친다.
 _VISION_CAMERA_REL = os.path.join('config', 'gstreamer', 'camera_v4l2.yaml')
 
 
 def _vision_calib_file():
-    """edie_vision 정류 왼쪽 캘리브 파일 경로. 쓸 수 없으면 (None, 이유)."""
+    """edie_vision 정류 왼쪽 캘리브 파일 경로(로봇 camera/ 먼저). 쓸 수 없으면 (None, 이유)."""
     camera_yaml = _share_file('edie_vision', _VISION_CAMERA_REL)
     try:
         with open(camera_yaml) as f:
@@ -75,25 +117,46 @@ def _vision_calib_file():
         if left['use_undistort'] is not True:
             # 정류 안 한 원본 영상이면 P 가 아니라 K+D 를 써야 해서 넘기지 않는다.
             return None, f'{camera_yaml}: left.use_undistort={left["use_undistort"]} (not rectified)'
-        calib_yaml = os.path.join(os.path.dirname(camera_yaml), left['calibration_file'])
+        calib_name = left['calibration_file']
+        calib_yaml = os.path.join(os.path.dirname(camera_yaml), calib_name)
     except (OSError, KeyError, TypeError, yaml.YAMLError) as e:
         return None, f'{camera_yaml}: {e}'
+    robot_path, looked = _robot_config_file('camera', calib_name)
+    if robot_path is not None:
+        _log().info(f'robot calib: {robot_path}')
+        return robot_path, None
     if not os.path.isfile(calib_yaml):
-        return None, f'{calib_yaml}: not found'
+        return None, f'{calib_yaml}: not found (robot: {looked})'
+    # 남의 값을 로봇 폴더에 복사해 넣지 않는다 — "이 로봇 캘리브"인 척하게 된다(규칙서).
+    _log().error(f'robot calib not found ({looked}) - using image default {calib_yaml} '
+                 "(not this robot's calibration)")
     return calib_yaml, None
+
+
+def _vins_extrinsic_file(config_file):
+    """로봇 vins/extrinsic.yaml 경로. 없으면 '' — VINS 는 config_file 의 extrinsicRotation·Translation·td 그대로."""
+    path, looked = _robot_config_file('vins', 'extrinsic.yaml')
+    if path is not None:
+        _log().info(f'robot calib: {path}')
+        return path
+    _log().error(f'robot calib not found ({looked}) - VINS extrinsic using image default {config_file} '
+                 "(not this robot's calibration)")
+    return ''
 
 
 def _make_estimator(context):
     calib_file = ''
     if LaunchConfiguration('use_vision_calib').perform(context).lower() == 'true':
         path, why = _vision_calib_file()
-        log = launch_logging.get_logger('edie_vslam')
         if path is None:
             # 로봇 터미널에서 한글이 깨져 로그는 영어로 남긴다.
-            log.warning(f'edie_vision calib not usable - VINS uses config_file camera values: {why}')
+            _log().warning(f'edie_vision calib not usable - VINS uses config_file camera values: {why}')
         else:
             calib_file = path
-            log.info(f'camera_calib_file = {path}')
+            _log().info(f'camera_calib_file = {path}')
+    extrinsic_file = ''
+    if LaunchConfiguration('use_robot_extrinsic').perform(context).lower() == 'true':
+        extrinsic_file = _vins_extrinsic_file(LaunchConfiguration('config_file').perform(context))
     return [Node(
         package='vins_estimator',
         executable='vins_estimator_node',
@@ -111,6 +174,8 @@ def _make_estimator(context):
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             # 비면 config_file 의 카메라 값 그대로(C++ 쪽 규칙).
             'camera_calib_file': calib_file,
+            # [SW1-1959] 비면 config_file 의 외부값 그대로. 있으면 VINS 가 config_file 을 다 읽은 뒤 RIC·TIC(·td)를 덮는다.
+            'extrinsic_file': extrinsic_file,
         }],
     )]
 
@@ -142,7 +207,11 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_vision_calib', default_value='true',
             description='true: VINS 가 카메라 fx·fy·cx·cy 를 edie_vision 캘리브(정류 P, /opt 우선)에서 직접 '
-                        '읽는다. false: config_file 값 그대로 (SW1-1962)'),
+                        '읽는다. false: config_file 값 그대로 (SW1-1962). 캘리브 파일은 로봇 설정 폴더 camera/ 먼저 (SW1-1959)'),
+        DeclareLaunchArgument(
+            'use_robot_extrinsic', default_value='true',
+            description='true: 로봇 설정 폴더 vins/extrinsic.yaml 이 있으면 카메라–IMU 외부값(·td)을 그 값으로 덮는다. '
+                        'false: config_file 값 그대로 (SW1-1959)'),
     ]
 
     return LaunchDescription(args + [OpaqueFunction(function=_make_estimator)])

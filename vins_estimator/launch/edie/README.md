@@ -36,7 +36,8 @@ ros2 launch vins_estimator gate1_klt.launch.py bag:=/path/to/rosbag2_dir rate:=1
 |------|--------|------|
 | `config_file` | `/opt/edie/current/share/vins_estimator/config/elp_stereo_edie/vio_edie.yaml` (그 파일이 있을 때), 없으면 `<share>/vins_estimator/config/elp_stereo_edie/vio_edie.yaml` | estimator config 절대경로. 파일마다 **/opt/edie 우선 → 패키지 share**(설치본) — 소스 트리가 없는 로봇·상품 Yocto 에서도 뜬다 (SW1-1948, SW1-1959) |
 | `vins_folder` | **기본** `config_file` 의 루트(`.../vins_estimator/`, 끝 `/`) — `config_file:=` 로 다른 파일을 넘겨도 따라가지 않으니 필요하면 같이 넘긴다 | 코드가 `config/` 를 이어붙임(fisheye mask, `fisheye: 0` 이면 안 씀) |
-| `use_vision_calib` | `true` | **edie_vslam.launch.py 만.** edie_vision 캘리브 파일 경로를 VINS 파라미터 `camera_calib_file` 로 넘기고, VINS 가 시작할 때 그 파일의 정류 P 에서 `fx·fy·cx·cy` 를 **직접** 읽는다(사본·`/tmp` 파일 없음). 캘리브는 vision 과 같은 규칙(`camera_v4l2.yaml`(`/opt/edie` 우선) 옆 `left.calibration_file`)으로 찾는다. 로봇별 캘리브를 바꾸면 재시작만으로 반영. `left.use_undistort` 가 true 가 아니거나 캘리브를 못 읽으면 `vio_edie.yaml` 값 + WARN. `false` 면 끔. ⚠️ **bag 재생**은 녹화한 로봇이 아니라 이 PC 의 캘리브가 들어가므로, 다른 로봇 bag 이면 `use_vision_calib:=false` 또는 그 로봇 캘리브를 쓴다 (SW1-1962) |
+| `use_vision_calib` | `true` | **edie_vslam.launch.py 만.** edie_vision 캘리브 파일 경로를 VINS 파라미터 `camera_calib_file` 로 넘기고, VINS 가 시작할 때 그 파일의 정류 P 에서 `fx·fy·cx·cy` 를 **직접** 읽는다(사본·`/tmp` 파일 없음). 캘리브는 vision 과 같은 규칙으로 찾는다 — 로봇 설정 폴더 `camera/<left.calibration_file>` 먼저, 없으면 `camera_v4l2.yaml`(`/opt/edie` 우선) 옆 `left.calibration_file`(아래 "로봇별 캘리브 찾는 순서"). 로봇별 캘리브를 바꾸면 재시작만으로 반영. `left.use_undistort` 가 true 가 아니거나 캘리브를 못 읽으면 `vio_edie.yaml` 값 + WARN. `false` 면 끔. ⚠️ **bag 재생**은 녹화한 로봇이 아니라 이 PC 의 캘리브가 들어가므로, 다른 로봇 bag 이면 `use_vision_calib:=false` 또는 그 로봇 캘리브를 쓴다 (SW1-1962) |
+| `use_robot_extrinsic` | `true` | **edie_vslam.launch.py 만.** 로봇 설정 폴더의 `vins/extrinsic.yaml` 이 있으면 그 경로를 VINS 파라미터 `extrinsic_file` 로 넘긴다 — VINS 가 `config_file` 을 다 읽은 뒤 `extrinsicRotation`·`extrinsicTranslation`(·`td`)를 그 값으로 덮는다. 없으면 `''` + ERROR 로그(이미지 기본값 = `vio_edie.yaml` 값). `false` 면 끔 (SW1-1959) |
 | `bag` | (빈값) | 주면 `ros2 bag play` 자동 실행 |
 | `rate` | `1.0` | bag 재생 배속 |
 | `rqt` | `true` | rqt_image_view 자동 실행 |
@@ -49,6 +50,51 @@ ros2 launch vins_estimator gate1_klt.launch.py bag:=/path/to/rosbag2_dir rate:=1
 > 설정 파일을 못 열면 estimator 는 FATAL 로그 뒤 exit 1 로 바로 끝난다(예전엔 값 0 으로 가다 abort).
 
 > 같은 캘리브 읽기 함수(`_share_file` 와 캘리브 찾기 — VINS 는 `_vision_calib_file`)가 bringup `bringup_robot.launch.py`·mind `edie_mind.launch.py`·VINS `edie_vslam.launch.py` 세 곳에 있다(저장소가 달라 공유 불가) — 규칙을 바꿀 때 **세 사본을 같이 고친다**.
+
+## 로봇별 캘리브 찾는 순서 (edie_vslam.launch.py) — #SW1-1959
+
+`/opt/edie/current` 는 이미지 업데이트 때 통째로 바뀐다. 그래서 로봇마다 다른 캘리브는 업데이트에도 남는 **로봇 설정 폴더**에 둔다.
+
+| 실행 계정 | 로봇 설정 폴더 |
+|---|---|
+| root(edieOS) 이고 `/var/lib/edie` 를 만들거나 쓸 수 있음 | `/var/lib/edie/config` |
+| 그 밖(Ubuntu edie 계정), 또는 root 인데 `/var/lib/edie` 를 못 씀 | `~/.config/edie` (HOME 이 비면 로봇 폴더 없음) |
+
+환경변수로 이 뿌리를 바꾸는 길은 없다(edie_vision `state_path.hpp` 와 같은 규칙).
+
+| 무엇 | 1순위 (로봇 설정 폴더) | 없을 때 (이미지 기본값) | VINS 파라미터 |
+|---|---|---|---|
+| 카메라 내부 값(정류 P) | `camera/<left.calibration_file>` | `camera_v4l2.yaml`(`/opt` 우선) 옆의 같은 이름 파일 | `camera_calib_file` |
+| 카메라–IMU 외부값(·td) | `vins/extrinsic.yaml` | `config_file`(`vio_edie.yaml`)의 `extrinsicRotation`·`extrinsicTranslation`·`td` | `extrinsic_file` (없으면 `''`) |
+
+- 파일 **이름**(`left.calibration_file`)과 `use_undistort` 는 지금처럼 `camera_v4l2.yaml`(/opt 우선)에서 읽는다 — 본체는 옮기지 않는다.
+- 로봇 파일을 쓰면 INFO `robot calib: <경로>`, 없어서 이미지 기본값을 쓰면 기동 때 ERROR `robot calib not found (<찾아본 경로>) - ... (not this robot's calibration)` 한 번. 시작은 거부하지 않는다.
+- 폴더(`camera/`·`vins/`)가 없으면 **빈 폴더만** 만든다. 기본값을 복사해 넣지 않는다(남의 값이 "이 로봇 캘리브"인 척하게 됨).
+- `vins/extrinsic.yaml` 형식 — `vio_edie.yaml` 과 같은 OpenCV FileStorage:
+
+```yaml
+%YAML:1.0
+robot_id: "edie-127b"      # 로그에만 찍는다
+source: "urdf"             # urdf | kalibr (로그에만)
+calibrated_at: "2026-10-18"
+extrinsicRotation: !!opencv-matrix   # R_imu_cam
+   rows: 3
+   cols: 3
+   dt: d
+   data: [ ... 9개 ... ]
+extrinsicTranslation: !!opencv-matrix  # t_imu_cam [m]
+   rows: 3
+   cols: 1
+   dt: d
+   data: [ ... 3개 ... ]
+td: 0.0126   # (선택) 없으면 vio_edie.yaml 값
+```
+
+- VINS 검사(`src/utility/extrinsic_override.cpp`): 두 행렬이 다 있고 크기가 3x3·3x1, 값이 유한, 회전이 직교(det≈1, RᵀR≈I, 허용 1e-3)여야 쓴다. 하나라도 틀리면 **파일 전체를 버리고** WARN `robot extrinsic not applied (...) - using config_file values`. `td` 는 있을 때만 덮는다.
+- `estimate_extrinsic: 1`(지금 설정)이면 로봇 값이 온라인 미세조정의 시작값이 된다. `2` 면 VINS 가 회전을 움직임에서 처음부터 다시 구하므로 로봇 회전은 보정 전 시작값으로만 쓰인다(WARN 한 번, 모드는 그대로).
+- ⚠️ **bag 재생**: `gate1_klt.launch.py` 는 로봇 설정 폴더를 보지 않는다(`vio_edie.yaml` 값 그대로, 이번에 손대지 않음). 다른 로봇의 bag 을 그 로봇 외부값으로 돌리려면 노드를 직접 띄우며 파라미터로 넘긴다:
+  `ros2 run vins_estimator vins_estimator_node --ros-args -p config_file:=<vio_edie.yaml> -p vins_folder:=<루트>/ -p use_sim_time:=true -p extrinsic_file:=<그 로봇 extrinsic.yaml>` (카메라 내부 값은 `-p camera_calib_file:=<그 로봇 pinhole_left_calib.yaml>`).
+  `edie_vslam.launch.py` 로 재생하면 녹화한 로봇이 아니라 **이 PC** 의 로봇 설정 폴더(`~/.config/edie`) 값이 들어간다 — 비어 있으면 이미지 기본값 + ERROR 로그.
 
 ## 기록 폴더 (외부값 파일·궤적 CSV) — #SW1-1959
 
