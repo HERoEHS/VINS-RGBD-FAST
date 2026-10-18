@@ -15,6 +15,7 @@
 #include "camodocal/camera_models/CameraFactory.h"
 #include "camodocal/camera_models/CataCamera.h"
 #include "camodocal/camera_models/PinholeCamera.h"
+#include "scoped_temp_dir.h"
 #include "edie_vision_cfg_dir.h"
 #include "utility/pinhole_calib_override.h"
 
@@ -26,7 +27,7 @@ const std::string kVioYaml = kVinsRoot + "/config/elp_stereo_edie/vio_edie.yaml"
 
 std::string WriteTemp(const std::string& name, const std::string& body)
 {
-  const std::string path = ::testing::TempDir() + name;
+  const std::string path = vins_test::TestTempDir() + name;
   std::ofstream(path) << body;
   return path;
 }
@@ -60,7 +61,7 @@ TEST(PinholeCalibOverride, RejectsBadFiles)
 {
   vins_calib::RectPinhole k;
   std::string err;
-  EXPECT_FALSE(vins_calib::ReadRectifiedPinhole(::testing::TempDir() + "no_such.yaml", &k, &err));
+  EXPECT_FALSE(vins_calib::ReadRectifiedPinhole(vins_test::TestTempDir() + "no_such.yaml", &k, &err));
   EXPECT_FALSE(err.empty());
   EXPECT_FALSE(vins_calib::ReadRectifiedPinhole(
       WriteTemp("calib_short.yaml", "projection_matrix:\n  data: [1.0, 2.0]\n"), &k, &err));

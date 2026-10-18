@@ -17,6 +17,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rcutils/logging.h>
 
+#include "scoped_temp_dir.h"
 #include "../src/feature_tracker/feature_tracker.h"
 #include "../src/utility/parameters.h"
 
@@ -28,7 +29,7 @@ const std::string kVioYaml = kVinsRoot + "/config/elp_stereo_edie/vio_edie.yaml"
 
 std::string WriteTemp(const std::string& name, const std::string& body)
 {
-  const std::string path = ::testing::TempDir() + name;
+  const std::string path = vins_test::TestTempDir() + name;
   std::ofstream(path) << body;
   return path;
 }
@@ -146,7 +147,7 @@ TEST(ExtrinsicFileParam, RobotFileWithoutTdKeepsConfigTd)
 TEST(ExtrinsicFileParam, BadOrMissingFileKeepsConfigValues)
 {
   const Config c = FromVioYaml();
-  ReadWith(::testing::TempDir() + "no_such_robot_extrinsic.yaml");
+  ReadWith(vins_test::TestTempDir() + "no_such_robot_extrinsic.yaml");
   EXPECT_TRUE(RIC[0].isApprox(c.R, 1e-6));
   EXPECT_TRUE(TIC[0].isApprox(c.t));
   // 회전은 맞는데 이동이 1x3 — 반쪽만 섞지 않고 통째로 버린다.
@@ -257,8 +258,8 @@ TEST(ExtrinsicFileParam, RobotExtrinsicWithoutYamlHeaderIsErrorAndConfigValues)
 
 int main(int argc, char ** argv)
 {
-  // 기록 폴더를 임시 폴더로 — 시험이 홈(~/.edie/logs/vins)에 파일을 남기지 않게.
-  setenv("EDIE_VINS_OUTPUT_DIR", ::testing::TempDir().c_str(), 1);
+  // 기록 폴더를 시험용 임시 폴더로 — 홈(~/.edie/logs/vins)·/tmp 에 파일을 남기지 않게(끝나면 폴더째 지움).
+  setenv("EDIE_VINS_OUTPUT_DIR", vins_test::TestTempDir().c_str(), 1);
   rclcpp::init(argc, argv);
   rcutils_logging_set_output_handler(CaptureLog);
   ::testing::InitGoogleTest(&argc, argv);

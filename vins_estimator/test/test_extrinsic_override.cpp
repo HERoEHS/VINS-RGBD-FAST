@@ -11,6 +11,7 @@
 #include <opencv2/core/eigen.hpp>
 
 #include "utility/extrinsic_override.h"
+#include "scoped_temp_dir.h"
 
 namespace
 {
@@ -20,7 +21,7 @@ const std::string kVioYaml = kVinsRoot + "/config/elp_stereo_edie/vio_edie.yaml"
 
 std::string WriteTemp(const std::string& name, const std::string& body)
 {
-  const std::string path = ::testing::TempDir() + name;
+  const std::string path = vins_test::TestTempDir() + name;
   std::ofstream(path) << body;
   return path;
 }
@@ -158,7 +159,7 @@ TEST(ExtrinsicOverride, MissingOrBrokenFileIsRejected)
 {
   vins_calib::ImuCamExtrinsic ex;
   std::string err;
-  EXPECT_FALSE(vins_calib::ReadImuCamExtrinsic(::testing::TempDir() + "no_such_extrinsic.yaml", &ex, &err));
+  EXPECT_FALSE(vins_calib::ReadImuCamExtrinsic(vins_test::TestTempDir() + "no_such_extrinsic.yaml", &ex, &err));
   EXPECT_FALSE(err.empty());
   EXPECT_FALSE(vins_calib::ReadImuCamExtrinsic(
       WriteTemp("ex_broken.yaml", "%YAML:1.0\nextrinsicRotation: [1, 2\n"), &ex, &err));
