@@ -3,6 +3,7 @@
 #include <boost/make_shared.hpp>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 #include <yaml-cpp/yaml.h>
 
@@ -28,6 +29,7 @@ bool ReadRectifiedPinhole(const std::string& path, RectPinhole* out, std::string
     const auto D = root["distortion_coefficients"]["data"].as<std::vector<double>>();
     root["distortion_coefficients"]["cols"].as<int>();
     const auto R = root["rectification_matrix"]["data"].as<std::vector<double>>();
+    const auto P = data.as<std::vector<double>>();
     if (K.size() != 9)
     {
       *err = path + ": camera_matrix has " + std::to_string(K.size()) + " values (need 9)";
@@ -43,19 +45,33 @@ bool ReadRectifiedPinhole(const std::string& path, RectPinhole* out, std::string
       *err = path + ": rectification_matrix has " + std::to_string(R.size()) + " values (need 9)";
       return false;
     }
-    // !(x > 0) 로 NaN 도 걸러낸다.
-    if (!(K[0] > 0.0) || !(K[4] > 0.0) || !std::isfinite(K[0]) || !std::isfinite(K[4]))
+    // vision 은 fx·fy 만 보지만 VINS 는 값 전부를 본다 — NaN cx·cy 는 투영을 통째로 망가뜨린다(PR #9 리뷰).
+    const std::pair<const char*, const std::vector<double>*> blocks[] = {
+        {"camera_matrix", &K}, {"distortion_coefficients", &D}, {"rectification_matrix", &R},
+        {"projection_matrix", &P}};
+    for (const auto& b : blocks)
+    {
+      for (const double v : *b.second)
+      {
+        if (!std::isfinite(v))
+        {
+          *err = path + ": " + b.first + " has non-finite values";
+          return false;
+        }
+      }
+    }
+    if (!(K[0] > 0.0) || !(K[4] > 0.0))
     {
       *err = path + ": camera_matrix fx/fy must be > 0";
       return false;
     }
     // P = [fx 0 cx Tx; 0 fy cy 0; 0 0 1 0]
     RectPinhole k;
-    k.fx = data[0].as<double>();
-    k.cx = data[2].as<double>();
-    k.fy = data[5].as<double>();
-    k.cy = data[6].as<double>();
-    if (!(k.fx > 0.0) || !(k.fy > 0.0) || !std::isfinite(k.fx) || !std::isfinite(k.fy))
+    k.fx = P[0];
+    k.cx = P[2];
+    k.fy = P[5];
+    k.cy = P[6];
+    if (!(k.fx > 0.0) || !(k.fy > 0.0))
     {
       *err = path + ": fx/fy must be positive";
       return false;

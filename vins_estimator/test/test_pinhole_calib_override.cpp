@@ -99,10 +99,39 @@ TEST(PinholeCalibOverride, RejectsWhatVisionRejects)
           "camera_matrix fx/fy");
   rejects("calib_k_nan.yaml",
           "camera_matrix:\n  data: [.nan, 0, 310.3, 0, 436.8, 262.3, 0, 0, 1]\n" D_LINE R_LINE P_LINE,
-          "camera_matrix fx/fy");
+          "camera_matrix has non-finite");
   rejects("calib_p_inf.yaml",
           K_LINE D_LINE R_LINE "projection_matrix:\n  data: [.inf, 0, 330, 0, 0, 402, 260, 0, 0, 0, 1, 0]\n",
-          "fx/fy");
+          "projection_matrix has non-finite");
+}
+
+TEST(PinholeCalibOverride, RejectsAnyNonFiniteValue)
+{
+  // PR #9 리뷰: fx·fy 만이 아니라 K·D·R·P 값 전부가 유한해야 한다 — NaN cx·cy 도 거부.
+  vins_calib::RectPinhole k;
+  std::string err;
+  const auto rejects = [&](const char* name, const std::string& body, const char* why) {
+    EXPECT_FALSE(vins_calib::ReadRectifiedPinhole(WriteTemp(name, body), &k, &err)) << name;
+    EXPECT_NE(err.find(why), std::string::npos) << name << ": " << err;
+  };
+  rejects("calib_p_cx_nan.yaml",
+          K_LINE D_LINE R_LINE "projection_matrix:\n  data: [401.5, 0, .nan, 0, 0, 402.5, 260.75, 0, 0, 0, 1, 0]\n",
+          "projection_matrix has non-finite");
+  rejects("calib_p_cy_nan.yaml",
+          K_LINE D_LINE R_LINE "projection_matrix:\n  data: [401.5, 0, 330.25, 0, 0, 402.5, .nan, 0, 0, 0, 1, 0]\n",
+          "projection_matrix has non-finite");
+  rejects("calib_p_tx_inf.yaml",
+          K_LINE D_LINE R_LINE "projection_matrix:\n  data: [401.5, 0, 330.25, -.inf, 0, 402.5, 260.75, 0, 0, 0, 1, 0]\n",
+          "projection_matrix has non-finite");
+  rejects("calib_k_cx_nan.yaml",
+          "camera_matrix:\n  data: [438.3, 0, .nan, 0, 436.8, 262.3, 0, 0, 1]\n" D_LINE R_LINE P_LINE,
+          "camera_matrix has non-finite");
+  rejects("calib_d_nan.yaml",
+          K_LINE "distortion_coefficients:\n  rows: 1\n  cols: 5\n  data: [-0.3, .nan, 0, 0, 0]\n" R_LINE P_LINE,
+          "distortion_coefficients has non-finite");
+  rejects("calib_r_inf.yaml",
+          K_LINE D_LINE "rectification_matrix:\n  data: [1, 0, 0, 0, .inf, 0, 0, 0, 1]\n" P_LINE,
+          "rectification_matrix has non-finite");
 }
 
 TEST(PinholeCalibOverride, KeepsNameAndSizeZeroDistortion)
