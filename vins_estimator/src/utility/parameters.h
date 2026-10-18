@@ -71,6 +71,11 @@ extern bool            CAMERA_CALIB_OK;
 // [SW1-1959] CAMERA_CALIB_FILE 이 로봇 설정 폴더(camera/)에서 왔는지 — launch 가 알려 준다. 로봇 파일이 틀렸으면
 // "이 로봇 캘리브가 망가졌다"는 뜻이라 WARN 이 아니라 ERROR 로 남긴다(이미지 기본 파일이 틀린 것과 구분).
 extern bool            CAMERA_CALIB_FROM_ROBOT;
+// [SW1-1959] 로봇 파일을 골랐을 때 launch 가 함께 넘기는 이미지 기본 캘리브(camera_v4l2.yaml 옆 파일). 로봇 파일을
+// 못 쓰면 vio_edie.yaml 로 바로 가지 않고 이것부터 쓴다 — vision·도킹·probe 가 물러서는 값과 같게(PR #9 리뷰).
+extern std::string     CAMERA_CALIB_DEFAULT_FILE;
+extern bool            CAMERA_CALIB_DEFAULT_OK;
+extern vins_calib::RectPinhole CAMERA_CALIB_DEFAULT;
 extern vins_calib::RectPinhole CAMERA_CALIB;
 extern int             STEREO_TRACK;
 extern bool            PUB_THIS_FRAME;

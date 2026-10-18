@@ -499,26 +499,51 @@ void FeatureTracker::readIntrinsicParameter(const string &calib_file)
 {
     ROS_DEBUG("reading paramerter of camera %s", calib_file.c_str());
     m_camera = CameraFactory::instance()->generateCameraFromYamlFile(calib_file);
-    if (!CAMERA_CALIB_OK)
+    if (!CAMERA_CALIB_OK && !CAMERA_CALIB_DEFAULT_OK)
         return;
 
     // [SW1-1962] 카메라 내부 값은 edie_vision 캘리브(정류 P)가 정본 — 시작 때 한 번 읽어 둔 값으로 vio_edie.yaml 값을 덮는다.
     // 재초기화 때도 같은 값이 다시 적용된다. 못 쓰면 vio_edie.yaml 값으로 계속(로그는 영어).
+    // [SW1-1959] 순서: 로봇 파일 → 이미지 기본 파일(로봇 파일을 골랐을 때만) → vio_edie.yaml. 읽기 실패는
+    // parameters.cpp 가 이미 남겼고, 여기서는 읽혔지만 카메라 모델로 못 쓰는 경우(해상도 다름 등)를 같은 순서로 넘긴다.
     const rclcpp::Logger log = rclcpp::get_logger("vins_estimator");
     std::string err;
-    camodocal::CameraPtr cam = vins_calib::MakeRectifiedPinhole(m_camera, CAMERA_CALIB, &err);
-    if (!cam)
+    if (CAMERA_CALIB_OK)
     {
-        if (CAMERA_CALIB_FROM_ROBOT)
+        camodocal::CameraPtr cam = vins_calib::MakeRectifiedPinhole(m_camera, CAMERA_CALIB, &err);
+        if (cam)
+        {
+            m_camera = cam;
+            RCLCPP_INFO(log, "camera intrinsics from edie_vision calib: fx=%.3f fy=%.3f cx=%.3f cy=%.3f",
+                        CAMERA_CALIB.fx, CAMERA_CALIB.fy, CAMERA_CALIB.cx, CAMERA_CALIB.cy);
+            return;
+        }
+        if (!CAMERA_CALIB_FROM_ROBOT)
+        {
+            RCLCPP_WARN(log, "camera calib not applied (%s) - using config_file values", err.c_str());
+            return;
+        }
+        if (CAMERA_CALIB_DEFAULT_OK)
+            RCLCPP_ERROR(log, "robot calib invalid (%s: %s) - using image default %s", CAMERA_CALIB_FILE.c_str(),
+                         err.c_str(), CAMERA_CALIB_DEFAULT_FILE.c_str());
+        else
+        {
             RCLCPP_ERROR(log, "robot calib invalid (%s: %s) - using config_file values", CAMERA_CALIB_FILE.c_str(),
                          err.c_str());
-        else
-            RCLCPP_WARN(log, "camera calib not applied (%s) - using config_file values", err.c_str());
+            return;
+        }
+    }
+    camodocal::CameraPtr cam = vins_calib::MakeRectifiedPinhole(m_camera, CAMERA_CALIB_DEFAULT, &err);
+    if (!cam)
+    {
+        RCLCPP_WARN(log, "camera calib not applied (%s: %s) - using config_file values",
+                    CAMERA_CALIB_DEFAULT_FILE.c_str(), err.c_str());
         return;
     }
     m_camera = cam;
-    RCLCPP_INFO(log, "camera intrinsics from edie_vision calib: fx=%.3f fy=%.3f cx=%.3f cy=%.3f",
-                CAMERA_CALIB.fx, CAMERA_CALIB.fy, CAMERA_CALIB.cx, CAMERA_CALIB.cy);
+    RCLCPP_INFO(log, "camera intrinsics from image default calib %s: fx=%.3f fy=%.3f cx=%.3f cy=%.3f",
+                CAMERA_CALIB_DEFAULT_FILE.c_str(), CAMERA_CALIB_DEFAULT.fx, CAMERA_CALIB_DEFAULT.fy,
+                CAMERA_CALIB_DEFAULT.cx, CAMERA_CALIB_DEFAULT.cy);
 }
 
 void FeatureTracker::showUndistortion(const string &name)

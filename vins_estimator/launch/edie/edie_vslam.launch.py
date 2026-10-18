@@ -108,29 +108,37 @@ def _log():
 _VISION_CAMERA_REL = os.path.join('config', 'gstreamer', 'camera_v4l2.yaml')
 
 
-def _vision_calib_file():
-    """edie_vision 정류 왼쪽 캘리브 파일 경로(로봇 camera/ 먼저). 쓸 수 없으면 (None, 이유)."""
+def _vision_calib_choice():
+    """(쓸 캘리브 경로, 못 쓰는 이유, 이미지 기본 파일). 로봇 camera/ 파일을 골랐을 때만 세 번째가 차 있다 —
+    VINS 가 로봇 파일을 못 쓰면 vio_edie.yaml 보다 먼저 이것으로 물러선다(vision·도킹·probe 와 같은 순서, PR #9 리뷰).
+    이미지 기본 파일이 없으면 세 번째도 ''."""
     camera_yaml = _share_file('edie_vision', _VISION_CAMERA_REL)
     try:
         with open(camera_yaml) as f:
             left = yaml.safe_load(f)['left']
         if left['use_undistort'] is not True:
             # 정류 안 한 원본 영상이면 P 가 아니라 K+D 를 써야 해서 넘기지 않는다.
-            return None, f'{camera_yaml}: left.use_undistort={left["use_undistort"]} (not rectified)'
+            return None, f'{camera_yaml}: left.use_undistort={left["use_undistort"]} (not rectified)', ''
         calib_name = left['calibration_file']
         calib_yaml = os.path.join(os.path.dirname(camera_yaml), calib_name)
     except (OSError, KeyError, TypeError, yaml.YAMLError) as e:
-        return None, f'{camera_yaml}: {e}'
+        return None, f'{camera_yaml}: {e}', ''
     robot_path, looked = _robot_config_file('camera', calib_name)
     if robot_path is not None:
         _log().info(f'robot calib: {robot_path}')
-        return robot_path, None
+        return robot_path, None, (calib_yaml if os.path.isfile(calib_yaml) else '')
     if not os.path.isfile(calib_yaml):
-        return None, f'{calib_yaml}: not found (robot: {looked})'
+        return None, f'{calib_yaml}: not found (robot: {looked})', ''
     # 남의 값을 로봇 폴더에 복사해 넣지 않는다 — "이 로봇 캘리브"인 척하게 된다(규칙서).
     _log().error(f'robot calib not found ({looked}) - using image default {calib_yaml} '
                  "(not this robot's calibration)")
-    return calib_yaml, None
+    return calib_yaml, None, ''
+
+
+def _vision_calib_file():
+    """edie_vision 정류 왼쪽 캘리브 파일 경로(로봇 camera/ 먼저). 쓸 수 없으면 (None, 이유)."""
+    path, why, _ = _vision_calib_choice()
+    return path, why
 
 
 def _from_robot_folder(path, sub):
@@ -153,8 +161,9 @@ def _vins_extrinsic_file(config_file):
 def _make_estimator(context):
     calib_file = ''
     calib_from_robot = False
+    calib_default_file = ''
     if LaunchConfiguration('use_vision_calib').perform(context).lower() == 'true':
-        path, why = _vision_calib_file()
+        path, why, calib_default_file = _vision_calib_choice()
         if path is None:
             # 로봇 터미널에서 한글이 깨져 로그는 영어로 남긴다.
             _log().warning(f'edie_vision calib not usable - VINS uses config_file camera values: {why}')
@@ -184,6 +193,8 @@ def _make_estimator(context):
             'camera_calib_file': calib_file,
             # [SW1-1959] 로봇 폴더 파일이면 VINS 가 그 파일이 틀렸을 때 ERROR "robot calib invalid" 로 남긴다.
             'camera_calib_from_robot': calib_from_robot,
+            # 로봇 파일을 골랐을 때만 차 있다 — 로봇 파일이 틀리면 VINS 가 이것을 먼저 쓰고, 이것도 틀리면 config_file 값.
+            'camera_calib_default_file': calib_default_file,
             # [SW1-1959] 비면 config_file 의 외부값 그대로. 있으면 VINS 가 config_file 을 다 읽은 뒤 RIC·TIC(·td)를 덮는다.
             'extrinsic_file': extrinsic_file,
         }],

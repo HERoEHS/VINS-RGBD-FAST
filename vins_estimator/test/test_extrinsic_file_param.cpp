@@ -10,6 +10,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,7 +74,8 @@ int SeverityOf(const std::string& needle)
 
 // readParameters 는 전역에 쌓는다(RIC.push_back) — 시험마다 비우고 다시 읽는다.
 void ReadWith(const std::string& extrinsic_file, const std::string& camera_calib_file = "",
-              bool camera_calib_from_robot = false, const std::string& config_file = kVioYaml)
+              bool camera_calib_from_robot = false, const std::string& config_file = kVioYaml,
+              const std::string& camera_calib_default_file = "")
 {
   RIC.clear();
   TIC.clear();
@@ -87,7 +89,8 @@ void ReadWith(const std::string& extrinsic_file, const std::string& camera_calib
     rclcpp::Parameter("vins_folder", kVinsRoot + "/"),
     rclcpp::Parameter("extrinsic_file", extrinsic_file),
     rclcpp::Parameter("camera_calib_file", camera_calib_file),
-    rclcpp::Parameter("camera_calib_from_robot", camera_calib_from_robot)});
+    rclcpp::Parameter("camera_calib_from_robot", camera_calib_from_robot),
+    rclcpp::Parameter("camera_calib_default_file", camera_calib_default_file)});
   auto node = std::make_shared<rclcpp::Node>("vins_extrinsic_file_test", opts);
   readParameters(node.get());
 }
@@ -215,6 +218,7 @@ TEST(ExtrinsicFileParam, RobotCalibRejectedByTrackerIsErrorNamingFile)
             RCUTILS_LOG_SEVERITY_ERROR);
   ASSERT_TRUE(tracker.m_camera);
   EXPECT_EQ(tracker.m_camera->imageWidth(), 640);  // vio_edie.yaml 카메라 그대로
+  EXPECT_NE(SeverityOf("- using config_file values"), -1);  // 이미지 기본 파일을 안 넘겼으니 바로 config
   CAMERA_CALIB_OK = false;
 }
 
@@ -254,6 +258,110 @@ TEST(ExtrinsicFileParam, RobotExtrinsicWithoutYamlHeaderIsErrorAndConfigValues)
   EXPECT_TRUE(RIC[0].isApprox(c.R, 1e-6));
   EXPECT_TRUE(TIC[0].isApprox(c.t));
   EXPECT_EQ(SeverityOf("robot extrinsic invalid (" + path + ": "), RCUTILS_LOG_SEVERITY_ERROR);
+}
+
+// ---- [SW1-1959] 로봇 캘리브 → 이미지 기본 캘리브 → vio_edie.yaml 순서(PR #9 리뷰) ----
+
+// edie_vision 이 받는 꼴(K·D·R·P)의 정류 캘리브. width>0 이면 해상도도 적는다.
+std::string CalibBody(double fx, int width = 0, int height = 0)
+{
+  std::ostringstream b;
+  if (width > 0)
+    b << "image_width: " << width << "\nimage_height: " << height << "\n";
+  b << "camera_matrix:\n  data: [438.3, 0, 310.3, 0, 436.8, 262.3, 0, 0, 1]\n"
+    << "distortion_coefficients:\n  rows: 1\n  cols: 5\n  data: [0, 0, 0, 0, 0]\n"
+    << "rectification_matrix:\n  data: [1, 0, 0, 0, 1, 0, 0, 0, 1]\n"
+    << "projection_matrix:\n  data: [" << fx << ", 0, 330.25, 0, 0, " << fx << ", 260.75, 0, 0, 0, 1, 0]\n";
+  return b.str();
+}
+
+const char* kBrokenCalib = "projection_matrix:\n  data: [1.0, 2.0]\n";
+
+// readParameters 뒤 FeatureTracker 가 실제로 고른 카메라의 fx.
+double TrackerFx()
+{
+  FeatureTracker tracker;
+  tracker.readIntrinsicParameter(kVioYaml);
+  std::vector<double> p;
+  tracker.m_camera->writeParameters(p);  // 핀홀: k1 k2 p1 p2 fx fy cx cy
+  return p.at(4);
+}
+
+double ConfigFx()
+{
+  std::vector<double> p;
+  camodocal::CameraFactory::instance()->generateCameraFromYamlFile(kVioYaml)->writeParameters(p);
+  return p.at(4);
+}
+
+TEST(CameraCalibFallback, InvalidRobotUsesImageDefault)
+{
+  const std::string robot = WriteTemp("fb1_robot.yaml", kBrokenCalib);
+  const std::string def = WriteTemp("fb1_default.yaml", CalibBody(410.0));
+  ReadWith("", robot, true, kVioYaml, def);
+  EXPECT_FALSE(CAMERA_CALIB_OK);
+  ASSERT_TRUE(CAMERA_CALIB_DEFAULT_OK);
+  EXPECT_EQ(SeverityOf("robot calib invalid (" + robot + ": "), RCUTILS_LOG_SEVERITY_ERROR);
+  EXPECT_NE(SeverityOf("- using image default " + def), -1);
+  EXPECT_DOUBLE_EQ(TrackerFx(), 410.0);
+  EXPECT_NE(SeverityOf("camera intrinsics from image default calib " + def), -1);
+}
+
+TEST(CameraCalibFallback, InvalidRobotAndInvalidDefaultUseConfig)
+{
+  const std::string robot = WriteTemp("fb2_robot.yaml", kBrokenCalib);
+  const std::string def = WriteTemp("fb2_default.yaml", kBrokenCalib);
+  ReadWith("", robot, true, kVioYaml, def);
+  EXPECT_FALSE(CAMERA_CALIB_OK);
+  EXPECT_FALSE(CAMERA_CALIB_DEFAULT_OK);
+  EXPECT_EQ(SeverityOf("robot calib invalid (" + robot + ": "), RCUTILS_LOG_SEVERITY_ERROR);
+  EXPECT_NE(SeverityOf(") - using config_file values"), -1);
+  EXPECT_EQ(SeverityOf("camera calib not applied (" + def), RCUTILS_LOG_SEVERITY_WARN);
+  EXPECT_DOUBLE_EQ(TrackerFx(), ConfigFx());
+}
+
+TEST(CameraCalibFallback, RobotResolutionMismatchUsesImageDefault)
+{
+  // 읽기는 되지만 해상도가 달라 카메라 모델로 못 쓰는 로봇 파일 — feature_tracker 도 같은 순서로 물러선다.
+  const std::string robot = WriteTemp("fb3_robot.yaml", CalibBody(420.0, 1280, 720));
+  const std::string def = WriteTemp("fb3_default.yaml", CalibBody(410.0, 640, 480));
+  ReadWith("", robot, true, kVioYaml, def);
+  ASSERT_TRUE(CAMERA_CALIB_OK);
+  EXPECT_DOUBLE_EQ(TrackerFx(), 410.0);
+  EXPECT_EQ(SeverityOf("robot calib invalid (" + robot + ": calib resolution 1280x720"),
+            RCUTILS_LOG_SEVERITY_ERROR);
+  EXPECT_NE(SeverityOf("- using image default " + def), -1);
+}
+
+TEST(CameraCalibFallback, RobotAndDefaultResolutionMismatchUseConfig)
+{
+  const std::string robot = WriteTemp("fb4_robot.yaml", CalibBody(420.0, 1280, 720));
+  const std::string def = WriteTemp("fb4_default.yaml", CalibBody(410.0, 1280, 720));
+  ReadWith("", robot, true, kVioYaml, def);
+  EXPECT_DOUBLE_EQ(TrackerFx(), ConfigFx());
+  EXPECT_EQ(SeverityOf("robot calib invalid (" + robot + ": calib resolution"), RCUTILS_LOG_SEVERITY_ERROR);
+  EXPECT_EQ(SeverityOf("camera calib not applied (" + def + ": calib resolution"), RCUTILS_LOG_SEVERITY_WARN);
+}
+
+TEST(CameraCalibFallback, ValidRobotWinsOverDefault)
+{
+  const std::string robot = WriteTemp("fb5_robot.yaml", CalibBody(420.0));
+  const std::string def = WriteTemp("fb5_default.yaml", CalibBody(410.0));
+  ReadWith("", robot, true, kVioYaml, def);
+  EXPECT_DOUBLE_EQ(TrackerFx(), 420.0);
+  EXPECT_EQ(SeverityOf("robot calib invalid"), -1);
+}
+
+TEST(CameraCalibFallback, DefaultIgnoredWhenNotRobotFile)
+{
+  // 로봇 파일이 아니면(이미지 기본값을 이미 고름) 두 번째 후보는 없다 — 틀리면 바로 config 값 + WARN.
+  const std::string img = WriteTemp("fb6_image.yaml", kBrokenCalib);
+  const std::string def = WriteTemp("fb6_default.yaml", CalibBody(410.0));
+  ReadWith("", img, false, kVioYaml, def);
+  EXPECT_FALSE(CAMERA_CALIB_DEFAULT_OK);
+  EXPECT_TRUE(CAMERA_CALIB_DEFAULT_FILE.empty());
+  EXPECT_DOUBLE_EQ(TrackerFx(), ConfigFx());
+  EXPECT_EQ(SeverityOf("camera calib not applied (" + img), RCUTILS_LOG_SEVERITY_WARN);
 }
 
 int main(int argc, char ** argv)

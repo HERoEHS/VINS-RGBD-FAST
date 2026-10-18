@@ -171,6 +171,9 @@ std::string CAM_NAMES;
 std::string CAMERA_CALIB_FILE;
 bool CAMERA_CALIB_OK = false;
 bool CAMERA_CALIB_FROM_ROBOT = false;
+std::string CAMERA_CALIB_DEFAULT_FILE;
+bool CAMERA_CALIB_DEFAULT_OK = false;
+vins_calib::RectPinhole CAMERA_CALIB_DEFAULT;
 vins_calib::RectPinhole CAMERA_CALIB;
 int STEREO_TRACK;
 bool PUB_THIS_FRAME;
@@ -258,6 +261,15 @@ void readParameters(rclcpp::Node* node)
     CAMERA_CALIB_FILE = readParam<std::string>(node, "camera_calib_file");
     CAMERA_CALIB_OK = false;
     CAMERA_CALIB_FROM_ROBOT = readParam<bool>(node, "camera_calib_from_robot");
+    CAMERA_CALIB_DEFAULT_FILE = readParam<std::string>(node, "camera_calib_default_file");
+    CAMERA_CALIB_DEFAULT_OK = false;
+    // 이미지 기본 파일은 로봇 파일 다음 순서일 때만 쓴다(로봇 파일이 아니면 launch 가 비워 보낸다).
+    if (!CAMERA_CALIB_FROM_ROBOT)
+        CAMERA_CALIB_DEFAULT_FILE.clear();
+    std::string default_err;
+    if (!CAMERA_CALIB_DEFAULT_FILE.empty())
+        CAMERA_CALIB_DEFAULT_OK =
+            vins_calib::ReadRectifiedPinhole(CAMERA_CALIB_DEFAULT_FILE, &CAMERA_CALIB_DEFAULT, &default_err);
     if (!CAMERA_CALIB_FILE.empty())
     {
         std::string err;
@@ -267,8 +279,16 @@ void readParameters(rclcpp::Node* node)
             RCLCPP_INFO(node->get_logger(), "edie_vision calib read: fx=%.3f fy=%.3f cx=%.3f cy=%.3f <- %s",
                         CAMERA_CALIB.fx, CAMERA_CALIB.fy, CAMERA_CALIB.cx, CAMERA_CALIB.cy,
                         CAMERA_CALIB_FILE.c_str());
+        else if (CAMERA_CALIB_FROM_ROBOT && CAMERA_CALIB_DEFAULT_OK)
+            RCLCPP_ERROR(node->get_logger(), "robot calib invalid (%s) - using image default %s", err.c_str(),
+                         CAMERA_CALIB_DEFAULT_FILE.c_str());
         else if (CAMERA_CALIB_FROM_ROBOT)
+        {
             RCLCPP_ERROR(node->get_logger(), "robot calib invalid (%s) - using config_file values", err.c_str());
+            if (!CAMERA_CALIB_DEFAULT_FILE.empty())
+                RCLCPP_WARN(node->get_logger(), "camera calib not applied (%s) - using config_file values",
+                            default_err.c_str());
+        }
         else
             RCLCPP_WARN(node->get_logger(), "camera calib not applied (%s) - using config_file values",
                         err.c_str());

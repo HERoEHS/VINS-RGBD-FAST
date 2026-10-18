@@ -238,6 +238,29 @@ def test_node_marks_image_default_calib_source(mod, monkeypatch, tmp_path, robot
     assert _node_params(mod, 'false')['camera_calib_from_robot'] is False
 
 
+def test_node_gets_image_default_only_when_robot_chosen(mod, monkeypatch, tmp_path, robot_home):
+    # PR #9 리뷰: 로봇 파일을 골랐을 때만 이미지 기본 파일(camera_v4l2.yaml 옆)을 두 번째 후보로 넘긴다.
+    d = _make_vision(tmp_path / 'opt')
+    _use_opt(mod, monkeypatch, tmp_path)
+    p = _node_params(mod, 'true')  # 로봇 파일 없음 → 이미지 기본값이 곧 첫 후보
+    assert p['camera_calib_file'] == str(d / 'pinhole_left_calib.yaml')
+    assert p['camera_calib_default_file'] in ('', None)
+    robot = _make_robot_calib(robot_home)
+    p = _node_params(mod, 'true')
+    assert p['camera_calib_file'] == str(robot)
+    assert p['camera_calib_default_file'] == str(d / 'pinhole_left_calib.yaml')
+    assert _node_params(mod, 'false')['camera_calib_default_file'] in ('', None)
+
+
+def test_node_gets_no_default_when_image_file_missing(mod, monkeypatch, tmp_path, robot_home):
+    _make_vision(tmp_path / 'opt', make_calib=False)
+    _use_opt(mod, monkeypatch, tmp_path)
+    robot = _make_robot_calib(robot_home)
+    p = _node_params(mod, 'true')
+    assert p['camera_calib_file'] == str(robot)
+    assert p['camera_calib_default_file'] in ('', None)
+
+
 def test_node_passes_invalid_robot_extrinsic_through(mod, monkeypatch, tmp_path, robot_home):
     # 형식 검사는 VINS(C++) 몫 — 틀린 파일도 경로는 넘기고, VINS 가 ERROR 후 config 값으로 간다.
     _make_vision(tmp_path / 'opt')
