@@ -1,7 +1,9 @@
 #include "pinhole_calib_override.h"
 
 #include <boost/make_shared.hpp>
+#include <cmath>
 #include <string>
+#include <vector>
 #include <yaml-cpp/yaml.h>
 
 #include "camodocal/camera_models/PinholeCamera.h"
@@ -21,13 +23,39 @@ bool ReadRectifiedPinhole(const std::string& path, RectPinhole* out, std::string
       *err = path + ": projection_matrix.data is not a 3x4 (12 values) matrix";
       return false;
     }
+    // edie_vision CheckCalibrationData 와 같은 검사 — 빠진 키·틀린 형은 yaml-cpp 예외(아래 catch).
+    const auto K = root["camera_matrix"]["data"].as<std::vector<double>>();
+    const auto D = root["distortion_coefficients"]["data"].as<std::vector<double>>();
+    root["distortion_coefficients"]["cols"].as<int>();
+    const auto R = root["rectification_matrix"]["data"].as<std::vector<double>>();
+    if (K.size() != 9)
+    {
+      *err = path + ": camera_matrix has " + std::to_string(K.size()) + " values (need 9)";
+      return false;
+    }
+    if (D.empty())
+    {
+      *err = path + ": distortion_coefficients is empty";
+      return false;
+    }
+    if (R.size() != 9)
+    {
+      *err = path + ": rectification_matrix has " + std::to_string(R.size()) + " values (need 9)";
+      return false;
+    }
+    // !(x > 0) 로 NaN 도 걸러낸다.
+    if (!(K[0] > 0.0) || !(K[4] > 0.0) || !std::isfinite(K[0]) || !std::isfinite(K[4]))
+    {
+      *err = path + ": camera_matrix fx/fy must be > 0";
+      return false;
+    }
     // P = [fx 0 cx Tx; 0 fy cy 0; 0 0 1 0]
     RectPinhole k;
     k.fx = data[0].as<double>();
     k.cx = data[2].as<double>();
     k.fy = data[5].as<double>();
     k.cy = data[6].as<double>();
-    if (!(k.fx > 0.0) || !(k.fy > 0.0))
+    if (!(k.fx > 0.0) || !(k.fy > 0.0) || !std::isfinite(k.fx) || !std::isfinite(k.fy))
     {
       *err = path + ": fx/fy must be positive";
       return false;

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -71,7 +72,7 @@ int SeverityOf(const std::string& needle)
 
 // readParameters 는 전역에 쌓는다(RIC.push_back) — 시험마다 비우고 다시 읽는다.
 void ReadWith(const std::string& extrinsic_file, const std::string& camera_calib_file = "",
-              bool camera_calib_from_robot = false)
+              bool camera_calib_from_robot = false, const std::string& config_file = kVioYaml)
 {
   RIC.clear();
   TIC.clear();
@@ -81,7 +82,7 @@ void ReadWith(const std::string& extrinsic_file, const std::string& camera_calib
   }
   rclcpp::NodeOptions opts;
   opts.parameter_overrides({
-    rclcpp::Parameter("config_file", kVioYaml),
+    rclcpp::Parameter("config_file", config_file),
     rclcpp::Parameter("vins_folder", kVinsRoot + "/"),
     rclcpp::Parameter("extrinsic_file", extrinsic_file),
     rclcpp::Parameter("camera_calib_file", camera_calib_file),
@@ -201,6 +202,9 @@ TEST(ExtrinsicFileParam, RobotCalibRejectedByTrackerIsErrorNamingFile)
   const std::string calib = WriteTemp(
       "robot_calib_720.yaml",
       "image_width: 1280\nimage_height: 720\n"
+      "camera_matrix:\n  data: [438.3, 0, 310.3, 0, 436.8, 262.3, 0, 0, 1]\n"
+      "distortion_coefficients:\n  rows: 1\n  cols: 5\n  data: [0, 0, 0, 0, 0]\n"
+      "rectification_matrix:\n  data: [1, 0, 0, 0, 1, 0, 0, 0, 1]\n"
       "projection_matrix:\n  data: [401.5, 0, 330.25, 0, 0, 402.5, 260.75, 0, 0, 0, 1, 0]\n");
   ReadWith("", calib, true);
   ASSERT_TRUE(CAMERA_CALIB_OK);
@@ -211,6 +215,44 @@ TEST(ExtrinsicFileParam, RobotCalibRejectedByTrackerIsErrorNamingFile)
   ASSERT_TRUE(tracker.m_camera);
   EXPECT_EQ(tracker.m_camera->imageWidth(), 640);  // vio_edie.yaml 카메라 그대로
   CAMERA_CALIB_OK = false;
+}
+
+TEST(ExtrinsicFileParam, EstimateExtrinsic2StartsFromRobotValue)
+{
+  // estimate_extrinsic: 2 는 config 에서 RIC=I·TIC=0 으로 시작한다. 로봇 파일이 있으면 그 값으로 시작하고,
+  // 회전은 VINS 가 움직임으로 다시 구한다는 WARN 을 남긴다. 모드(2)는 바꾸지 않는다.
+  std::ifstream in(kVioYaml);
+  std::string cfg((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const std::string key = "estimate_extrinsic: 1";
+  const size_t at = cfg.find(key);
+  ASSERT_NE(at, std::string::npos) << "vio_edie.yaml 에 '" << key << "' 가 없다 — 시험을 고쳐야 한다";
+  cfg.replace(at, key.size(), "estimate_extrinsic: 2");
+  const std::string cfg2 = WriteTemp("vio_edie_est2.yaml", cfg);
+
+  ReadWith("", "", false, cfg2);  // 로봇 파일 없음 → 원래 동작(단위 회전·0 이동)
+  ASSERT_EQ(ESTIMATE_EXTRINSIC, 2);
+  EXPECT_TRUE(RIC[0].isApprox(Eigen::Matrix3d::Identity()));
+  EXPECT_TRUE(TIC[0].isZero());
+
+  ReadWith(WriteTemp("robot_extrinsic_est2.yaml", kRobotExtrinsic), "", false, cfg2);
+  Eigen::Matrix3d expect;
+  expect << 0, 0, 1, -1, 0, 0, 0, -1, 0;
+  EXPECT_EQ(ESTIMATE_EXTRINSIC, 2);
+  EXPECT_TRUE(RIC[0].isApprox(expect, 1e-9));
+  EXPECT_TRUE(TIC[0].isApprox(Eigen::Vector3d(0.1, 0.2, 0.3)));
+  EXPECT_EQ(SeverityOf("estimate_extrinsic=2: rotation will be re-calibrated"), RCUTILS_LOG_SEVERITY_WARN);
+}
+
+TEST(ExtrinsicFileParam, RobotExtrinsicWithoutYamlHeaderIsErrorAndConfigValues)
+{
+  const Config c = FromVioYaml();
+  std::string body(kRobotExtrinsic);
+  body = body.substr(std::string("%YAML:1.0\n").size());
+  const std::string path = WriteTemp("robot_extrinsic_no_header.yaml", body);
+  ASSERT_NO_THROW(ReadWith(path));
+  EXPECT_TRUE(RIC[0].isApprox(c.R, 1e-6));
+  EXPECT_TRUE(TIC[0].isApprox(c.t));
+  EXPECT_EQ(SeverityOf("robot extrinsic invalid (" + path + ": "), RCUTILS_LOG_SEVERITY_ERROR);
 }
 
 int main(int argc, char ** argv)

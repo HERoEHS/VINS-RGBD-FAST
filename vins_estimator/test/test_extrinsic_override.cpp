@@ -164,3 +164,15 @@ TEST(ExtrinsicOverride, MissingOrBrokenFileIsRejected)
       WriteTemp("ex_broken.yaml", "%YAML:1.0\nextrinsicRotation: [1, 2\n"), &ex, &err));
   EXPECT_FALSE(err.empty());
 }
+
+TEST(ExtrinsicOverride, FileWithoutYamlHeaderIsRejected)
+{
+  // OpenCV FileStorage 는 "%YAML:1.0" 머리가 없는 yaml 을 "Input file is invalid" 로 못 연다(OpenCV 4.5.4 실측) —
+  // 로봇 파일을 손으로 만들 때 머리를 빠뜨리면 통째로 거부된다(README 에 머리 필수라고 적음).
+  vins_calib::ImuCamExtrinsic ex;
+  std::string err;
+  const std::string body = Body().substr(std::string("%YAML:1.0\n").size());
+  ASSERT_EQ(body.find("%YAML"), std::string::npos);
+  EXPECT_FALSE(vins_calib::ReadImuCamExtrinsic(WriteTemp("ex_no_header.yaml", body), &ex, &err));
+  EXPECT_FALSE(err.empty());
+}

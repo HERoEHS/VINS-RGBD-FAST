@@ -23,6 +23,8 @@ struct RectPinhole
 
 // edie_vision pinhole_*_calib.yaml 의 projection_matrix(3x4, 정류 P)에서 fx·fy·cx·cy 를 읽는다.
 // 파일이 없거나 형식이 틀리거나 fx·fy 가 양수가 아니면 false + err 에 이유(영어 — 로봇 터미널에서 한글이 깨짐).
+// [SW1-1959] 검사는 edie_vision robot_calib_yaml.hpp(ParseCalibrationYaml·CheckCalibrationData)와 같다 —
+// vision 이 버리는 로봇 파일을 VINS 만 쓰면 영상(vision 기본값으로 편 것)과 VINS 카메라 값이 어긋난다. 같이 고친다.
 bool ReadRectifiedPinhole(const std::string& path, RectPinhole* out, std::string* err);
 
 // base(vio_edie.yaml 로 만든 카메라)의 이름·해상도는 그대로 두고, 내부 값만 k 로 바꾼 핀홀(왜곡 0)을 만든다.

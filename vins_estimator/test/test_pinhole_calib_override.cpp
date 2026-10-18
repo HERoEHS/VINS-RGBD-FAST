@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
 
@@ -30,12 +31,16 @@ std::string WriteTemp(const std::string& name, const std::string& body)
   return path;
 }
 
-const char* kCalibBody =
-    "camera_model: \"pinhole\"\n"
-    "camera_matrix:\n  rows: 3\n  cols: 3\n"
-    "  data: [438.3, 0.0, 310.3, 0.0, 436.8, 262.3, 0.0, 0.0, 1.0]\n"
-    "projection_matrix:\n  rows: 3\n  cols: 4\n"
-    "  data: [401.5, 0.0, 330.25, 0.0, 0.0, 402.5, 260.75, 0.0, 0.0, 0.0, 1.0, 0.0]\n";
+// [SW1-1959] edie_vision 이 요구하는 K·D·R(robot_calib_yaml.hpp CheckCalibrationData) — 없으면 VINS 도 버린다.
+#define K_LINE "camera_matrix:\n  rows: 3\n  cols: 3\n  data: [438.3, 0.0, 310.3, 0.0, 436.8, 262.3, 0.0, 0.0, 1.0]\n"
+#define D_LINE "distortion_coefficients:\n  rows: 1\n  cols: 5\n  data: [-0.3, 0.1, 0.001, 0.002, 0.0]\n"
+#define R_LINE "rectification_matrix:\n  rows: 3\n  cols: 3\n  data: [1, 0, 0, 0, 1, 0, 0, 0, 1]\n"
+#define P_LINE \
+  "projection_matrix:\n  rows: 3\n  cols: 4\n" \
+  "  data: [401.5, 0.0, 330.25, 0.0, 0.0, 402.5, 260.75, 0.0, 0.0, 0.0, 1.0, 0.0]\n"
+
+const char* kKdr = K_LINE D_LINE R_LINE;
+const char* kCalibBody = "camera_model: \"pinhole\"\n" K_LINE D_LINE R_LINE P_LINE;
 
 }  // namespace
 
@@ -60,9 +65,43 @@ TEST(PinholeCalibOverride, RejectsBadFiles)
   EXPECT_FALSE(vins_calib::ReadRectifiedPinhole(
       WriteTemp("calib_short.yaml", "projection_matrix:\n  data: [1.0, 2.0]\n"), &k, &err));
   EXPECT_FALSE(vins_calib::ReadRectifiedPinhole(
-      WriteTemp("calib_zero.yaml", "projection_matrix:\n  data: [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0]\n"),
+      WriteTemp("calib_zero.yaml",
+                std::string(kKdr) + "projection_matrix:\n  data: [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0]\n"),
       &k, &err));
+  EXPECT_NE(err.find("fx/fy"), std::string::npos) << err;
   EXPECT_FALSE(vins_calib::ReadRectifiedPinhole(WriteTemp("calib_none.yaml", "foo: 1\n"), &k, &err));
+}
+
+TEST(PinholeCalibOverride, RejectsWhatVisionRejects)
+{
+  // [SW1-1959] edie_vision CheckCalibrationData 와 같은 규칙 — vision 이 버리는 파일은 VINS 도 버린다.
+  vins_calib::RectPinhole k;
+  std::string err;
+  const auto rejects = [&](const char* name, const std::string& body, const char* why) {
+    EXPECT_FALSE(vins_calib::ReadRectifiedPinhole(WriteTemp(name, body), &k, &err)) << name;
+    if (why)
+    {
+      EXPECT_NE(err.find(why), std::string::npos) << name << ": " << err;
+    }
+  };
+  rejects("calib_no_k.yaml", D_LINE R_LINE P_LINE, nullptr);
+  rejects("calib_no_d.yaml", K_LINE R_LINE P_LINE, nullptr);
+  rejects("calib_no_r.yaml", K_LINE D_LINE P_LINE, nullptr);
+  rejects("calib_k8.yaml",
+          "camera_matrix:\n  data: [438.3, 0, 310.3, 0, 436.8, 262.3, 0, 0]\n" D_LINE R_LINE P_LINE, "need 9");
+  rejects("calib_d_empty.yaml",
+          K_LINE "distortion_coefficients:\n  rows: 1\n  cols: 0\n  data: []\n" R_LINE P_LINE, "empty");
+  rejects("calib_d_no_cols.yaml", K_LINE "distortion_coefficients:\n  data: [0.1]\n" R_LINE P_LINE, nullptr);
+  rejects("calib_r4.yaml", K_LINE D_LINE "rectification_matrix:\n  data: [1, 0, 0, 1]\n" P_LINE, "need 9");
+  rejects("calib_k_zero.yaml",
+          "camera_matrix:\n  data: [0, 0, 310.3, 0, 436.8, 262.3, 0, 0, 1]\n" D_LINE R_LINE P_LINE,
+          "camera_matrix fx/fy");
+  rejects("calib_k_nan.yaml",
+          "camera_matrix:\n  data: [.nan, 0, 310.3, 0, 436.8, 262.3, 0, 0, 1]\n" D_LINE R_LINE P_LINE,
+          "camera_matrix fx/fy");
+  rejects("calib_p_inf.yaml",
+          K_LINE D_LINE R_LINE "projection_matrix:\n  data: [.inf, 0, 330, 0, 0, 402, 260, 0, 0, 0, 1, 0]\n",
+          "fx/fy");
 }
 
 TEST(PinholeCalibOverride, KeepsNameAndSizeZeroDistortion)
@@ -123,7 +162,7 @@ TEST(PinholeCalibOverride, SameValuesGiveSameProjectionAsConfig)
   base->writeParameters(p);
   ASSERT_EQ(p.size(), 8u);
   std::ostringstream body;
-  body << std::setprecision(17) << "projection_matrix:\n  data: [" << p[4] << ", 0, " << p[6]
+  body << std::setprecision(17) << kKdr << "projection_matrix:\n  data: [" << p[4] << ", 0, " << p[6]
        << ", 0, 0, " << p[5] << ", " << p[7] << ", 0, 0, 0, 1, 0]\n";
   const std::string calib = WriteTemp("calib_same.yaml", body.str());
   vins_calib::RectPinhole k;
@@ -140,5 +179,25 @@ TEST(PinholeCalibOverride, SameValuesGiveSameProjectionAsConfig)
       cam->liftProjective(Eigen::Vector2d(u, v), b);
       EXPECT_NEAR((a - b).norm(), 0.0, 1e-5) << "u=" << u << " v=" << v;
     }
+  }
+}
+
+TEST(PinholeCalibOverride, RealEdieVisionCalibPassesNewChecks)
+{
+  // [SW1-1959] 더 엄격해진 검사가 실제 저장소 캘리브(edie_vision 기본값)를 버리지 않는지 — 회귀 방지.
+  // 위치는 test_camera_intrinsics_consistency 와 같다(EDIE_VISION_CFG_DIR 로 바꿀 수 있음).
+  const char* env = std::getenv("EDIE_VISION_CFG_DIR");
+  const std::string dir =
+      env ? std::string(env) + "/" : kVinsRoot + "/../../edie_vision/edie_vision/config/gstreamer/";
+  for (const char* name : {"pinhole_left_calib.yaml", "pinhole_right_calib.yaml"})
+  {
+    const std::string path = dir + name;
+    if (!std::ifstream(path).good())
+    {
+      GTEST_SKIP() << "edie_vision 설정 파일 없음(단독 작업공간): " << path;
+    }
+    vins_calib::RectPinhole k;
+    std::string err;
+    EXPECT_TRUE(vins_calib::ReadRectifiedPinhole(path, &k, &err)) << err;
   }
 }
