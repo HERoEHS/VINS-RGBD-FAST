@@ -92,6 +92,7 @@ td: 0.0126   # (선택) 없으면 vio_edie.yaml 값
 
 - VINS 검사(`src/utility/extrinsic_override.cpp`): 두 행렬이 다 있고 크기가 3x3·3x1, 값이 유한, 회전이 직교(det≈1, RᵀR≈I, 허용 1e-3)여야 쓴다. 하나라도 틀리면 **파일 전체를 버리고** ERROR `robot extrinsic invalid (<경로>: <이유>) - using config_file values` 뒤 `vio_edie.yaml` 값으로 계속 간다(죽지 않음). `td` 는 있을 때만 덮는다.
 - 로봇 카메라 캘리브 검사는 edie_vision(`robot_calib_yaml.hpp` CheckCalibrationData)과 같다: `camera_matrix` 9개·`distortion_coefficients`(cols 포함) 비지 않음·`rectification_matrix` 9개·`projection_matrix` 12개, K·P 의 fx·fy 가 양수이고 유한. vision 이 버리는 파일은 VINS 도 버린다.
+- 해상도(`image_width`·`image_height`)가 `vio_edie.yaml` 과 다른 캘리브는 **VINS 만** 버린다(ERROR `robot calib invalid ... calib resolution ...`) — vision·도킹·depth probe 는 해상도를 보지 않으니, 해상도가 틀린 로봇 파일은 그쪽에서는 그대로 쓰인다.
 - launch 는 로봇 파일이 **있는지만** 본다. 내용 검사는 VINS 가 한다 — 로봇 `camera/` 캘리브가 틀렸으면(못 읽음·해상도 다름) ERROR `robot calib invalid (<경로>: <이유>) - using config_file values`(launch 가 `camera_calib_from_robot:=true` 로 출처를 알려 줌). 이미지 기본 캘리브가 틀린 경우는 예전처럼 WARN `camera calib not applied`.
 - 첫 줄 `%YAML:1.0` 은 **필수**다 — 빠지면 OpenCV 가 파일을 못 열어 ERROR `robot extrinsic invalid` 후 `vio_edie.yaml` 값으로 간다.
 - ⚠️ `pose_graph`(루프 클로저, `loop_closure: 1`)는 아직 `config_file` 의 외부값을 직접 읽는다(`pose_graph_nodelet.cpp`) — 로봇 `extrinsic.yaml` 을 보지 않는다. edie launch 는 pose_graph 를 띄우지 않지만, 켤 때는 같은 덮어쓰기를 넣어야 한다.

@@ -18,18 +18,15 @@
 #include <string>
 #include <vector>
 
+#include "edie_vision_cfg_dir.h"
+
 namespace
 {
 
 const std::string kVinsRoot = VINS_SOURCE_ROOT;  // CMake 가 주입 (VINS-RGBD-FAST 루트)
 const std::string kVioYaml = kVinsRoot + "/config/elp_stereo_edie/vio_edie.yaml";
-// edie9 저장소 배치: edie9/edie_localization/VINS-RGBD-FAST ↔ edie9/edie_vision/edie_vision
-// task 작업공간처럼 edie_vision 이 옆에 없을 때는 EDIE_VISION_CFG_DIR 로 경로를 지정할 수 있다.
-const std::string kVisionCfg = [] {
-  const char* env = std::getenv("EDIE_VISION_CFG_DIR");
-  return env ? std::string(env) + "/"
-             : kVinsRoot + "/../../edie_vision/edie_vision/config/gstreamer/";
-}();
+// edie_vision 설정 폴더 — 찾는 순서는 edie_vision_cfg_dir.h(환경변수 EDIE_VISION_CFG_DIR → 소스 트리 → ament share).
+const std::string kVisionCfg = vins_test::EdieVisionCfgDir(kVinsRoot);
 
 struct Intrinsics
 {

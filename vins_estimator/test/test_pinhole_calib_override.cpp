@@ -4,7 +4,6 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
-#include <cstdlib>
 #include <fstream>
 #include <string>
 
@@ -16,6 +15,7 @@
 #include "camodocal/camera_models/CameraFactory.h"
 #include "camodocal/camera_models/CataCamera.h"
 #include "camodocal/camera_models/PinholeCamera.h"
+#include "edie_vision_cfg_dir.h"
 #include "utility/pinhole_calib_override.h"
 
 namespace
@@ -185,10 +185,8 @@ TEST(PinholeCalibOverride, SameValuesGiveSameProjectionAsConfig)
 TEST(PinholeCalibOverride, RealEdieVisionCalibPassesNewChecks)
 {
   // [SW1-1959] 더 엄격해진 검사가 실제 저장소 캘리브(edie_vision 기본값)를 버리지 않는지 — 회귀 방지.
-  // 위치는 test_camera_intrinsics_consistency 와 같다(EDIE_VISION_CFG_DIR 로 바꿀 수 있음).
-  const char* env = std::getenv("EDIE_VISION_CFG_DIR");
-  const std::string dir =
-      env ? std::string(env) + "/" : kVinsRoot + "/../../edie_vision/edie_vision/config/gstreamer/";
+  // 찾는 순서는 test_camera_intrinsics_consistency 와 같다(edie_vision_cfg_dir.h).
+  const std::string dir = vins_test::EdieVisionCfgDir(kVinsRoot);
   for (const char* name : {"pinhole_left_calib.yaml", "pinhole_right_calib.yaml"})
   {
     const std::string path = dir + name;

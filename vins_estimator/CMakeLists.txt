@@ -266,6 +266,7 @@ if(BUILD_TESTING)
     VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_include_directories(test_camera_intrinsics_consistency PRIVATE ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(test_camera_intrinsics_consistency ${OpenCV_LIBS})
+  ament_target_dependencies(test_camera_intrinsics_consistency ament_index_cpp)
 
   # [SW1-1962] VINS 가 edie_vision 캘리브(정류 P)를 직접 읽어 만든 카메라 = vio_edie.yaml 카메라와 같은 투영
   ament_add_gtest(test_pinhole_calib_override test/test_pinhole_calib_override.cpp
@@ -273,7 +274,7 @@ if(BUILD_TESTING)
   target_compile_definitions(test_pinhole_calib_override PRIVATE
     VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_include_directories(test_pinhole_calib_override PRIVATE ${OpenCV_INCLUDE_DIRS} ${EIGEN3_INCLUDE_DIR})
-  ament_target_dependencies(test_pinhole_calib_override camera_model)
+  ament_target_dependencies(test_pinhole_calib_override camera_model ament_index_cpp)
   target_link_libraries(test_pinhole_calib_override ${OpenCV_LIBS} ${VINS_YAML_CPP_TARGET})
 
   # [SW1-1959] 로봇별 카메라–IMU 외부값(vins/extrinsic.yaml) 읽기·검사 — 형식 틀리면 통째로 무시
