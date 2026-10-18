@@ -78,7 +78,8 @@ projection_parameters:
 # R_imu_cam = R_cam_imu^T  (Kalibr T_cam_imu 상단 3x3 전치)
 # t_imu_cam = -R_imu_cam * t_cam_imu
 # [SW1-1959] 아래 extrinsicRotation·extrinsicTranslation(·td)는 이미지 기본값이다. 로봇마다 다른 값은
-#   <로봇 설정 폴더>/vins/extrinsic.yaml(root → /var/lib/edie/config, 그 밖 → ~/.config/edie)이 덮어쓴다(edie_vslam.launch.py).
+#   <로봇 설정 폴더>/vins/extrinsic.yaml(root → /var/lib/edie/config, 그 밖 → ~/.config/edie)에 있으면 VINS 가 그 값을 대신 쓴다
+#   (메모리에서만 — 이 파일도 그 파일도 디스크에서는 안 바뀐다, edie_vslam.launch.py).
 estimate_extrinsic: 1   # 1 = 초기값 후 온라인 미세조정(설계 의도). 0 고정 실험은 발산에 무효 → 1 원복.
 extrinsicRotation: !!opencv-matrix
    rows: 3

@@ -37,7 +37,7 @@ ros2 launch vins_estimator gate1_klt.launch.py bag:=/path/to/rosbag2_dir rate:=1
 | `config_file` | `/opt/edie/current/share/vins_estimator/config/elp_stereo_edie/vio_edie.yaml` (그 파일이 있을 때), 없으면 `<share>/vins_estimator/config/elp_stereo_edie/vio_edie.yaml` | estimator config 절대경로. 파일마다 **/opt/edie 우선 → 패키지 share**(설치본) — 소스 트리가 없는 로봇·상품 Yocto 에서도 뜬다 (SW1-1948, SW1-1959) |
 | `vins_folder` | **기본** `config_file` 의 루트(`.../vins_estimator/`, 끝 `/`) — `config_file:=` 로 다른 파일을 넘겨도 따라가지 않으니 필요하면 같이 넘긴다 | 코드가 `config/` 를 이어붙임(fisheye mask, `fisheye: 0` 이면 안 씀) |
 | `use_vision_calib` | `true` | **edie_vslam.launch.py 만.** edie_vision 캘리브 파일 경로를 VINS 파라미터 `camera_calib_file` 로 넘기고, VINS 가 시작할 때 그 파일의 정류 P 에서 `fx·fy·cx·cy` 를 **직접** 읽는다(사본·`/tmp` 파일 없음). 캘리브는 vision 과 같은 규칙으로 찾는다 — 로봇 설정 폴더 `camera/<left.calibration_file>` 먼저, 없으면 `camera_v4l2.yaml`(`/opt/edie` 우선) 옆 `left.calibration_file`(아래 "로봇별 캘리브 찾는 순서"). 로봇별 캘리브를 바꾸면 재시작만으로 반영. `left.use_undistort` 가 true 가 아니거나 캘리브를 못 읽으면 `vio_edie.yaml` 값 + WARN. `false` 면 끔. ⚠️ **bag 재생**은 녹화한 로봇이 아니라 이 PC 의 캘리브가 들어가므로, 다른 로봇 bag 이면 `use_vision_calib:=false` 또는 그 로봇 캘리브를 쓴다 (SW1-1962) |
-| `use_robot_extrinsic` | `true` | **edie_vslam.launch.py 만.** 로봇 설정 폴더의 `vins/extrinsic.yaml` 이 있으면 그 경로를 VINS 파라미터 `extrinsic_file` 로 넘긴다 — VINS 가 `config_file` 을 다 읽은 뒤 `extrinsicRotation`·`extrinsicTranslation`(·`td`)를 그 값으로 덮는다. 없으면 `''` + ERROR 로그(이미지 기본값 = `vio_edie.yaml` 값). `false` 면 끔 (SW1-1959) |
+| `use_robot_extrinsic` | `true` | **edie_vslam.launch.py 만.** 로봇 설정 폴더의 `vins/extrinsic.yaml` 이 있으면 그 경로를 VINS 파라미터 `extrinsic_file` 로 넘긴다 — VINS 가 `config_file` 을 다 읽은 뒤 `extrinsicRotation`·`extrinsicTranslation`(·`td`)는 그 파일 값을 대신 쓴다(메모리에서만 — 두 파일 모두 디스크에서는 안 바뀐다). 없으면 `''` + ERROR 로그(이미지 기본값 = `vio_edie.yaml` 값). `false` 면 끔 (SW1-1959) |
 | `bag` | (빈값) | 주면 `ros2 bag play` 자동 실행 |
 | `rate` | `1.0` | bag 재생 배속 |
 | `rqt` | `true` | rqt_image_view 자동 실행 |
@@ -70,6 +70,7 @@ ros2 launch vins_estimator gate1_klt.launch.py bag:=/path/to/rosbag2_dir rate:=1
 - 파일 **이름**(`left.calibration_file`)과 `use_undistort` 는 지금처럼 `camera_v4l2.yaml`(/opt 우선)에서 읽는다 — 본체는 옮기지 않는다.
 - 로봇 파일을 쓰면 INFO `robot calib: <경로>`, 없어서 이미지 기본값을 쓰면 기동 때 ERROR `robot calib not found (<찾아본 경로>) - ... (not this robot's calibration)` 한 번. 시작은 거부하지 않는다.
 - 폴더(`camera/`·`vins/`)가 없으면 **빈 폴더만** 만든다. 기본값을 복사해 넣지 않는다(남의 값이 "이 로봇 캘리브"인 척하게 됨).
+- `vins/extrinsic.yaml` 은 **읽기만** 한다 — VINS·도킹 누구도 이 파일에 쓰지 않고, 이미지 업데이트로 `vio_edie.yaml` 이 바뀌어도 그대로 남는다(사람이 캘리브를 채택할 때만 바꾼다).
 - `vins/extrinsic.yaml` 형식 — `vio_edie.yaml` 과 같은 OpenCV FileStorage:
 
 ```yaml
@@ -90,10 +91,10 @@ extrinsicTranslation: !!opencv-matrix  # t_imu_cam [m]
 td: 0.0126   # (선택) 없으면 vio_edie.yaml 값
 ```
 
-- VINS 검사(`src/utility/extrinsic_override.cpp`): 두 행렬이 다 있고 크기가 3x3·3x1, 값이 유한, 회전이 직교(det≈1, RᵀR≈I, 허용 1e-3)여야 쓴다. 하나라도 틀리면 **파일 전체를 버리고** ERROR `robot extrinsic invalid (<경로>: <이유>) - using config_file values` 뒤 `vio_edie.yaml` 값으로 계속 간다(죽지 않음). `td` 는 있을 때만 덮는다.
+- VINS 검사(`src/utility/extrinsic_override.cpp`): 두 행렬이 다 있고 크기가 3x3·3x1, 값이 유한, 회전이 직교(det≈1, RᵀR≈I, 허용 1e-3)여야 쓴다. 하나라도 틀리면 **파일 전체를 버리고** ERROR `robot extrinsic invalid (<경로>: <이유>) - using config_file values` 뒤 `vio_edie.yaml` 값으로 계속 간다(죽지 않음). `td` 는 있을 때만 대신 쓴다.
 - 로봇 카메라 캘리브 검사는 edie_vision(`robot_calib_yaml.hpp` CheckCalibrationData)과 같다: `camera_matrix` 9개·`distortion_coefficients`(cols 포함) 비지 않음·`rectification_matrix` 9개·`projection_matrix` 12개, K·P 의 fx·fy 가 양수이고 유한. vision 이 버리는 파일은 VINS 도 버린다.
 - 해상도(`image_width`·`image_height`)가 `vio_edie.yaml` 과 다른 캘리브는 **VINS 만** 버린다(ERROR `robot calib invalid ... calib resolution ...`) — vision·도킹·depth probe 는 해상도를 보지 않으니, 해상도가 틀린 로봇 파일은 그쪽에서는 그대로 쓰인다.
-- VINS 는 vision 보다 하나 더 본다: K·D·R·P **값 전부**가 유한해야 한다(NaN cx·cy 도 거부).
+- K·D·R·P **값 전부**가 유한해야 한다(NaN cx·cy 도 거부) — vision·도킹·depth probe·launch 도 같은 기준이다.
 - launch 는 로봇 파일이 **있는지만** 본다. 내용 검사는 VINS 가 한다. 로봇 `camera/` 파일을 고르면 launch 가 `camera_calib_from_robot:=true` 와 이미지 기본 파일(`camera_v4l2.yaml` 옆 같은 이름, `camera_calib_default_file`)을 함께 넘기고, VINS 는 vision·도킹·probe 와 같은 순서로 물러선다:
   1. 로봇 파일 — 못 읽거나 카메라 모델로 못 쓰면(해상도 다름 등) ERROR `robot calib invalid (<경로>: <이유>) - using image default <기본 파일>`
   2. 이미지 기본 파일 — 이것도 못 쓰면 WARN `camera calib not applied (...) - using config_file values` (기본 파일이 없으면 1번 ERROR 가 `- using config_file values` 로 끝남)
