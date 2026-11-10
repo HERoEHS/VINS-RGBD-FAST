@@ -28,6 +28,7 @@
 #include "../utility/warmup_init_gate.h"
 #include "../utility/depth_adopt_probe.h"
 #include "../utility/reboot_seed.h"   // [SW1-1936] BridgeSnap·MotionGatedYaw 멤버
+#include "../utility/hf_image_gate.h"
 #include <cstdlib>
 #include "../factor/marginalization_factor.h"
 #include "../factor/pose_local_parameterization.h"
@@ -74,6 +75,10 @@ public:
     //   보면 즉시 반환, 백엔드 스레드가 다음 프레임 전에 자기 잠금 아래에서 clearState. 콜백에서 m_backend를 잡으면
     //   백엔드가 IMU를 기다리며 잠금을 쥔 상태라 교착(09-04 GON 1차 실증).
     std::atomic<bool> reset_request_{false};
+    // [SW1-1959 도킹 위치 나이] 마지막 영상 수신 시각 — 트래커 스레드가 쓰고 inputIMU(콜백 스레드)가 읽는다.
+    //   clearState 에서 지우지 않는다: 재시작 직후 "아직 못 받음"으로 돌아가면 차단이 풀려 버린다.
+    std::atomic<hf_image_gate::TimePoint> last_image_arrival_{hf_image_gate::kNoImageYet};
+    hf_image_gate::CutTracker             hf_cut_;  // 콜백 스레드 전용(rclcpp::spin 단일 스레드)
     // [SW1-1883] 창 분단 판정(진단) — 슬롯 1..frame_count 중 IMU 사전적분 sum_dt가 max_dt_s를 넘는 첫 슬롯(없으면 -1).
     //   양수면 최적화·marg가 그 구간 factor를 빼서 창이 끊긴 상태. MARG-GUARD 로그 정보용.
     int  preintGapSlot(double max_dt_s) const;

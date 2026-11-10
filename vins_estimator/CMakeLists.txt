@@ -253,6 +253,9 @@ if(BUILD_TESTING)
   # [SW1-1883 후속] IMU/휠 스탬프 간극 판정 — 헤더 단독 순수 함수 테스트
   ament_add_gtest(test_imu_gap test/test_imu_gap.cpp)
 
+  # [SW1-1959] 영상 끊김 시 HF 발행 중단 판정 — 헤더 단독 순수 함수 테스트
+  ament_add_gtest(test_hf_image_gate test/test_hf_image_gate.cpp)
+
   # [SW1-1964] 영상 속도 제한기 — 재시작 때 시간 기준·받은 사진 수 함께 리셋(재시작 뒤 영구 정지 재발 방지)
   ament_add_gtest(test_frontend_rate_limiter test/test_frontend_rate_limiter.cpp)
   target_compile_definitions(test_frontend_rate_limiter PRIVATE
@@ -295,6 +298,11 @@ if(BUILD_TESTING)
   target_compile_definitions(test_extrinsic_file_param PRIVATE
     VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_link_libraries(test_extrinsic_file_param vins_lib)
+  # [SW1-1959] hf_image_timeout_s 읽기(기본값·끔·음수) + inputIMU 가 끊김 때 발행만 건너뛰는지 — 실물 Estimator 연결부
+  ament_add_ros_isolated_gtest(test_hf_image_gate_wiring test/test_hf_image_gate_wiring.cpp)
+  target_compile_definitions(test_hf_image_gate_wiring PRIVATE
+    VINS_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+  target_link_libraries(test_hf_image_gate_wiring vins_lib)
 
   # [SW1-1948] 설치본(share)에 config 가 실제로 들어가고 launch 기본값이 그 파일을 가리키는지 — colcon test 는 install 뒤라 share 를 직접 본다
   find_package(ament_cmake_pytest REQUIRED)

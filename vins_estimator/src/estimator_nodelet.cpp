@@ -156,6 +156,10 @@ private:
 
     bool   first_image_flag = true;
     FrontendRateLimiter rate_limiter_;  // [SW1-1964] 시간 기준·받은 사진 수를 한 몸으로(restart 로만 기준 변경)
+    // [SW1-1959 진단] B2 지점 도착 간격 최대값 — 트래커 스레드 전용(잠금 불필요). 동작에는 영향 없음.
+    hf_image_gate::TimePoint arrival_gap_prev_{hf_image_gate::kNoImageYet};
+    hf_image_gate::TimePoint arrival_gap_window_start_{hf_image_gate::kNoImageYet};
+    double                   arrival_gap_max_s_{0.0};
     double last_image_time  = 0;
     int    pub_count        = 1;
 
@@ -198,6 +202,29 @@ private:
         estimator.reset_request_ = false;  // clearState 뒤 → 이후는 INITIAL이 예측 게이트를 막는다
         tracker_reset_request_ = true;
         return true;
+    }
+
+    // [SW1-1959 진단] 설계 §6 로봇 측정용(합격선 max < 0.8 s): bag 으로는 못 재는 트래커 큐 지연까지 포함한
+    //   "영상 도착 간격"의 60 s 최대값을 INFO 로 남긴다. 프레임이 와야 찍히므로 끊긴 동안은 조용하고,
+    //   복귀 뒤 첫 갱신 때 그 공백까지 포함해 나온다.
+    void noteArrivalGap(hf_image_gate::TimePoint now)
+    {
+        static constexpr double kLogPeriodS = 60.0;
+        if (arrival_gap_prev_ == hf_image_gate::kNoImageYet)
+        {
+            arrival_gap_prev_         = now;
+            arrival_gap_window_start_ = now;
+            return;
+        }
+        arrival_gap_max_s_ = std::max(arrival_gap_max_s_,
+                                      std::chrono::duration<double>(now - arrival_gap_prev_).count());
+        arrival_gap_prev_  = now;
+        if (std::chrono::duration<double>(now - arrival_gap_window_start_).count() >= kLogPeriodS)
+        {
+            RCLCPP_INFO(get_logger(), "[HF-GATE] 최근 60 s 영상 수신 간격 최대 %.3f s", arrival_gap_max_s_);
+            arrival_gap_max_s_        = 0.0;
+            arrival_gap_window_start_ = now;
+        }
     }
 
     void imu_callback(const sensor_msgs::msg::Imu::ConstSharedPtr &imu_msg)
@@ -412,6 +439,10 @@ private:
                     while (!feature_buf.empty()) feature_buf.pop();
                     m_feature.unlock();
                     m_backend.lock();
+                    // [SW1-1959 B5] 이 경로에도 시드(직전 위치 물려주기) — 없으면 재시작 뒤 좌표가 어긋난다
+                    //   (:190 GAP-RESET 경로 실측 0.21 m). 재생 시험 결과가 나쁘면 이 두 줄만 뺀다.
+                    if (USE_REBOOT_POSE_SEED && estimator.solver_flag == Estimator::NON_LINEAR)
+                        estimator.captureRebootSeed(estimator.Headers[estimator.frame_count]);
                     estimator.clearState();
                     estimator.setParameter();
                     m_backend.unlock();
@@ -420,6 +451,13 @@ private:
                     wheel_gate_.requestRebase();
                     continue;
                 }
+
+                // [SW1-1959 도킹 위치 나이] 불연속 검사를 통과한 프레임만 "살아 있음"으로 센다. 복귀 첫 프레임(위 재시작)과
+                //   둘째(first_image_flag)는 갱신하지 않아 clearState 전까지 낡은 값이 발행을 막는다. 제한기 앞이라
+                //   건너뛴 프레임도 센다(건너뛰었다고 카메라가 죽은 건 아니다).
+                const hf_image_gate::TimePoint arrival_now = hf_image_gate::Clock::now();
+                estimator.last_image_arrival_.store(arrival_now);
+                noteArrivalGap(arrival_now);
 
                 if (!rate_limiter_.admit(time_color, FRONTEND_FREQ))
                 {

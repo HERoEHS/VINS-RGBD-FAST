@@ -3915,7 +3915,35 @@ void Estimator::inputIMU(double t, const Vector3d &linearAcceleration,
         Vector3d net_p = Vector3d::Zero();
         Matrix3d net_R = Matrix3d::Identity();
         displayTransform(net_p, net_R);
-        pubLatestOdometry(pub_P, Quaterniond(pub_R), Vector3d(net_R * latest_V), t);
+        // [SW1-1959 도킹 위치 나이] 영상이 끊기면 발행만 멈춘다 — 표류 위치에 새 시각을 찍어 내보내면 도킹의
+        //   나이 검사를 통과해 버린다. predict 는 계속 돌려 복귀(재시작 없는 경우) 때 값이 이어지게 한다.
+        //   NON_LINEAR 안에서만 판정하므로 "복귀" 경고는 재초기화가 끝나 발행이 실제로 재개될 때 찍힌다.
+        const hf_image_gate::TimePoint now          = hf_image_gate::Clock::now();
+        const hf_image_gate::TimePoint last_arrival = last_image_arrival_.load();
+        const bool fresh = hf_image_gate::hfImageFresh(now, last_arrival, HF_IMAGE_TIMEOUT_S);
+        const double gap_s = std::chrono::duration<double>(now - last_arrival).count();
+        switch (hf_cut_.update(fresh, now))
+        {
+        case hf_image_gate::CutEvent::kCut:
+            RCLCPP_WARN(rclcpp::get_logger("vins_hf_gate"),
+                        "[HF-GATE] 영상 끊김: 공백 %.2f s(상한 %.1f s) → imu_propagate·HF TF 발행 중단(누적 %ld회)",
+                        gap_s, HF_IMAGE_TIMEOUT_S, hf_cut_.cutCount());
+            break;
+        case hf_image_gate::CutEvent::kStillCut:
+            RCLCPP_WARN(rclcpp::get_logger("vins_hf_gate"),
+                        "[HF-GATE] 영상 끊김 지속: 공백 %.1f s, 건너뛴 발행 누적 %ld개", gap_s,
+                        hf_cut_.blockedSamples());
+            break;
+        case hf_image_gate::CutEvent::kRecovered:
+            RCLCPP_WARN(rclcpp::get_logger("vins_hf_gate"),
+                        "[HF-GATE] 영상 복귀: 발행 재개(%.1f s 동안 중단, 건너뛴 발행 누적 %ld개)",
+                        hf_cut_.cutDurationS(now), hf_cut_.blockedSamples());
+            break;
+        case hf_image_gate::CutEvent::kNone:
+            break;
+        }
+        if (fresh)
+            pubLatestOdometry(pub_P, Quaterniond(pub_R), Vector3d(net_R * latest_V), t);
     }
 }
 

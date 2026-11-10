@@ -88,6 +88,7 @@ double PREINT_MAX_DT_S        = 10.0;  // [SW1-1883] 사전적분 구간 게이�
 double KEYFRAME_FORCE_PREINT_DT_S = 0.0;  // [SW1-1883 후속] 슬롯 적분 상한 강제 키프레임(0=끔 — 동작 불변 기본)
 double IMU_GAP_MAX_S   = 1.0;  // [SW1-1883 후속] IMU 스탬프 간극 가드(이미지 불연속 가드와 같은 1 s)
 double WHEEL_GAP_MAX_S = 0.0;  // [SW1-1883 후속] 휠 스탬프 간극 가드(기본 끔 — 녹화 중 CM 정지 오탐 회피)
+double HF_IMAGE_TIMEOUT_S = 1.0;  // [SW1-1959] 영상 끊김 시 HF 발행 중단(이미지 불연속 가드와 같은 1 s)
 double POS_SLIDE_GUARD_THRESH = 0.05;
 double YAW_SLIDE_GUARD_STILL_THRESH = 0.1 * M_PI / 180.0;
 double POS_SLIDE_GUARD_STILL_THRESH = 0.005;
@@ -803,6 +804,13 @@ void readParameters(rclcpp::Node* node)
     if (WHEEL_GAP_MAX_S < 0.0) WHEEL_GAP_MAX_S = 0.0;
     RCLCPP_INFO(node->get_logger(), "IMU_GAP_MAX_S: %.1f s (%s) / WHEEL_GAP_MAX_S: %.1f s (%s) — 스탬프 점프 시 추정기 재시작",
                 IMU_GAP_MAX_S, IMU_GAP_MAX_S > 0.0 ? "활성" : "끔", WHEEL_GAP_MAX_S, WHEEL_GAP_MAX_S > 0.0 ? "활성" : "끔");
+
+    // ===== [SW1-1959 도킹 위치 나이] 영상 끊김 시 HF 발행 중단 — 조건문 밖 =====
+    //   키가 없으면 켠다(1.0): 로봇 /opt 사본 yaml 에 키가 없어도 안전 쪽으로 동작해야 한다.
+    HF_IMAGE_TIMEOUT_S = fsSettings["hf_image_timeout_s"].empty() ? 1.0 : (double)fsSettings["hf_image_timeout_s"];
+    if (HF_IMAGE_TIMEOUT_S < 0.0) HF_IMAGE_TIMEOUT_S = 0.0;
+    RCLCPP_INFO(node->get_logger(), "HF_IMAGE_TIMEOUT_S: %.2f s (%s) — 영상 수신 공백이 이 값을 넘으면 imu_propagate·HF TF 발행 중단",
+                HF_IMAGE_TIMEOUT_S, HF_IMAGE_TIMEOUT_S > 0.0 ? "활성" : "끔");
 
     // ===== failureDetection 문턱 (SW1-1866 08-10, R1) =====
     //   ⚠️어떤 조건문 안에도 넣지 않는다 — 과거 정지 판정이 조건부 로드되는 남의 파라미터
