@@ -62,6 +62,12 @@ camera_name: camera
 image_width: 640
 image_height: 480
 
+# [SW1-1962·SW1-1959] 아래 distortion_parameters·projection_parameters 는 맨 마지막 예비값이다(옛 카메라 로봇 한 대의 값).
+#   edie_vslam.launch.py 로 띄우면 VINS 는 카메라 보정 파일의 projection_matrix(편 영상의 fx·fy·cx·cy, 왜곡 0)를 직접 읽는다.
+#   읽는 순서: ① 로봇 설정 폴더 camera/pinhole_left_calib.yaml (root → /var/lib/edie/config, 그 밖 → ~/.config/edie)
+#             ② edie_vision 패키지에 든 같은 이름의 기본 파일(ERROR 한 번)  ③ 둘 다 못 읽을 때만 아래 숫자.
+#   보정 파일 해상도가 위 image_width·image_height 와 다르면 그 파일은 쓰지 않는다.
+#   실제로 어느 값이 쓰였는지는 시작 로그의 "robot calib" 줄로 확인한다. 로봇 값을 여기에 적지 않는다.
 distortion_parameters:
    k1: 0.0
    k2: 0.0
@@ -142,6 +148,11 @@ estimate_td: 1          # 1 = 온라인 추정(설계 의도, 초기값 12.66ms)
 td: 0.012655922077
 
 #rolling shutter (ELP stereo: global shutter)
+# [SW1-1966] 새 롤링셔터 카메라(USB 32e4:0035)에서도 둘 다 0 으로 둔다 — 영상을 "한 순간에 찍힌 것"으로 쓰는 방식이라서다.
+#   1 로 켜면 VINS 가 줄마다 다른 시각을 계산에 넣는다(projection_td_factor.cpp). edie_vision 의 영상 펴기 보정
+#   (camera_v4l2.yaml rolling_shutter.enabled)과 함께 켜면 두 번 고치게 되므로 같이 켜지 않는다.
+#   0 일 때 rolling_shutter_tr 은 읽지 않는다. 켠다면 화면 전체 읽기 시간(초, 새 카메라 0.0644)이며, 재생 시험은 아직 없다.
+#   이 방식에서 맞춰야 하는 값은 위 td 다 — 영상의 대표 시각이 가운데 줄이라 새 카메라는 약 35 ms(로봇 설정 폴더 파일에).
 rolling_shutter: 0
 rolling_shutter_tr: 0.0
 
