@@ -9,6 +9,9 @@
 **/__pycache__/
 *.py[cod]
 
+# 손으로 만든 백업 사본(예: vio_edie.yaml.bak) — PC 에만 둔다
+*.bak
+
 .omc/
 .bkit/
 .claude/

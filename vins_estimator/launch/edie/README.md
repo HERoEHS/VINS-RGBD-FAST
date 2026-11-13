@@ -67,6 +67,7 @@ ros2 launch vins_estimator gate1_klt.launch.py bag:=/path/to/rosbag2_dir rate:=1
 | 카메라 내부 값(정류 P) | `camera/<left.calibration_file>` | `camera_v4l2.yaml`(`/opt` 우선) 옆의 같은 이름 파일 | `camera_calib_file` |
 | 카메라–IMU 외부값(·td) | `vins/extrinsic.yaml` | `config_file`(`vio_edie.yaml`)의 `extrinsicRotation`·`extrinsicTranslation`·`td` | `extrinsic_file` (없으면 `''`) |
 
+- `vio_edie.yaml` 의 기본 외부값은 **URDF 설계값**이다(2026-11-13, #SW1-1966 — 광축 수평 위 35°, 좌우·기울기 0). 어느 로봇에서 잰 값이 아니며, 로봇에서 잰 값(Kalibr 등)은 `vins/extrinsic.yaml` 에만 둔다. 그 전 기본값은 옛 카메라 한 대의 부정확한 보정(설계값에서 5.6°·2.9 cm)이었다 — 숫자는 `vio_edie.yaml` 주석에 남겼다. 기본 `td`(12.66 ms)는 옛 카메라 값 그대로이고, 새 롤링셔터 카메라(약 35 ms)는 로봇 파일의 `td` 로 준다. 도킹(`edie_station_docking`)은 이 기본값을 **빌드 때** 뽑아 가므로 값이 바뀌면 도킹도 다시 빌드해야 한다.
 - 파일 **이름**(`left.calibration_file`)과 `use_undistort` 는 지금처럼 `camera_v4l2.yaml`(/opt 우선)에서 읽는다 — 본체는 옮기지 않는다.
 - 로봇 파일을 쓰면 INFO `robot calib: <경로>`, 없어서 이미지 기본값을 쓰면 기동 때 ERROR `robot calib not found (<찾아본 경로>) - ... (not this robot's calibration)` 한 번. 시작은 거부하지 않는다.
 - 폴더(`camera/`·`vins/`)가 없으면 **빈 폴더만** 만든다. 기본값을 복사해 넣지 않는다(남의 값이 "이 로봇 캘리브"인 척하게 됨).

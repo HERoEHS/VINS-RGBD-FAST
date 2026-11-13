@@ -80,19 +80,28 @@ projection_parameters:
 # [SW1-1959] 아래 extrinsicRotation·extrinsicTranslation(·td)는 이미지 기본값이다. 로봇마다 다른 값은
 #   <로봇 설정 폴더>/vins/extrinsic.yaml(root → /var/lib/edie/config, 그 밖 → ~/.config/edie)에 있으면 VINS 가 그 값을 대신 쓴다
 #   (메모리에서만 — 이 파일도 그 파일도 디스크에서는 안 바뀐다, edie_vslam.launch.py).
+# [SW1-1966, 2026-11-13] 기본값 = URDF 설계값(edie_description: 광축이 수평 위 35° 로 들림, 좌우·기울기 0).
+#   어느 로봇에서 잰 값이 아니다 — 모든 로봇 공통 출발값이고, 로봇에서 잰 값(Kalibr 등)은 위 로봇 설정 폴더 파일에만 둔다.
+#   edie_jig push_robot_calib.py 의 URDF_EXTRINSIC_R/T 와 같은 숫자다(한쪽을 바꾸면 같이 바꾼다 — test_default_extrinsic_urdf.py).
+#   실제로 어느 값이 쓰였는지는 시작 로그로 확인: 로봇 파일이면 "robot extrinsic applied <- ...", 없으면 ERROR "robot calib not found ...".
+#   옛 기본값(~2026-11-13, 옛 카메라 한 대의 Kalibr best_so_far — 재투영 35 px, 설계값에서 5.6°·2.9 cm):
+#     R = 0.06190178 0.59267346 0.80306061 / -0.9955198 -0.02095485 0.09220204 / 0.07147371 -0.80517021 0.58872102
+#     t = 0.1866642923 0.0206996488 -0.0955281329
+#   주의: edie_station_docking 이 빌드 때 아래 두 블록을 글자 무늬로 뽑아 간다(cmake/extract_extrinsic.cmake) —
+#     이 주석들에는 키 이름 뒤 쌍점이나 대괄호를 쓰지 않는다.
 estimate_extrinsic: 1   # 1 = 초기값 후 온라인 미세조정(설계 의도). 0 고정 실험은 발산에 무효 → 1 원복.
 extrinsicRotation: !!opencv-matrix
    rows: 3
    cols: 3
    dt: d
-   data: [ 0.0619017800,  0.5926734600,  0.8030606100,
-          -0.9955198000, -0.0209548500,  0.0922020400,
-           0.0714737100, -0.8051702100,  0.5887210200]
+   data: [ 0.0000000000,  0.5736049112,  0.8191321052,
+          -1.0000000000,  0.0000000000,  0.0000000000,
+           0.0000000000, -0.8191321052,  0.5736049112]
 extrinsicTranslation: !!opencv-matrix
    rows: 3
    cols: 1
    dt: d
-   data: [0.1866642923, 0.0206996488, -0.0955281329]
+   data: [0.1701666000, 0.0297000000, -0.0739434000]
 
 #feature tracker parameters
 max_cnt: 150     # 게이트② 관점에선 max_cnt↑ = CPU↑ → 오히려 불리
@@ -127,6 +136,8 @@ gyr_w: 0.000020782226   # gyroscope random walk      [rad/s^2/sqrt(Hz)] — Alla
 g_norm: 9.81
 
 # Time offset: t_imu = t_cam + td  (cam0 Kalibr result: 12.656ms)
+# [SW1-1966] 이 12.66 ms 는 옛(글로벌 셔터) 카메라 값이다. 새 롤링셔터 카메라(USB 32e4:0035)는 약 35 ms 라
+#   그 카메라를 단 로봇은 로봇 설정 폴더 vins/extrinsic.yaml 의 td 로 준다(여기 공용 값은 바꾸지 않는다).
 estimate_td: 1          # 1 = 온라인 추정(설계 의도, 초기값 12.66ms). 0 고정 실험은 발산에 무효 → 1 원복.
 td: 0.012655922077
 

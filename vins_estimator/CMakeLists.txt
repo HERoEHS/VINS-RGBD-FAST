@@ -309,6 +309,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_installed_config test/test_installed_config.py)
   ament_add_pytest_test(test_vision_calib_launch test/test_vision_calib_launch.py)
   ament_add_pytest_test(test_body_t_wheel_beta test/test_body_t_wheel_beta.py)
+  ament_add_pytest_test(test_default_extrinsic_urdf test/test_default_extrinsic_urdf.py)
 
   # [SW1-1959] Sophus 판 고정(cmake/SophusPin.cmake) — 가짜 설치본·소스 트리로 configure 만 돌려
   # 판 검사·찾는 순서·교차 빌드 분기·안내 문구를 확인한다(컴파일러 불필요, 수 초).
