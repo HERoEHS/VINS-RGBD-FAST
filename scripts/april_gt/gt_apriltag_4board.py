@@ -392,8 +392,11 @@ class FourBoardGtNode(Node):
     def ensure_cam_base_tf(self):
         """카메라 광학 프레임 → base 프레임의 상수 변환을 URDF TF에서 1회 조회.
 
-        체인(base_footprint→base_link→chassis→stereo_camera_link→optical)이 전부 fixed
-        조인트라 상수가 보장된다. 다리 관절은 이 체인 밖(base_link→leg→wheel)이라 무관.
+        base_link→chassis→stereo_camera_link→optical 은 전부 fixed 조인트라 상수다.
+        단, 다리-몸통 TF 변경 후 base_footprint→base_link 는 다리각 따라 움직이는 TF가 되어
+        base_frame=base_footprint 면 1회 조회값이 상수가 아니다. 새 녹화는 몸통 고정
+        base_rigid_footprint 를 base_frame 으로 줄 것(gt_xy_eval.py 의 몸통 고정 LEVER 와 같은 기준).
+        옛 bag 에는 그 프레임이 없다(옛 bag 은 base_footprint 그대로 — 그때는 fixed 체인).
         컨트롤러가 늦게 뜨면 조회가 실패하므로 성공할 때까지 프레임마다 재시도한다.
         """
         if self.T_cam_base is not None:

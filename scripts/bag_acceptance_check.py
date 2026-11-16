@@ -57,6 +57,14 @@ def ang_norm(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
+def leg_abs_max(names, positions):
+    """한 /joint_states 메시지에서 다리 관절 |각|의 최대값[rad].
+    다리 관절이 없으면 None — 몸통 가상 관절(body_lift/body_pitch)만 담은 메시지가
+    100 Hz 메시지 사이에 끼어 오므로, 인덱스를 첫 메시지로 고정하지 않고 매번 이름으로 찾는다."""
+    vals = [abs(p) for n, p in zip(names, positions) if 'leg' in n.lower()]
+    return max(vals) if vals else None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('bag')
@@ -71,7 +79,6 @@ def main():
     imu_t, acc, gyr = [], [], []
     od_t, od_v, od_w, od_xy, od_yaw = [], [], [], [], []
     jt, jleg = [], []
-    leg_idx = None
     while r.has_next():
         topic, data, _ = r.read_next()
         counts[topic] = counts.get(topic, 0) + 1
@@ -89,10 +96,11 @@ def main():
             od_yaw.append(yaw_of(m.pose.pose.orientation))
         elif topic == JOINT_TOPIC:
             m = deserialize_message(data, JointState)
-            if leg_idx is None:
-                leg_idx = [i for i, n in enumerate(m.name) if 'leg' in n.lower()]
+            leg = leg_abs_max(m.name, m.position)
+            if leg is None:
+                continue  # 다리 관절 없는 메시지(가상 관절 전용)는 시각째 건너뜀
             jt.append(m.header.stamp.sec + m.header.stamp.nanosec * 1e-9)
-            jleg.append(max(abs(m.position[i]) for i in leg_idx) if leg_idx else 0.0)
+            jleg.append(leg)
 
     imu_t = np.array(imu_t); acc = np.array(acc); gyr = np.array(gyr)
     od_t = np.array(od_t); od_v = np.array(od_v); od_w = np.array(od_w)

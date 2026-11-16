@@ -5,24 +5,27 @@ anchor_ruler_check.py — station_docking 앵커가 "어느 자(ruler)"로 찍�
 배경 (같은 자 원칙):
   station_docking_node는 odom→station_docking_obs TF(앵커)를 발행한다.
   robot_pose_frame 선택자(3d96e6e) 적용 후에는 앵커가 VINS 자
-  (odom→base_vins ∘ base_footprint→optical)로 찍혀야 한다.
+  (odom→base_vins ∘ <base>→optical)로 찍혀야 한다.
+  <base> = base_vins 와 짝이 되는 '몸통 고정' URDF 프레임. 다리-몸통 TF 변경 후
+  base_footprint→base_link 는 움직이는 TF가 되므로 몸통 고정 base_rigid_footprint 가 기본이다.
   이 스크립트는 배포된 로봇에서 그게 실제로 그런지 실측으로 확인한다.
 
 판별 원리:
   anchor = lookup(odom→station_docking_obs)          # 노드가 찍은 앵커
   후보 자 두 개로 같은 시각의 odom→optical을 계산:
     wheel 자 : lookup(odom→optical)                  # 휠 odometry 경유 전체 트리
-    VINS 자  : lookup(odom→base_vins) ∘ lookup(base_footprint→optical)
+    VINS 자  : lookup(odom→base_vins) ∘ lookup(<base>→optical)
   inv(후보 체인) @ anchor = T_optical→obs 는
   "앵커를 찍을 때 쓴 자"에 대해서만 시간에 대해 거의 상수다(마커가 고정이므로).
   → 표본들의 위치 표준편차가 작은 쪽 = 실제 사용된 자.
 
 사용법 (로봇에서, HF ON + station_docking 기동 상태):
   1) 먼저 주행/제자리회전으로 두 자(base_vins vs base_footprint)를 5mm 이상 벌린다.
-  2) python3 anchor_ruler_check.py [표본수=20]
+  2) python3 anchor_ruler_check.py [표본수=20] [--base-frame base_rigid_footprint]
+     옛 URDF(base_rigid_footprint 없음) 로봇은 --base-frame base_footprint 로 실행.
   기대 출력: "✅ 앵커는 VINS 자(base_vins)"
 """
-import sys
+import argparse
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -33,7 +36,7 @@ import tf2_ros
 ODOM = 'odom'
 OBS = 'station_docking_obs'
 BASE_VINS = 'base_vins'
-BASE_FOOT = 'base_footprint'
+DEFAULT_BASE = 'base_rigid_footprint'  # 몸통 고정 URDF 루트 (옛 URDF 는 base_footprint)
 OPTICAL = 'stereo_camera_left_optical_frame'
 SEP_MIN_M = 0.005  # 두 자가 이보다 덜 벌어져 있으면 판별 불가
 
@@ -65,9 +68,11 @@ def tf_to_mat(tf_msg):
 
 
 class RulerCheck(Node):
-    def __init__(self, n_samples):
+    def __init__(self, n_samples, base_frame):
         super().__init__('anchor_ruler_check')
         self.n_samples = n_samples
+        self.base_frame = base_frame
+        self.base_hint_shown = False
         self.buffer = tf2_ros.Buffer(cache_time=Duration(seconds=30.0))
         self.listener = tf2_ros.TransformListener(self.buffer, self)
         # 표본: (T_optical→obs)의 위치를 자별로 누적
@@ -91,9 +96,18 @@ class RulerCheck(Node):
         try:
             wheel_chain = self.buffer.lookup_transform(ODOM, OPTICAL, stamp)
             odom_vins = self.buffer.lookup_transform(ODOM, BASE_VINS, stamp)
-            base_opt = self.buffer.lookup_transform(BASE_FOOT, OPTICAL, stamp)
+            base_opt = self.buffer.lookup_transform(self.base_frame, OPTICAL, stamp)
         except tf2_ros.ExtrapolationException:
             return  # 해당 시각 TF가 아직/이미 버퍼 범위 밖 — 다음 관측에서 재시도
+        except tf2_ros.LookupException as e:
+            if not self.buffer._frameExists(self.base_frame) and not self.base_hint_shown:
+                self.base_hint_shown = True
+                self.get_logger().error(
+                    f"TF에 '{self.base_frame}' 프레임이 없음 — 옛 URDF(다리-몸통 TF 변경 전) 로봇이면 "
+                    f"--base-frame base_footprint 로 다시 실행하세요.")
+            else:
+                self.get_logger().warn(f'조회 실패(HF ON? base_vins 발행 중?): {e}')
+            return
         except Exception as e:
             self.get_logger().warn(f'조회 실패(HF ON? base_vins 발행 중?): {e}')
             return
@@ -169,9 +183,13 @@ class RulerCheck(Node):
 
 
 def main():
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 20
-    rclpy.init()
-    node = RulerCheck(n)
+    ap = argparse.ArgumentParser(description='station_docking 앵커가 어느 자로 찍혔는지 판별')
+    ap.add_argument('n', nargs='?', type=int, default=20, help='표본 수 (기본 20)')
+    ap.add_argument('--base-frame', default=DEFAULT_BASE,
+                    help=f'base_vins 와 짝인 몸통 고정 URDF 프레임 (기본 {DEFAULT_BASE}, 옛 URDF 는 base_footprint)')
+    args, ros_args = ap.parse_known_args()  # --ros-args 등은 rclpy 로 넘김
+    rclpy.init(args=ros_args)
+    node = RulerCheck(args.n, args.base_frame)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, SystemExit):
